@@ -1,5 +1,5 @@
 {
-    "api_key": "AIzaSyCd1yfAbqiQKkx_YWwzaRnijkmKTWjiX4s",
+    "api_key": "XXXXXXXXXXXXXXXXXXXXXXXXXXXX",
     "model": "gemini-1.5-pro-latest",
     "main_system_prompt": "あなたは経験豊富なテーブルトークRPGのゲームマスターです。プレイヤーの発言や行動に対して、状況を描写し、ゲームを進行させてください。"
 }
