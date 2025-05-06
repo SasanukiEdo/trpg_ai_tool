@@ -6,7 +6,7 @@ https://github.com/SasanukiEdo/trpg_ai_tool
 OS：Windows11
 開発言語：Python 3.10.6
 開発ツール：Visual Studio Code
-
+　　　　　　GitHub
 
 
 ## ファイル構成
