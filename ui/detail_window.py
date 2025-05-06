@@ -5,6 +5,7 @@ import os
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QLineEdit, QTextEdit,
     QPushButton, QScrollArea, QFormLayout, QFileDialog, QMessageBox, QApplication,
+    QInputDialog, QDialog # <<< QDialog をインポートリストに追加
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
 
@@ -187,18 +188,13 @@ class DetailWindow(QWidget):
 
         # 初期指示テキストの準備 (プロンプトテンプレート)
         initial_instruction_template = (
-            "あなたはTRPGのキャラクターシートを管理するアシスタントです。\n"
-            "以下の「現在の説明/メモ」と「ユーザーの指示」に基づいて、新しい「説明/メモ」を作成してください。\n"
-            "元の情報で重要なものが失われないように、かつユーザーの指示を正確に反映してください。\n\n"
+            "あなたはTRPGのデータ管理を行うアシスタントです。\n"
+            "以下の「現在の説明/メモ」に基づいて、現在の状況を考慮して新しい「説明/メモ」を作成してください。\n"
+            "元の情報で重要なものが失われないようにし、説明/メモ以外の余計な情報は出力しないようにしてください。\n\n"
             "現在の説明/メモ:\n"
             "--------------------\n"
             "{current_desc}\n"
             "--------------------\n\n"
-            "ユーザーの指示 (この部分を編集してください):\n"
-            "--------------------\n"
-            "{instruction_placeholder}\n"
-            "--------------------\n\n"
-            # "新しい説明/メモ:\n" # ユーザー編集時には不要
         )
         initial_instruction_text_for_dialog = initial_instruction_template.format(
             current_desc=current_description,
@@ -267,7 +263,7 @@ class DetailWindow(QWidget):
 
         # AIの提案をダイアログの下部テキストエリアに表示
         self.ai_edit_dialog.set_suggestion_text(ai_response_text)
-        
+
 
     def select_image_file(self):
         """画像ファイル選択"""
