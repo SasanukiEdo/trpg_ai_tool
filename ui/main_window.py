@@ -21,6 +21,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QSize
 from core.config_manager import load_config, save_config
 from core.subprompt_manager import load_subprompts, save_subprompts
 from core.data_manager import get_item # <<< この行を追加 (他の data_manager 関数は MainWindow では直接使わない想定)
+from core.api_key_manager import get_api_key as get_os_api_key
 
 # --- uiモジュールインポート ---
 from ui.settings_dialog import SettingsDialog
@@ -198,7 +199,11 @@ class MainWindow(QWidget):
 
     # --- configure_gemini, open_settings_dialog (変更なし) ---
     def configure_gemini(self):
-        api_key = self.config.get("api_key")
+
+        # --- ★★★ OSの資格情報からAPIキーを取得 ★★★ ---
+        api_key = get_os_api_key() # api_key_manager から取得
+        # ------------------------------------------
+
         if api_key:
             success, message = configure_gemini_api(api_key)
             if success:
@@ -302,7 +307,6 @@ class MainWindow(QWidget):
 
         final_prompt = ""
         target_model_name = self.config.get("model")
-        target_api_key = self.config.get("api_key")
         main_system_prompt = self.config.get("main_system_prompt", "")
         prompt_parts = []
         if main_system_prompt: prompt_parts.append(main_system_prompt)

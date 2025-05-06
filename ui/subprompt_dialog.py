@@ -70,11 +70,11 @@ class SubPromptEditDialog(QDialog):
                  self.model_combo.setCurrentIndex(0) # 空欄を選択
         layout.addRow("優先モデル:", self.model_combo)
 
-        # APIキー (Password + 空欄許可)
-        self.api_key_input = QLineEdit(subprompt_data.get('api_key', '') if self.is_edit_mode else "")
-        self.api_key_input.setPlaceholderText("このサブプロンプト専用のAPIキー (任意)")
-        self.api_key_input.setEchoMode(QLineEdit.Password)
-        layout.addRow("優先APIキー:", self.api_key_input)
+        # APIキー (Password + 空欄許可)　機能削除
+        # self.api_key_input = QLineEdit(subprompt_data.get('api_key', '') if self.is_edit_mode else "")
+        # self.api_key_input.setPlaceholderText("このサブプロンプト専用のAPIキー (任意)")
+        # self.api_key_input.setEchoMode(QLineEdit.Password)
+        # layout.addRow("優先APIキー:", self.api_key_input)
 
         # OK / Cancel ボタン
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -102,7 +102,7 @@ class SubPromptEditDialog(QDialog):
         name = self.name_input.text().strip()
         content = self.content_input.toPlainText().strip()
         model = self.model_combo.currentText() if self.model_combo.currentText() else None # 空文字はNoneに
-        api_key = self.api_key_input.text() if self.api_key_input.text() else None # 空文字はNoneに
+        # api_key = self.api_key_input.text() if self.api_key_input.text() else None # 空文字はNoneに 機能削除
 
         if not category:
             QMessageBox.warning(self, "入力エラー", "カテゴリが選択または入力されていません。")
@@ -119,8 +119,7 @@ class SubPromptEditDialog(QDialog):
             "name": name,
             "data": {
                 "content": content,
-                "model": model,
-                "api_key": api_key
+                "model": model
             },
             "original_name": self.original_name, # 編集モードの場合の元の名前
             "original_category": self.original_category # 編集モードの場合の元のカテゴリ

@@ -9,7 +9,6 @@ from PyQt5.QtWidgets import QMessageBox
 CONFIG_FILE = "data/config.json"
 
 DEFAULT_CONFIG = {
-    "api_key": "",
     "model": "gemini-1.5-pro-latest",
     "main_system_prompt": "あなたは経験豊富なテーブルトークRPGのゲームマスターです。プレイヤーの発言や行動に対して、状況を描写し、ゲームを進行させてください。"
 }

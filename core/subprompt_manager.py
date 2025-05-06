@@ -10,12 +10,12 @@ SUBPROMPTS_FILE = "data/subprompts_v2.json"
 # --- デフォルトサブプロンプト ---
 DEFAULT_SUBPROMPTS = {
     "一般": {
-        "情景描写": {"content": "現在の場所、時間、天気、雰囲気などを詳細に描写してください。", "model": None, "api_key": None},
-        "NPC会話": {"content": "プレイヤーが話しかけたNPCとして自然に応答してください。", "model": None, "api_key": None}
+        "情景描写": {"content": "現在の場所、時間、天気、雰囲気などを詳細に描写してください。", "model": None},
+        "NPC会話": {"content": "プレイヤーが話しかけたNPCとして自然に応答してください。", "model": None}
     },
     "戦闘": {
-        "敵の行動宣言": {"content": "敵キャラクターの次の行動を宣言し、その理由や狙いを描写してください。", "model": None, "api_key": None},
-        "ダメージ描写": {"content": "攻撃がヒットした場合のダメージ量と、その様子を具体的に描写してください。", "model": None, "api_key": None}
+        "敵の行動宣言": {"content": "敵キャラクターの次の行動を宣言し、その理由や狙いを描写してください。", "model": None},
+        "ダメージ描写": {"content": "攻撃がヒットした場合のダメージ量と、その様子を具体的に描写してください。", "model": None}
     }
 }
 
