@@ -1,0 +1,41 @@
+{
+    "キャラク-f79cb347-4d92-41e1-b2ec-dda9db16cee5": {
+        "name": "アルド",
+        "description": "勇敢な戦士。レベル5になった。aaaa",
+        "status": {
+            "HP": 35,
+            "maxHP": 35
+        },
+        "id": "キャラク-f79cb347-4d92-41e1-b2ec-dda9db16cee5",
+        "category": "キャラクター",
+        "history": [
+            {
+                "timestamp": "2025-05-05 22:19:41",
+                "entry": "ゴブリンキングを倒した！"
+            },
+            {
+                "timestamp": "2025-05-05 22:19:41",
+                "entry": "新しい剣を手に入れた。"
+            }
+        ],
+        "tags": [
+            "主人公",
+            "戦士",
+            "レベル5"
+        ],
+        "image_path": null
+    },
+    "キャラク-7037b970-5c5e-4ee4-aa1b-37b4d1a915e7": {
+        "name": "リナ",
+        "description": "好奇心旺盛な魔法使い",
+        "status": {
+            "MP": 40,
+            "maxMP": 40
+        },
+        "id": "キャラク-7037b970-5c5e-4ee4-aa1b-37b4d1a915e7",
+        "category": "キャラクター",
+        "history": [],
+        "tags": [],
+        "image_path": "C:/Users/35p/Desktop/734134369.jpeg"
+    }
+}
