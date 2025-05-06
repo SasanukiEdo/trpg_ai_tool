@@ -5,9 +5,8 @@ import os
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QLineEdit, QTextEdit,
     QPushButton, QScrollArea, QFormLayout, QFileDialog, QMessageBox, QApplication,
-    QInputDialog
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint # QPoint も必要なら
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -19,7 +18,7 @@ from core.data_manager import update_item, get_item, add_history_entry
 from core.gemini_handler import generate_response, is_configured
 
 # --- ui モジュールインポート ---
-from ui.ai_text_edit_dialog import AITextEditDialog 
+from ui.ai_text_edit_dialog import AIAssistedEditDialog
 
 # ==============================================================================
 # データ詳細ウィンドウ
@@ -179,22 +178,15 @@ class DetailWindow(QWidget):
         if not self.item_data:
             QMessageBox.warning(self, "エラー", "編集対象のデータがありません。")
             return
-        if not is_configured(): # Gemini API設定確認
+        if not is_configured():
              QMessageBox.warning(self, "API未設定", "Gemini APIが設定されていません。メイン画面の「設定」からAPIキーを入力してください。")
              return
 
         current_description = self.item_data.get('description', '')
-
-        # --- ★★★ プロンプトテンプレートを初期値として設定 ★★★ ---
-        # ユーザーが編集する部分を明確にするためのプレースホルダー
         user_instruction_placeholder = "[ここに具体的な指示を記述してください (例: レベルアップして新しいスキルを覚えたことを追記)]"
 
-        # AIに送信するプロンプトの準備
-        # ここでは MainWindow の config を参照してモデル名を取得
-        target_model_name = self.main_config.get("model", "gemini-1.5-pro-latest") # デフォルトも指定
-
-        # プロンプトテンプレート (ユーザー指示部分はプレースホルダーにする)
-        prompt_template_for_user_edit = (
+        # 初期指示テキストの準備 (プロンプトテンプレート)
+        initial_instruction_template = (
             "あなたはTRPGのキャラクターシートを管理するアシスタントです。\n"
             "以下の「現在の説明/メモ」と「ユーザーの指示」に基づいて、新しい「説明/メモ」を作成してください。\n"
             "元の情報で重要なものが失われないように、かつユーザーの指示を正確に反映してください。\n\n"
@@ -202,87 +194,80 @@ class DetailWindow(QWidget):
             "--------------------\n"
             "{current_desc}\n"
             "--------------------\n\n"
-            "ユーザーの指示 (この部分を編集してください):\n" # ユーザーに編集を促すコメント
+            "ユーザーの指示 (この部分を編集してください):\n"
             "--------------------\n"
-            "{instruction_placeholder}\n" # プレースホルダーを埋め込む
+            "{instruction_placeholder}\n"
             "--------------------\n\n"
-            # "新しい説明/メモ:\n" # この行はAIへの指示なのでユーザー編集画面では不要
+            # "新しい説明/メモ:\n" # ユーザー編集時には不要
         )
-        # ユーザーに見せる初期テキスト
-        initial_user_instruction_text = prompt_template_for_user_edit.format(
+        initial_instruction_text_for_dialog = initial_instruction_template.format(
             current_desc=current_description,
             instruction_placeholder=user_instruction_placeholder
         )
-        # ----------------------------------------------------
 
-        # ユーザーに指示を求める
-        user_edited_full_prompt, ok = QInputDialog.getMultiLineText(
-            self,
-            "AIへの指示編集", # ダイアログのタイトル変更
-            "以下のテンプレートを編集して、AIへの最終的な指示を作成してください。\n"
-            "特に「ユーザーの指示」の部分を具体的に記述してください。",
-            initial_user_instruction_text # ★ 初期値としてテンプレートを渡す
+        # --- ★★★ 新しいAI支援編集ダイアログを使用 ★★★ ---
+        self.ai_edit_dialog = AIAssistedEditDialog( # インスタンスを保持
+            initial_instruction_text_for_dialog,
+            current_description, # 現在のアイテム説明も渡す
+            self, # 親ウィジェット
+            window_title="AIによる「説明/メモ」編集支援"
         )
+        # 「AIに提案を依頼」ボタンが押されたときの処理を接続
+        self.ai_edit_dialog.request_ai_button.clicked.connect(self._handle_ai_suggestion_request)
 
-        if not ok or not user_edited_full_prompt.strip():
-            return # キャンセルまたは入力なし
-
-        # --- ★★★ ユーザーが編集した全体を最終プロンプトとする ★★★ ---
-        # ユーザーが編集したテキストには、AIへの指示に必要な情報が全て含まれているはず
-        # ただし、AIが「新しい説明/メモ:」というヘッダーの後に続けてくれることを期待する
-        # 必要であれば、ユーザー編集後のテキストから「ユーザーの指示」部分だけを抜き出して
-        # 元のテンプレートに再挿入する処理も考えられるが、ここではシンプルに全体を渡す。
-        # より確実にするなら、ユーザー指示部分だけを別途入力させる方が良いが、要望に合わせて調整。
-        final_prompt = user_edited_full_prompt + "\n\n新しい説明/メモ:\n" # 最後にAIに出力開始を促す
-        # ------------------------------------------------------
-
-        # メインウィンドウの応答表示エリアに処理中メッセージを表示（任意）
-        # ... (変更なし)
-        QApplication.processEvents()
-
-        # AIに送信
-        print(f"--- Sending to AI for description update (Model: {target_model_name}) ---")
-        # print(final_prompt) # デバッグ用にプロンプト全体を表示しても良い
-        ai_response_text, error_message = generate_response(target_model_name, final_prompt)
-
-        if error_message:
-            QMessageBox.critical(self, "AIエラー", f"AIからの応答取得中にエラーが発生しました:\n{error_message}")
-            if main_window and hasattr(main_window, 'response_display'):
-                main_window.response_display.append(f"<font color='red'>AI処理エラー: {error_message}</font>")
-            return
-        if ai_response_text is None:
-            QMessageBox.warning(self, "AI応答なし", "AIから有効な応答が得られませんでした。")
-            if main_window and hasattr(main_window, 'response_display'):
-                main_window.response_display.append("<font color='orange'>AI応答なし</font>")
-            return
-
-        # 結果確認ダイアログを表示
-        edited_description = AITextEditDialog.get_ai_edited_text(
-            self,
-            current_description,
-            ai_response_text,
-            title="AIによる「説明/メモ」編集提案"
-        )
-
-        if edited_description is not None: # OKが押された
+        if self.ai_edit_dialog.exec_() == QDialog.Accepted: # ダイアログでOKが押された
+            final_edited_text = self.ai_edit_dialog.get_final_text()
             # データを更新して保存
-            update_payload = {'description': edited_description}
+            update_payload = {'description': final_edited_text}
             if update_item(self.current_category, self.current_item_id, update_payload):
                 QMessageBox.information(self, "更新完了", "「説明/メモ」を更新しました。")
-                # ローカルデータと表示を更新
-                self.item_data['description'] = edited_description
-                if 'description' in self.detail_widgets and isinstance(self.detail_widgets['description'], QTextEdit):
-                    self.detail_widgets['description'].setPlainText(edited_description)
-
-                # self.update_view() # load_data経由で更新されるか、シグナルで親に通知
-                self.dataSaved.emit(self.current_category, self.current_item_id) # 親に通知
+                self.item_data['description'] = final_edited_text
+                if 'description' in self.detail_widgets:
+                    self.detail_widgets['description'].setPlainText(final_edited_text)
+                self.dataSaved.emit(self.current_category, self.current_item_id)
             else:
                 QMessageBox.warning(self, "保存エラー", "「説明/メモ」の更新内容の保存に失敗しました。")
         else: # キャンセルされた
+            main_window = self.parent()
             if main_window and hasattr(main_window, 'response_display'):
                 main_window.response_display.append("<i>AIによる説明/メモ編集はキャンセルされました。</i>")
-    # -----------------------------------------
+        self.ai_edit_dialog = None # 参照をクリア
+        # ----------------------------------------------------------
 
+
+    def _handle_ai_suggestion_request(self):
+        """AIAssistedEditDialog内の「AIに提案を依頼」ボタンが押されたときの処理"""
+        if not self.ai_edit_dialog: return # ダイアログが存在しない場合は何もしない
+
+        user_instruction_text = self.ai_edit_dialog.get_instruction_text()
+        if not user_instruction_text.strip():
+            QMessageBox.warning(self.ai_edit_dialog, "指示なし", "AIへの指示を入力してください。")
+            return
+
+        self.ai_edit_dialog.show_processing_message(True) # 処理中表示ON
+
+        target_model_name = self.main_config.get("model", "gemini-1.5-pro-latest")
+        # final_prompt はユーザーが編集した指示テキストそのものを使う
+        # (末尾に "新しい説明/メモ:\n" を付けるのは generate_response 側で考慮するか、ここで付加)
+        final_prompt_for_ai = user_instruction_text + "\n\n新しい説明/メモ:\n"
+
+        print(f"--- Sending to AI for description update (Model: {target_model_name}) ---")
+        # print(final_prompt_for_ai)
+        ai_response_text, error_message = generate_response(target_model_name, final_prompt_for_ai)
+        self.ai_edit_dialog.show_processing_message(False) # 処理中表示OFF
+
+        if error_message:
+            QMessageBox.critical(self.ai_edit_dialog, "AIエラー", f"AIからの応答取得中にエラーが発生しました:\n{error_message}")
+            self.ai_edit_dialog.set_suggestion_text(f"エラー: {error_message}") # エラーも表示
+            return
+        if ai_response_text is None:
+            QMessageBox.warning(self.ai_edit_dialog, "AI応答なし", "AIから有効な応答が得られませんでした。")
+            self.ai_edit_dialog.set_suggestion_text("AIから有効な応答が得られませんでした。")
+            return
+
+        # AIの提案をダイアログの下部テキストエリアに表示
+        self.ai_edit_dialog.set_suggestion_text(ai_response_text)
+        
 
     def select_image_file(self):
         """画像ファイル選択"""
