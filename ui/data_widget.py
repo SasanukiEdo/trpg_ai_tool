@@ -343,7 +343,15 @@ class DataManagementWidget(QWidget):
     def ensure_detail_window_exists(self):
         """詳細ウィンドウが存在しない場合、作成して接続する"""
         if self._detail_window is None:
-            self._detail_window = DetailWindow()
+
+            # --- ★★★ MainWindow の config を DetailWindow のコンストラクタに渡す ★★★ ---
+            main_window_instance = self.window()
+            main_config_to_pass = {}
+            if main_window_instance and hasattr(main_window_instance, 'config'):
+                main_config_to_pass = main_window_instance.config
+            self._detail_window = DetailWindow(main_config=main_config_to_pass) # ここで渡す
+            # --------------------------------------------------------------------
+
             # 詳細ウィンドウが保存されたら、メインリストを更新
             self._detail_window.dataSaved.connect(self._handle_detail_saved)
             # 詳細ウィンドウが閉じられたら参照をリセット
@@ -353,13 +361,6 @@ class DataManagementWidget(QWidget):
         """指定されたアイテムの詳細ウィンドウを表示/更新し、位置を調整"""
         self.ensure_detail_window_exists()
         self._last_detail_item = {"category": category, "id": item_id}
-
-        # --- ★★★ MainWindow の config を DetailWindow に渡す ★★★ ---
-        main_window_instance = self.window() # MainWindow インスタンスを取得
-        main_config_to_pass = {}
-        if main_window_instance and hasattr(main_window_instance, 'config'):
-            main_config_to_pass = main_window_instance.config
-        # --------------------------------------------------------
 
         # --- ★★★ 位置とサイズ調整処理を修正 ★★★ ---
         main_window = self.window()
@@ -412,7 +413,7 @@ class DataManagementWidget(QWidget):
              self._detail_window.resize(500, 600)
         # -----------------------------------------
 
-        self._detail_window.load_data(category, item_id, main_config_ref=main_config_to_pass)
+        self._detail_window.load_data(category, item_id)
         if not self._detail_window.isVisible():
             self._detail_window.show()
         self._detail_window.activateWindow()

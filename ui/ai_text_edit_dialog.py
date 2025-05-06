@@ -9,7 +9,7 @@ class AITextEditDialog(QDialog):
     def __init__(self, original_text, ai_suggestion_text, parent=None, window_title="AIによる編集提案"):
         super().__init__(parent)
         self.setWindowTitle(window_title)
-        self.setMinimumSize(500, 400) # ダイアログの最小サイズ
+        self.setMinimumSize(600, 500) # ダイアログの最小サイズ
 
         layout = QVBoxLayout(self)
 

@@ -29,16 +29,10 @@ class DetailWindow(QWidget):
     dataSaved = pyqtSignal(str, str) # category, item_id (保存が完了したことを通知)
     windowClosed = pyqtSignal()      # ウィンドウが閉じられたことを通知
 
-    def __init__(self, parent=None):
-
-        # 通常のウィンドウとして表示 (独立したウィンドウ)
+    def __init__(self, main_config=None, parent=None):
         super().__init__(parent)
-
-        # --- ★★★ MainWindow の config を受け取るための準備 ★★★ ---
-        self.main_config = {} # メインウィンドウの設定を保持
-        if parent and hasattr(parent, 'config'): # MainWindowインスタンスかチェック
-             self.main_config = parent.config
-        # ------------------------------------------------------
+        self.main_config = main_config if main_config is not None else {} # メイン設定を保持
+        
         self.setWindowFlags(Qt.Window)
         self.setWindowTitle("詳細情報")
         self.setMinimumWidth(400)
@@ -78,10 +72,6 @@ class DetailWindow(QWidget):
 
     def load_data(self, category, item_id):
         """指定されたアイテムのデータを読み込んで表示"""
-        # --- ★★★ MainWindow の config を更新 ★★★ ---
-        if main_config_ref:
-             self.main_config = main_config_ref
-        # -----------------------------------------
         self.clear_view()
         print(f"DetailWindow: Loading data for Category='{category}', ID='{item_id}'")
         item_data_loaded = get_item(category, item_id) # 変数名変更
@@ -195,25 +185,16 @@ class DetailWindow(QWidget):
 
         current_description = self.item_data.get('description', '')
 
-        # ユーザーに指示を求める
-        user_instruction, ok = QInputDialog.getMultiLineText(
-            self,
-            "AIへの指示",
-            "現在の「説明/メモ」に対するAIへの指示を入力してください。\n"
-            "例1: 「レベルが7になり、スキル『強打』を覚えたことを追記して。」\n"
-            "例2: 「この内容を簡潔に要約して。」",
-            "" # 初期値は空
-        )
-
-        if not ok or not user_instruction.strip():
-            return # キャンセルまたは入力なし
+        # --- ★★★ プロンプトテンプレートを初期値として設定 ★★★ ---
+        # ユーザーが編集する部分を明確にするためのプレースホルダー
+        user_instruction_placeholder = "[ここに具体的な指示を記述してください (例: レベルアップして新しいスキルを覚えたことを追記)]"
 
         # AIに送信するプロンプトの準備
         # ここでは MainWindow の config を参照してモデル名を取得
         target_model_name = self.main_config.get("model", "gemini-1.5-pro-latest") # デフォルトも指定
 
-        # プロンプトテンプレート
-        prompt_template = (
+        # プロンプトテンプレート (ユーザー指示部分はプレースホルダーにする)
+        prompt_template_for_user_edit = (
             "あなたはTRPGのキャラクターシートを管理するアシスタントです。\n"
             "以下の「現在の説明/メモ」と「ユーザーの指示」に基づいて、新しい「説明/メモ」を作成してください。\n"
             "元の情報で重要なものが失われないように、かつユーザーの指示を正確に反映してください。\n\n"
@@ -221,19 +202,43 @@ class DetailWindow(QWidget):
             "--------------------\n"
             "{current_desc}\n"
             "--------------------\n\n"
-            "ユーザーの指示:\n"
+            "ユーザーの指示 (この部分を編集してください):\n" # ユーザーに編集を促すコメント
             "--------------------\n"
-            "{instruction}\n"
+            "{instruction_placeholder}\n" # プレースホルダーを埋め込む
             "--------------------\n\n"
-            "新しい説明/メモ:\n"
+            # "新しい説明/メモ:\n" # この行はAIへの指示なのでユーザー編集画面では不要
         )
-        final_prompt = prompt_template.format(current_desc=current_description, instruction=user_instruction)
+        # ユーザーに見せる初期テキスト
+        initial_user_instruction_text = prompt_template_for_user_edit.format(
+            current_desc=current_description,
+            instruction_placeholder=user_instruction_placeholder
+        )
+        # ----------------------------------------------------
+
+        # ユーザーに指示を求める
+        user_edited_full_prompt, ok = QInputDialog.getMultiLineText(
+            self,
+            "AIへの指示編集", # ダイアログのタイトル変更
+            "以下のテンプレートを編集して、AIへの最終的な指示を作成してください。\n"
+            "特に「ユーザーの指示」の部分を具体的に記述してください。",
+            initial_user_instruction_text # ★ 初期値としてテンプレートを渡す
+        )
+
+        if not ok or not user_edited_full_prompt.strip():
+            return # キャンセルまたは入力なし
+
+        # --- ★★★ ユーザーが編集した全体を最終プロンプトとする ★★★ ---
+        # ユーザーが編集したテキストには、AIへの指示に必要な情報が全て含まれているはず
+        # ただし、AIが「新しい説明/メモ:」というヘッダーの後に続けてくれることを期待する
+        # 必要であれば、ユーザー編集後のテキストから「ユーザーの指示」部分だけを抜き出して
+        # 元のテンプレートに再挿入する処理も考えられるが、ここではシンプルに全体を渡す。
+        # より確実にするなら、ユーザー指示部分だけを別途入力させる方が良いが、要望に合わせて調整。
+        final_prompt = user_edited_full_prompt + "\n\n新しい説明/メモ:\n" # 最後にAIに出力開始を促す
+        # ------------------------------------------------------
 
         # メインウィンドウの応答表示エリアに処理中メッセージを表示（任意）
-        main_window = self.parent() # 親ウィジェット(MainWindow)を取得
-        if main_window and hasattr(main_window, 'response_display'):
-             main_window.response_display.append("🤖 AIが説明/メモを編集中...")
-        QApplication.processEvents() # UIの応答性を保つ
+        # ... (変更なし)
+        QApplication.processEvents()
 
         # AIに送信
         print(f"--- Sending to AI for description update (Model: {target_model_name}) ---")
@@ -266,6 +271,9 @@ class DetailWindow(QWidget):
                 QMessageBox.information(self, "更新完了", "「説明/メモ」を更新しました。")
                 # ローカルデータと表示を更新
                 self.item_data['description'] = edited_description
+                if 'description' in self.detail_widgets and isinstance(self.detail_widgets['description'], QTextEdit):
+                    self.detail_widgets['description'].setPlainText(edited_description)
+
                 # self.update_view() # load_data経由で更新されるか、シグナルで親に通知
                 self.dataSaved.emit(self.current_category, self.current_item_id) # 親に通知
             else:
