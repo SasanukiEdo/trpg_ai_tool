@@ -2,353 +2,289 @@
 
 import json
 import os
-import uuid # ユニークID生成用
-from datetime import datetime # 履歴のタイムスタンプ用 (任意)
+import uuid
+import datetime
 
-# --- データ保存ディレクトリ ---
-# 'data/userdata' ディレクトリを想定
-DATA_DIR = os.path.join("data", "userdata")
+# --- 定数 ---
+PROJECTS_BASE_DIR = "data"  # config_manager や subprompt_manager と同じ
+GAMEDATA_SUBDIR_NAME = "gamedata" # プロジェクト内のゲームデータ用サブディレクトリ名
 
-# --- ヘルパー関数: ファイルパス取得 ---
-def _get_filepath(category):
-    """カテゴリ名から対応するJSONファイルのパスを生成"""
-    # カテゴリ名をファイル名として安全な形式にする処理が必要な場合もある
-    # (例: スペースや特殊文字を置換するなど)
-    # ここでは単純にカテゴリ名をファイル名とする
-    filename = f"{category}.json"
-    return os.path.join(DATA_DIR, filename)
+# --- ★★★ 変更: DATA_DIR を関数内で動的に取得するように変更 ★★★ ---
+# DATA_DIR = os.path.join("data", "userdata") # 削除
 
-# --- ヘルパー関数: データディレクトリ作成 ---
-def ensure_data_dir():
-    """データ保存用ディレクトリが存在しない場合に作成"""
-    if not os.path.exists(DATA_DIR):
-        try:
-            os.makedirs(DATA_DIR)
-            print(f"データディレクトリ '{DATA_DIR}' を作成しました。")
-        except OSError as e:
-            print(f"エラー: データディレクトリ '{DATA_DIR}' の作成に失敗しました: {e}")
-            # ここで例外を再送出するかどうかは設計次第
-            raise
+def get_project_gamedata_path(project_dir_name):
+    """指定されたプロジェクトのゲームデータディレクトリパスを返す"""
+    return os.path.join(PROJECTS_BASE_DIR, project_dir_name, GAMEDATA_SUBDIR_NAME)
 
-# --- ヘルパー関数: ユニークID生成 ---
-def generate_id(prefix="item"):
-    """プレフィックス付きのユニークIDを生成"""
-    return f"{prefix}-{uuid.uuid4()}"
+def get_category_filepath(project_dir_name, category_name):
+    """指定されたプロジェクトとカテゴリ名に対するJSONファイルのフルパスを返す"""
+    gamedata_dir = get_project_gamedata_path(project_dir_name)
+    # カテゴリ名をファイル名として使用 (必要ならサニタイズ)
+    # Windowsでは使えない文字などがあるため、より安全なファイル名生成方法も検討可
+    filename = f"{category_name}.json"
+    return os.path.join(gamedata_dir, filename)
 
-# --- カテゴリデータの読み込み ---
-def load_data_category(category):
-    """
-    指定されたカテゴリのデータをJSONファイルから読み込む。
-    データはIDをキーとした辞書形式で保存されていることを想定。
-    Returns:
-        dict: {item_id: item_data, ...} 形式のデータ。ファイルがない/読めない場合は空辞書。
-    """
-    ensure_data_dir() # 念のためディレクトリ確認
-    filepath = _get_filepath(category)
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                # データ形式が辞書であることを確認（任意だが推奨）
-                if not isinstance(data, dict):
-                     print(f"警告: カテゴリ '{category}' のデータ形式が辞書ではありません。空のデータとして扱います。")
-                     return {}
-                return data
-        except json.JSONDecodeError as e:
-            print(f"エラー: カテゴリ '{category}' のJSONデコードに失敗しました ({filepath}): {e}")
-            return {} # エラー時は空辞書
-        except Exception as e:
-            print(f"エラー: カテゴリ '{category}' の読み込み中に予期せぬエラーが発生しました ({filepath}): {e}")
-            return {} # エラー時は空辞書
-    else:
-        # print(f"カテゴリ '{category}' のファイル ({filepath}) は存在しません。") # ログ出力は任意
-        return {} # ファイルが存在しない場合は空辞書
-
-# --- カテゴリデータの保存 ---
-def save_data_category(category, data):
-    """
-    指定されたカテゴリのデータ（IDをキーとした辞書）をJSONファイルに保存する。
-    Args:
-        category (str): カテゴリ名。
-        data (dict): 保存するデータ ({item_id: item_data, ...})。
-    Returns:
-        bool: 保存に成功したかどうか。
-    """
-    ensure_data_dir() # ディレクトリ確認
-    filepath = _get_filepath(category)
+# --- カテゴリ管理 ---
+def list_categories(project_dir_name):
+    """指定されたプロジェクトのgamedataディレクトリ内のカテゴリリスト（JSONファイル名から拡張子を除いたもの）を返す"""
+    gamedata_dir = get_project_gamedata_path(project_dir_name)
+    if not os.path.exists(gamedata_dir):
+        return []
     try:
+        categories = [
+            os.path.splitext(f)[0]
+            for f in os.listdir(gamedata_dir)
+            if os.path.isfile(os.path.join(gamedata_dir, f)) and f.endswith(".json")
+        ]
+        return sorted(categories)
+    except Exception as e:
+        print(f"Error listing categories for project '{project_dir_name}': {e}")
+        return []
+
+def create_category(project_dir_name, category_name):
+    """
+    指定されたプロジェクトに新しいカテゴリ（空のJSONファイル）を作成する。
+    gamedataディレクトリがなければ作成する。
+    """
+    if not category_name or not project_dir_name:
+        print("Error: Project name and category name cannot be empty for creation.")
+        return False
+    filepath = get_category_filepath(project_dir_name, category_name)
+    gamedata_dir = os.path.dirname(filepath)
+    try:
+        if not os.path.exists(gamedata_dir):
+            os.makedirs(gamedata_dir, exist_ok=True)
+            print(f"Created gamedata directory for project '{project_dir_name}': {gamedata_dir}")
+        if not os.path.exists(filepath):
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump({}, f) # 空のJSONオブジェクトで初期化
+            print(f"Category '{category_name}' created successfully for project '{project_dir_name}' at {filepath}")
+            return True
+        else:
+            print(f"Category '{category_name}' already exists for project '{project_dir_name}'.")
+            return False # 既に存在する場合は False (作成はしていない)
+    except Exception as e:
+        print(f"Error creating category '{category_name}' for project '{project_dir_name}': {e}")
+        return False
+
+# --- データ読み込み/保存 (カテゴリ単位) ---
+def load_data_category(project_dir_name, category_name):
+    """指定されたプロジェクトとカテゴリのデータをファイルから読み込む"""
+    filepath = get_category_filepath(project_dir_name, category_name)
+    if not os.path.exists(filepath):
+        # ファイルが存在しない場合、カテゴリ作成を試みる (空のデータで)
+        print(f"Data file for category '{category_name}' in project '{project_dir_name}' not found. Attempting to create.")
+        if create_category(project_dir_name, category_name):
+            return {} # 新規作成成功時は空の辞書
+        else:
+            print(f"  Failed to create category '{category_name}', returning None.")
+            return None # 作成失敗時は None
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        print(f"Error: JSON format is incorrect in file {filepath}. Returning empty data.")
+        return {} # JSON形式エラー時は空のデータを返す (データ損失を防ぐため)
+    except Exception as e:
+        print(f"Error loading data for category '{category_name}' in project '{project_dir_name}': {e}")
+        return None # その他のエラー
+
+def save_data_category(project_dir_name, category_name, data):
+    """指定されたプロジェクトとカテゴリのデータをファイルに保存する"""
+    filepath = get_category_filepath(project_dir_name, category_name)
+    gamedata_dir = os.path.dirname(filepath)
+    try:
+        os.makedirs(gamedata_dir, exist_ok=True) # 保存先のディレクトリがなければ作成
         with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-        # print(f"カテゴリ '{category}' のデータを {filepath} に保存しました。") # ログは任意
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        print(f"Data for category '{category_name}' saved successfully for project '{project_dir_name}' at {filepath}")
         return True
     except Exception as e:
-        print(f"エラー: カテゴリ '{category}' の保存中にエラーが発生しました ({filepath}): {e}")
+        print(f"Error saving data for category '{category_name}' in project '{project_dir_name}': {e}")
         return False
 
-# --- カテゴリ一覧の取得 ---
-def list_categories():
-    """
-    データディレクトリ内のJSONファイル名からカテゴリのリストを取得する。
-    Returns:
-        list: カテゴリ名のリスト。
-    """
-    ensure_data_dir()
-    categories = []
-    try:
-        for filename in os.listdir(DATA_DIR):
-            if filename.lower().endswith('.json'):
-                # 拡張子を除いた部分をカテゴリ名とする
-                category_name = os.path.splitext(filename)[0]
-                categories.append(category_name)
-    except FileNotFoundError:
-        print(f"データディレクトリ '{DATA_DIR}' が見つかりません。")
-        return [] # ディレクトリがない場合は空
-    except Exception as e:
-        print(f"エラー: カテゴリ一覧の取得中にエラーが発生しました: {e}")
-        return [] # その他のエラー
-    return sorted(categories) # ソートして返す
+# --- アイテム操作 ---
+def list_items(project_dir_name, category_name):
+    """指定されたプロジェクトとカテゴリの全アイテムのリストを返す (idとnameを含む辞書のリスト)"""
+    data = load_data_category(project_dir_name, category_name)
+    if data is None: # load_data_category が None を返す場合 (読み込み/作成失敗)
+        return []
+    # 各アイテム辞書から 'id' と 'name' を抽出
+    items_list = []
+    for item_id, item_details in data.items():
+        item_summary = {
+            'id': item_details.get('id', item_id), # データ内にidがあればそれを優先
+            'name': item_details.get('name', 'N/A')
+        }
+        items_list.append(item_summary)
+    return sorted(items_list, key=lambda x: x.get('name', '')) # 名前でソート
 
-# --- カテゴリ内のアイテム一覧取得 ---
-def list_items(category):
-    """
-    指定されたカテゴリのデータから、アイテム名とIDのリストを取得する。
-    Args:
-        category (str): カテゴリ名。
-    Returns:
-        list: [{'id': str, 'name': str}, ...] 形式のリスト。
-    """
-    data = load_data_category(category)
-    items = []
-    for item_id, item_data in data.items():
-        # 各アイテムデータに 'name' キーがあることを期待する
-        item_name = item_data.get('name', f"名称未設定 ({item_id})") # nameがない場合のフォールバック
-        items.append({'id': item_id, 'name': item_name})
-    # 名前順でソートして返す
-    return sorted(items, key=lambda x: x['name'])
-
-# --- カテゴリの作成 ---
-def create_category(category):
-    """
-    新しいカテゴリを作成する（空のJSONファイルを作成）。
-    Args:
-        category (str): 作成するカテゴリ名。
-    Returns:
-        bool: 作成に成功したかどうか。
-    """
-    ensure_data_dir()
-    if not category or not isinstance(category, str):
-        print("エラー: カテゴリ名が無効です。")
-        return False
-    # カテゴリ名がファイル名として安全かチェック・変換が必要な場合がある
-    filepath = _get_filepath(category)
-    if os.path.exists(filepath):
-        print(f"情報: カテゴリ '{category}' は既に存在します。")
-        return True # 既に存在する場合も成功とみなす
-    try:
-        # 空の辞書を書き込む
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump({}, f)
-        print(f"カテゴリ '{category}' を作成しました ({filepath})。")
-        return True
-    except Exception as e:
-        print(f"エラー: カテゴリ '{category}' の作成に失敗しました: {e}")
-        return False
-
-# --- アイテム取得 ---
-def get_item(category, item_id):
-    """
-    指定されたカテゴリとIDのアイテムデータを取得する。
-    Args:
-        category (str): カテゴリ名。
-        item_id (str): アイテムID。
-    Returns:
-        dict or None: アイテムデータが見つかった場合はその辞書、見つからない場合はNone。
-    """
-    data = load_data_category(category)
-    return data.get(item_id) # IDが存在すればデータを、しなければNoneを返す
-
-# --- アイテム追加 ---
-def add_item(category, item_data):
-    """
-    指定されたカテゴリに新しいアイテムを追加する。
-    自動的にユニークIDが付与される。
-    Args:
-        category (str): カテゴリ名。
-        item_data (dict): 追加するアイテムのデータ（'name' キー推奨）。
-                          既存の 'id' キーは上書きされる。
-                          'category' キーもここで設定される。
-    Returns:
-        str or None: 追加されたアイテムのID。失敗した場合はNone。
-    """
-    if not category or not isinstance(category, str):
-        print("エラー: カテゴリ名が無効です。")
+def get_item(project_dir_name, category_name, item_id):
+    """指定されたプロジェクト、カテゴリ、IDのアイテムデータを取得する"""
+    data = load_data_category(project_dir_name, category_name)
+    if data is None:
         return None
-    if not isinstance(item_data, dict):
-        print("エラー: アイテムデータが辞書形式ではありません。")
+    return data.get(item_id)
+
+def add_item(project_dir_name, category_name, item_data):
+    """
+    指定されたプロジェクトとカテゴリに新しいアイテムを追加する。
+    item_data に 'name' は必須。'id' がなければ自動生成。
+    成功すれば新しいアイテムのIDを、失敗すればNoneを返す。
+    """
+    if not project_dir_name or not category_name:
+        print("Error: Project name and category name must be provided to add an item.")
+        return None
+    if not isinstance(item_data, dict) or 'name' not in item_data:
+        print("Error: item_data must be a dictionary and contain a 'name'.")
         return None
 
-    data = load_data_category(category)
-
-    # 新しいIDを生成
-    new_id = generate_id(prefix=category[:4]) # カテゴリ名の先頭4文字をプレフィックスに
-
-    # item_data をコピーしてIDとカテゴリを設定
-    new_item = item_data.copy()
-    new_item['id'] = new_id
-    new_item['category'] = category # カテゴリ情報もデータ内に保持
-
-    # 履歴リストやタグリストがなければ初期化する (任意)
-    new_item.setdefault('history', [])
-    new_item.setdefault('tags', [])
-    # status などの構造化データも必要なら初期化
-    new_item.setdefault('status', {})
-    new_item.setdefault('description', "") # description も初期化
-    new_item.setdefault('image_path', None) # image_path も初期化
-
-    data[new_id] = new_item
-
-    if save_data_category(category, data):
-        print(f"アイテム '{new_item.get('name', 'N/A')}' (ID: {new_id}) をカテゴリ '{category}' に追加しました。")
-        return new_id
-    else:
-        print(f"エラー: アイテムの追加に失敗しました（保存エラー）。")
+    data = load_data_category(project_dir_name, category_name)
+    if data is None: # カテゴリファイルの読み込み/作成に失敗した場合
+        print(f"Failed to load or create category '{category_name}' for project '{project_dir_name}'. Cannot add item.")
         return None
 
-# --- アイテム更新 ---
-def update_item(category, item_id, updated_data):
-    """
-    指定されたカテゴリとIDのアイテムデータを更新する。
-    Args:
-        category (str): カテゴリ名。
-        item_id (str): 更新するアイテムのID。
-        updated_data (dict): 更新するキーと値を含む辞書。
-                               'id' や 'category' の変更は想定しない。
-    Returns:
-        bool: 更新に成功したかどうか。
-    """
-    if not isinstance(updated_data, dict):
-        print("エラー: 更新データが辞書形式ではありません。")
-        return False
+    item_id = item_data.get('id')
+    if not item_id:
+        item_id = f"{category_name[:4].lower()}-{uuid.uuid4()}" # カテゴリ名の最初の数文字とUUID
+    item_data['id'] = item_id
+    item_data['category'] = category_name # カテゴリ情報をアイテムデータ内にも保持
 
-    data = load_data_category(category)
+    # 履歴やタグがなければ空リストで初期化 (任意)
+    if 'history' not in item_data: item_data['history'] = []
+    if 'tags' not in item_data: item_data['tags'] = []
 
-    if item_id not in data:
-        print(f"エラー: 更新対象のアイテム (ID: {item_id}) がカテゴリ '{category}' に見つかりません。")
-        return False
-
-    # 元のデータを取得し、更新データで上書き (IDとカテゴリは保護)
-    original_item = data[item_id]
-    update_payload = updated_data.copy()
-    update_payload.pop('id', None) # id が含まれていても無視
-    update_payload.pop('category', None) # category が含まれていても無視
-
-    original_item.update(update_payload) # updateメソッドで辞書をマージ
-
-    data[item_id] = original_item # 更新したデータを再度セット
-
-    if save_data_category(category, data):
-        print(f"アイテム (ID: {item_id}) をカテゴリ '{category}' で更新しました。")
-        return True
+    data[item_id] = item_data
+    if save_data_category(project_dir_name, category_name, data):
+        return item_id
     else:
-        print(f"エラー: アイテムの更新に失敗しました（保存エラー）。")
+        return None
+
+def update_item(project_dir_name, category_name, item_id, update_data):
+    """指定されたプロジェクト、カテゴリ、IDのアイテムデータを更新する"""
+    data = load_data_category(project_dir_name, category_name)
+    if data is None or item_id not in data:
         return False
+    # update_data の内容で既存データを更新
+    # data[item_id].update(update_data)
+    # ★★★ 修正: update_data のキーのみを更新するのではなく、ネストされた構造も考慮して上書き
+    for key, value in update_data.items():
+        data[item_id][key] = value
+    # IDやカテゴリが変更されないように保護 (任意)
+    data[item_id]['id'] = item_id
+    data[item_id]['category'] = category_name
+    return save_data_category(project_dir_name, category_name, data)
 
-# --- アイテム削除 ---
-def delete_item(category, item_id):
-    """
-    指定されたカテゴリとIDのアイテムデータを削除する。
-    Args:
-        category (str): カテゴリ名。
-        item_id (str): 削除するアイテムのID。
-    Returns:
-        bool: 削除に成功したかどうか。
-    """
-    data = load_data_category(category)
-
-    if item_id not in data:
-        print(f"情報: 削除対象のアイテム (ID: {item_id}) はカテゴリ '{category}' に存在しません。")
-        return True # 存在しない場合も（削除された状態なので）成功とみなす
-
-    del data[item_id] # 辞書から削除
-
-    if save_data_category(category, data):
-        print(f"アイテム (ID: {item_id}) をカテゴリ '{category}' から削除しました。")
-        return True
-    else:
-        print(f"エラー: アイテムの削除に失敗しました（保存エラー）。")
+def delete_item(project_dir_name, category_name, item_id):
+    """指定されたプロジェクト、カテゴリ、IDのアイテムを削除する"""
+    data = load_data_category(project_dir_name, category_name)
+    if data is None or item_id not in data:
         return False
+    del data[item_id]
+    return save_data_category(project_dir_name, category_name, data)
 
-# --- 履歴追加のヘルパー関数 (例) ---
-def add_history_entry(category, item_id, entry_text):
-    """指定アイテムの履歴に新しいエントリを追加する"""
-    item = get_item(category, item_id)
-    if not item:
-        return False
-    
-    # history がリストでなければ初期化
-    if not isinstance(item.get('history'), list):
+# --- 履歴とタグのヘルパー関数 (変更なし、ただし project_dir_name と category_name を受け取る) ---
+def add_history_entry(project_dir_name, category_name, item_id, entry_text):
+    """アイテムに履歴エントリを追加する"""
+    item = get_item(project_dir_name, category_name, item_id)
+    if not item: return False
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    new_entry = {"timestamp": timestamp, "entry": entry_text}
+    if 'history' not in item or not isinstance(item['history'], list):
         item['history'] = []
-        
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S') # 現在時刻
-    item['history'].append({
-        "timestamp": timestamp,
-        "entry": entry_text
-    })
-    
-    # 更新データとして history のみを渡す
-    return update_item(category, item_id, {'history': item['history']})
+    item['history'].append(new_entry)
+    return update_item(project_dir_name, category_name, item_id, {"history": item['history']})
 
-# --- タグ更新のヘルパー関数 (例) ---
-def update_tags(category, item_id, tags_list):
-     """指定アイテムのタグリストを更新する"""
-     if not isinstance(tags_list, list):
-          print("エラー: タグはリスト形式で指定してください。")
-          return False
-     # 更新データとして tags のみを渡す
-     return update_item(category, item_id, {'tags': tags_list})
+def update_tags(project_dir_name, category_name, item_id, tags_list):
+    """アイテムのタグリストを更新する"""
+    if not isinstance(tags_list, list): return False
+    return update_item(project_dir_name, category_name, item_id, {"tags": tags_list})
 
-# --- デバッグ用 ---
+
 if __name__ == '__main__':
-    # このファイル単体で実行したときのテストコード
-    print("Data Manager - 単体テスト")
-    ensure_data_dir()
+    # --- テストコード ---
+    test_project_dm = "dm_test_project" # データマネージャテスト用プロジェクト
 
-    # カテゴリ作成
-    create_category("キャラクター")
-    create_category("アイテム")
+    # 1. カテゴリ作成テスト
+    print(f"\n--- カテゴリ作成テスト ({test_project_dm}) ---")
+    cat_created1 = create_category(test_project_dm, "キャラクター")
+    print(f"'キャラクター' 作成結果: {cat_created1}")
+    cat_created2 = create_category(test_project_dm, "アイテム")
+    print(f"'アイテム' 作成結果: {cat_created2}")
+    cat_created_again = create_category(test_project_dm, "キャラクター") # 再度作成
+    print(f"'キャラクター' 再作成結果 (Falseのはず): {cat_created_again}")
 
-    # カテゴリ一覧
-    print("カテゴリ:", list_categories())
 
-    # アイテム追加
-    char_id1 = add_item("キャラクター", {"name": "アルド", "description": "勇敢な戦士", "status": {"HP": 30, "maxHP": 30}})
-    char_id2 = add_item("キャラクター", {"name": "リナ", "description": "好奇心旺盛な魔法使い", "status": {"MP": 40, "maxMP": 40}})
-    item_id1 = add_item("アイテム", {"name": "回復薬", "description": "HPを少し回復する"})
+    # 2. カテゴリ一覧テスト
+    print(f"\n--- カテゴリ一覧テスト ({test_project_dm}) ---")
+    categories = list_categories(test_project_dm)
+    print(f"現在のカテゴリ: {categories}")
+    if "キャラクター" in categories and "アイテム" in categories:
+        print("カテゴリ一覧取得成功。")
 
-    # アイテム一覧
-    print("キャラクター一覧:", list_items("キャラクター"))
-    print("アイテム一覧:", list_items("アイテム"))
+    # 3. アイテム追加テスト
+    print(f"\n--- アイテム追加テスト ({test_project_dm}, キャラクター) ---")
+    char1_id = add_item(test_project_dm, "キャラクター", {"name": "ユノ・アステル", "description": "親切なAIアシスタント"})
+    print(f"追加されたキャラクター1のID: {char1_id}")
+    char2_id = add_item(test_project_dm, "キャラクター", {"name": "マスター", "description": "TRPGツールの開発者"})
+    print(f"追加されたキャラクター2のID: {char2_id}")
 
-    # アイテム取得
-    print("アルドの情報:", get_item("キャラクター", char_id1))
+    item1_id = add_item(test_project_dm, "アイテム", {"name": "回復薬", "tags": ["消耗品", "回復"]})
+    print(f"追加されたアイテム1のID: {item1_id}")
 
-    # アイテム更新
-    update_item("キャラクター", char_id1, {"description": "勇敢な戦士。レベル5になった。", "status": {"HP": 35, "maxHP": 35}})
-    print("アルドの情報(更新後):", get_item("キャラクター", char_id1))
+    # 4. アイテム一覧テスト
+    print(f"\n--- アイテム一覧テスト ({test_project_dm}, キャラクター) ---")
+    char_list = list_items(test_project_dm, "キャラクター")
+    print(f"キャラクターリスト: {char_list}")
+    if len(char_list) == 2: print("キャラクター一覧取得成功。")
 
-    # 履歴追加
-    add_history_entry("キャラクター", char_id1, "ゴブリンキングを倒した！")
-    add_history_entry("キャラクター", char_id1, "新しい剣を手に入れた。")
-    print("アルドの情報(履歴追加後):", get_item("キャラクター", char_id1))
+    # 5. アイテム取得テスト
+    print(f"\n--- アイテム取得テスト ({test_project_dm}) ---")
+    if char1_id:
+        retrieved_char1 = get_item(test_project_dm, "キャラクター", char1_id)
+        print(f"取得したキャラクター1: {retrieved_char1}")
+        if retrieved_char1 and retrieved_char1['name'] == "ユノ・アステル":
+            print("キャラクター取得成功。")
 
-    # タグ更新
-    update_tags("キャラクター", char_id1, ["主人公", "戦士", "レベル5"])
-    print("アルドの情報(タグ更新後):", get_item("キャラクター", char_id1))
+    # 6. アイテム更新テスト
+    print(f"\n--- アイテム更新テスト ({test_project_dm}) ---")
+    if char1_id:
+        update_success = update_item(test_project_dm, "キャラクター", char1_id, {"description": "非常に親切なAIアシスタント。開発を手伝う。"})
+        print(f"キャラクター1更新結果: {update_success}")
+        updated_char1 = get_item(test_project_dm, "キャラクター", char1_id)
+        print(f"更新後のキャラクター1: {updated_char1}")
+        if updated_char1 and "開発を手伝う" in updated_char1['description']:
+            print("キャラクター更新成功。")
 
-    # アイテム削除
-    # delete_item("アイテム", item_id1)
-    # print("アイテム一覧(削除後):", list_items("アイテム"))
+    # 7. 履歴追加テスト
+    if char1_id:
+        print(f"\n--- 履歴追加テスト ({test_project_dm}) ---")
+        history_added = add_history_entry(test_project_dm, "キャラクター", char1_id, "プロジェクト機能の実装を支援した。")
+        print(f"履歴追加結果: {history_added}")
+        char_with_history = get_item(test_project_dm, "キャラクター", char1_id)
+        print(f"履歴追加後のキャラ: {char_with_history.get('history')}")
 
-    # 存在しないカテゴリ
-    print("存在しないカテゴリのアイテム:", list_items("武器"))
+
+    # 8. アイテム削除テスト
+    print(f"\n--- アイテム削除テスト ({test_project_dm}) ---")
+    if char2_id:
+        delete_success = delete_item(test_project_dm, "キャラクター", char2_id)
+        print(f"キャラクター2削除結果: {delete_success}")
+        deleted_char2 = get_item(test_project_dm, "キャラクター", char2_id)
+        print(f"削除後のキャラクター2取得試行: {deleted_char2}")
+        if delete_success and deleted_char2 is None:
+            print("キャラクター削除成功。")
+        char_list_after_delete = list_items(test_project_dm, "キャラクター")
+        print(f"削除後のキャラクターリスト: {char_list_after_delete}")
+
+    # 9. 存在しないプロジェクトのテスト
+    print(f"\n--- 存在しないプロジェクトのカテゴリ一覧テスト ---")
+    non_existent_cats = list_categories("no_such_project_exists_here")
+    print(f"存在しないプロジェクトのカテゴリ: {non_existent_cats}")
+    if not non_existent_cats: print("期待通り空リスト。")
+
+    print(f"\n--- 存在しないプロジェクトへのアイテム追加テスト ---")
+    failed_add = add_item("no_such_project_exists_here", "ダミーカテゴリ", {"name": "ダミーアイテム"})
+    print(f"存在しないプロジェクトへのアイテム追加結果 (Noneのはず): {failed_add}")
+
 
