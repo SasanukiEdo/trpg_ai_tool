@@ -128,50 +128,50 @@ class DataManagementWidget(QWidget):
 
 
     def refresh_item_list_for_category(self, category_name):
-        """指定されたカテゴリのアイテムリストウィジェットを更新"""
         print(f"\n--- DataWidget DEBUG: Attempting to refresh item list for category: '{category_name}' in project '{self.current_project_dir_name}' ---")
 
-        # --- ★★★ QTabWidget から現在のタブのウィジェットを取得 ★★★ ---
-        list_widget_to_update = None
-        current_tab_index = self.category_tab_widget.currentIndex()
-        if current_tab_index != -1:
-            if self.category_tab_widget.tabText(current_tab_index) == category_name:
-                widget = self.category_tab_widget.widget(current_tab_index)
-                if isinstance(widget, QListWidget):
-                    list_widget_to_update = widget
-                    print(f"  Found QListWidget for '{category_name}' directly from QTabWidget.widget({current_tab_index}): {list_widget_to_update}")
-                else:
-                    print(f"  ★★★ CRITICAL ERROR: Widget at current tab index {current_tab_index} ('{category_name}') is NOT a QListWidget. It's a {type(widget)}. Aborting refresh. ★★★")
-                    return
-            else:
-                # 要求されたカテゴリと現在表示中のタブが異なる場合 (通常は _on_tab_changed 経由で呼ばれるので一致するはず)
-                # 安全のため、一致するタブを探す (もしあれば)
-                for i in range(self.category_tab_widget.count()):
-                    if self.category_tab_widget.tabText(i) == category_name:
-                        widget = self.category_tab_widget.widget(i)
-                        if isinstance(widget, QListWidget):
-                            list_widget_to_update = widget
-                            print(f"  Found QListWidget for '{category_name}' by searching tabs (index {i}): {list_widget_to_update}")
-                            break
-                if not list_widget_to_update:
-                    print(f"  ★★★ CRITICAL ERROR: QListWidget for '{category_name}' NOT found by searching tabs either. Aborting refresh. ★★★")
-                    return
-        else: # タブが選択されていない場合
-            print(f"  ★★★ CRITICAL ERROR: No tab selected. Cannot find QListWidget for '{category_name}'. Aborting refresh. ★★★")
-            return
-        # -------------------------------------------------------
-
-        if not list_widget_to_update: # 二重チェック
-            print(f"  ★★★ CRITICAL ERROR (Double Check): list_widget_to_update is None for '{category_name}'. Aborting. ★★★")
+        # --- 1. 対象の QListWidget を取得する ---
+        target_list_widget = None
+        # まず、現在選択されているタブが対象カテゴリか確認
+        current_tab_idx = self.category_tab_widget.currentIndex()
+        if current_tab_idx != -1 and self.category_tab_widget.tabText(current_tab_idx) == category_name:
+            widget_candidate = self.category_tab_widget.widget(current_tab_idx)
+            if isinstance(widget_candidate, QListWidget):
+                target_list_widget = widget_candidate
+                print(f"  Found QListWidget for '{category_name}' (current tab, index {current_tab_idx}): {target_list_widget}")
+        
+        # もし現在のタブが対象でないか、QListWidgetでなかった場合、全タブを検索 (フォールバック)
+        if target_list_widget is None:
+            print(f"  Current tab not matching or not a QListWidget. Searching all tabs for '{category_name}'...")
+            for i in range(self.category_tab_widget.count()):
+                if self.category_tab_widget.tabText(i) == category_name:
+                    widget_candidate = self.category_tab_widget.widget(i)
+                    if isinstance(widget_candidate, QListWidget):
+                        target_list_widget = widget_candidate
+                        print(f"  Found QListWidget for '{category_name}' by searching (tab index {i}): {target_list_widget}")
+                        break # 見つかったのでループを抜ける
+        
+        # --- 2. QListWidget が取得できたか最終確認 ---
+        if target_list_widget is None:
+            print(f"  ★★★ CRITICAL ERROR: Could not definitively find QListWidget for category '{category_name}'. Aborting refresh. ★★★")
+            # デバッグ用に全タブ情報を表示
+            print(f"    Current QTabWidget has {self.category_tab_widget.count()} tabs:")
+            for i in range(self.category_tab_widget.count()):
+                tab_text_debug = self.category_tab_widget.tabText(i)
+                widget_debug = self.category_tab_widget.widget(i)
+                print(f"      Tab {i}: Text='{tab_text_debug}', Widget={widget_debug} (Type: {type(widget_debug)})")
             return
 
-        print(f"  Target QListWidget for '{category_name}' is: {list_widget_to_update} (Parent: {list_widget_to_update.parent()})")
-        list_widget_to_update.clear()
+        # --- 3. QListWidget が取得できたら、リストをクリアしてアイテムを追加 ---
+        print(f"  Proceeding with target_list_widget: {target_list_widget} (Parent: {target_list_widget.parent()}) for category '{category_name}'")
+        target_list_widget.clear()
         print(f"  List widget for '{category_name}' cleared.")
 
         items_info = list_items(self.current_project_dir_name, category_name)
         checked_ids = self.checked_data_items.get(category_name, set())
-        if not items_info: print(f"  -> No items found for '{category_name}'.")
+
+        if not items_info:
+            print(f"  -> No items found for '{category_name}'.")
         else:
             print(f"  -> Found {len(items_info)} items for '{category_name}'. Adding to list...")
             for item_info in items_info:
@@ -179,8 +179,10 @@ class DataManagementWidget(QWidget):
                 item_name = item_info.get('name', 'N/A')
                 if not item_id: continue
                 is_checked = item_id in checked_ids
-                list_item_obj = QListWidgetItem(list_widget_to_update)
+                
+                list_item_obj = QListWidgetItem(target_list_widget) # 親ListWidgetを指定
                 item_widget = DataItemWidget(item_name, item_id, is_checked)
+                
                 item_widget.checkStateChanged.connect(
                     lambda checked, cat=category_name, iid=item_id: \
                         self._handle_item_check_change(cat, iid, checked)
@@ -188,18 +190,12 @@ class DataManagementWidget(QWidget):
                 item_widget.detailRequested.connect(
                     lambda cat=category_name, iid=item_id: self.show_detail_window(cat, iid)
                 )
+                
                 list_item_obj.setSizeHint(item_widget.sizeHint())
-                list_widget_to_update.addItem(list_item_obj)
-                list_widget_to_update.setItemWidget(list_item_obj, item_widget)
+                # target_list_widget.addItem(list_item_obj) # QListWidgetItem作成時に親を指定したので不要
+                target_list_widget.setItemWidget(list_item_obj, item_widget)
         print(f"--- DataWidget DEBUG: Finished refreshing item list for '{category_name}' ---")
-
-    # --- (add_new_category_result, _handle_item_check_change, _update_checked_items_signal,
-    #      get_checked_items, _request_add_item, add_new_item_result, delete_checked_items,
-    #      ensure_detail_window_exists, show_detail_window, _handle_detail_saved, _handle_detail_closed
-    #      は、内部で self.current_project_dir_name を使用する前提で、大きな変更はなしと仮定。
-    #      ただし、delete_checked_items で load_data_category / save_data_category を呼ぶ部分は、
-    #      data_manager 内部でパスが解決されるので、project_dir_name と category_name だけ渡せばOK)
-    #      以下、変更が少ないと思われるメソッドの例 (必要なら全メソッド見直します)
+        
 
     def add_new_category_result(self, category_name):
         if category_name:
