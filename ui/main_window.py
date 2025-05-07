@@ -241,37 +241,30 @@ class MainWindow(QWidget):
 
     def open_settings_dialog(self):
         """設定ダイアログを開く"""
-        # --- ★★★ SettingsDialogにプロジェクト設定も渡す ★★★ ---
-        # グローバル設定と現在のプロジェクト設定をマージして渡すか、別々に渡す
-        # ここではプロジェクト設定を優先的に使用する想定
-        # SettingsDialog側で、どの設定をグローバル/プロジェクトどちらに保存するか判断させる
-        combined_config_for_dialog = self.global_config.copy()
-        combined_config_for_dialog.update(self.current_project_settings) # プロジェクト設定で上書き
-
-        dialog = SettingsDialog(combined_config_for_dialog, parent=self)
+        # --- ★★★ SettingsDialogにグローバル設定と現在のプロジェクト設定を別々に渡す ★★★ ---
+        dialog = SettingsDialog(self.global_config, self.current_project_settings, parent=self)
         if dialog.exec_() == QDialog.Accepted:
-            new_config_from_dialog = dialog.get_config()
+            # --- ★★★ 更新された設定をタプルで受け取る ★★★ ---
+            updated_global_config, updated_project_settings = dialog.get_updated_configs()
 
-            # グローバル設定の保存項目を抽出・保存
-            global_keys_to_save = ["active_project", "default_model"] # 保存対象のグローバルキー
-            updated_global_config = {k: new_config_from_dialog[k] for k in global_keys_to_save if k in new_config_from_dialog}
-            if updated_global_config:
-                self.global_config.update(updated_global_config)
+            # グローバル設定の保存
+            if self.global_config != updated_global_config: # 変更があった場合のみ保存
+                self.global_config = updated_global_config
                 save_global_config(self.global_config)
+                print("グローバル設定が更新・保存されました。")
 
-            # プロジェクト固有設定の保存項目を抽出・保存
-            project_keys_to_save = ["main_system_prompt", "model", "project_display_name"] # 保存対象のプロジェクトキー
-            updated_project_settings = {k: new_config_from_dialog[k] for k in project_keys_to_save if k in new_config_from_dialog}
-            if updated_project_settings:
-                self.current_project_settings.update(updated_project_settings)
+            # プロジェクト固有設定の保存
+            if self.current_project_settings != updated_project_settings: # 変更があった場合のみ保存
+                self.current_project_settings = updated_project_settings
                 save_project_settings(self.current_project_dir_name, self.current_project_settings)
+                print(f"プロジェクト '{self.current_project_dir_name}' の設定が更新・保存されました。")
 
             # 設定変更をUIに反映
             self.system_prompt_input_main.setPlainText(self.current_project_settings.get("main_system_prompt", ""))
             display_name = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
             self.setWindowTitle(f"TRPG AI Tool - {display_name}")
-            self.configure_gemini() # APIキーやモデルが変更された可能性があるので再設定
-            print("設定が更新されました。")
+            self.configure_gemini() # モデルが変更された可能性があるので再設定
+            print("設定ダイアログの変更が適用されました。")
 
 
     def on_send_button_clicked(self):

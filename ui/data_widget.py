@@ -4,10 +4,9 @@ import sys
 import os
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QListWidget, QPushButton,
-    QTabWidget, QMessageBox, QInputDialog, QListWidgetItem,
-    QApplication
+    QTabWidget, QMessageBox, QInputDialog, QListWidgetItem, QApplication
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -17,54 +16,62 @@ if project_root not in sys.path:
 # --- core モジュールインポート ---
 from core.data_manager import (
     list_categories, list_items, get_item, add_item, update_item, delete_item,
-    create_category, load_data_category,
-    save_data_category # <<< ここに追加
-    # add_history_entry, update_tags なども必要に応じて
+    create_category, load_data_category, save_data_category # save_data_category も必要になる可能性
 )
 # --- ui モジュールインポート ---
 from ui.detail_window import DetailWindow
 from ui.data_item_widget import DataItemWidget
 
 # ==============================================================================
-# データ管理ウィジェット (タブ形式 + 別ウィンドウ詳細)
+# データ管理ウィジェット
 # ==============================================================================
 class DataManagementWidget(QWidget):
     checkedItemsChanged = pyqtSignal(dict)
-    # ★★★ カテゴリ追加/アイテム追加要求シグナルを追加 ★★★
-    addCategoryRequested = pyqtSignal()
-    addItemRequested = pyqtSignal(str) # category
+    addCategoryRequested = pyqtSignal() # カテゴリ追加要求 (MainWindowへ)
+    addItemRequested = pyqtSignal(str) # アイテム追加要求 (MainWindowへ、引数はカテゴリ名)
 
-    def __init__(self, parent=None):
+    # --- ★★★ __init__ に project_dir_name を追加 ★★★ ---
+    def __init__(self, project_dir_name, parent=None):
         super().__init__(parent)
-        self.category_item_lists = {}
-        self.checked_data_items = {}
+        self.current_project_dir_name = project_dir_name # ★ プロジェクトディレクトリ名を保持
+        self.category_item_lists = {} # {category_name: QListWidget}
+        self.checked_data_items = {}  # {category_name: {item_id1, item_id2}}
         self._detail_window = None
         self._last_detail_item = {"category": None, "id": None}
         self.init_ui()
+    # -------------------------------------------------
+
+    def set_project(self, project_dir_name):
+        """プロジェクトが変更されたときに呼び出され、表示を更新する"""
+        print(f"DataManagementWidget: Setting project to '{project_dir_name}'")
+        self.current_project_dir_name = project_dir_name
+        self.checked_data_items.clear() # チェック状態をリセット
+        self.refresh_categories_and_tabs() # タブとリストを再読み込み
+        # 詳細ウィンドウもリセットまたは閉じる (任意)
+        if self._detail_window and self._detail_window.isVisible():
+            self._detail_window.close() # または clear_view() など
+            self._last_detail_item = {"category": None, "id": None}
+        self._update_checked_items_signal() # チェック状態変更シグナル発行
+
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # --- 上部: カテゴリ操作ボタン ---
         category_button_layout = QHBoxLayout()
         self.add_category_button = QPushButton("カテゴリ追加")
-        # --- ★★★ QInputDialogではなくシグナルを発行 ★★★
-        self.add_category_button.clicked.connect(self.addCategoryRequested.emit)
+        self.add_category_button.clicked.connect(self.addCategoryRequested.emit) # MainWindowに通知
         category_button_layout.addWidget(self.add_category_button)
         category_button_layout.addStretch()
         main_layout.addLayout(category_button_layout)
 
-        # --- 中央: カテゴリタブ ---
         self.category_tab_widget = QTabWidget()
         self.category_tab_widget.currentChanged.connect(self._on_tab_changed)
         main_layout.addWidget(self.category_tab_widget)
 
-        # --- 下部: アイテム操作ボタン ---
         item_button_layout = QHBoxLayout()
         self.add_item_button = QPushButton("アイテム追加")
-        # --- ★★★ QInputDialogではなくシグナルを発行 ★★★
-        self.add_item_button.clicked.connect(self._request_add_item)
+        self.add_item_button.clicked.connect(self._request_add_item) # MainWindowに通知
         self.delete_checked_items_button = QPushButton("チェックしたアイテムを削除")
         self.delete_checked_items_button.clicked.connect(self.delete_checked_items)
         item_button_layout.addWidget(self.add_item_button)
@@ -72,188 +79,110 @@ class DataManagementWidget(QWidget):
         item_button_layout.addStretch()
         main_layout.addLayout(item_button_layout)
 
-        # --- 初期化 ---
-        self.refresh_categories_and_tabs() # 初回読み込み
+        self.refresh_categories_and_tabs() # 初期読み込み
         self.ensure_detail_window_exists()
 
-    # --- カテゴリとタブの管理 ---
+    # --- カテゴリとタブの管理 (project_dir_name を使用) ---
     def refresh_categories_and_tabs(self):
-        """カテゴリ一覧を読み込み、タブを再構築し、各リストを更新する"""
-        self.category_tab_widget.blockSignals(True) # シグナルブロック開始
-
+        self.category_tab_widget.blockSignals(True)
         current_tab_text = self.category_tab_widget.tabText(self.category_tab_widget.currentIndex())
-        print(f"\n--- DEBUG: Refreshing categories and tabs. Previous tab: '{current_tab_text}' ---")
+        print(f"\n--- DataWidget DEBUG: Refreshing categories for project '{self.current_project_dir_name}'. Prev tab: '{current_tab_text}' ---")
 
-        self.category_item_lists.clear()
-        print(f"  Cleared self.category_item_lists.")
         self.category_tab_widget.clear()
-        print(f"  Cleared tabs.")
+        self.category_item_lists.clear()
 
-        categories = list_categories()
-        print(f"  Loaded categories from data_manager: {categories}")
+        # ★★★ list_categories に project_dir_name を渡す ★★★
+        categories = list_categories(self.current_project_dir_name)
+        print(f"  Loaded categories: {categories}")
         if not categories:
-             if create_category("未分類"):
+             # ★★★ create_category に project_dir_name を渡す ★★★
+             if create_category(self.current_project_dir_name, "未分類"):
                   categories.append("未分類")
                   print(f"  Created default category '未分類'.")
 
         self.checked_data_items = {cat: self.checked_data_items.get(cat, set()) for cat in categories}
-        print(f"  Initialized/cleaned checked_data_items: {self.checked_data_items}")
-
         new_tab_index = -1
-        print(f"  Starting loop to create tabs...")
         for i, category in enumerate(categories):
-            print(f"    Processing category '{category}' (Index {i})...")
-            list_widget = QListWidget() # 親指定なし
-            print(f"      QListWidget created: {list_widget}")
+            list_widget = QListWidget()
             self.category_item_lists[category] = list_widget
-            print(f"      Stored list_widget into self.category_item_lists for '{category}'.")
-
-            # ★★★ ここでのリスト更新呼び出しは削除 ★★★
-            # print(f"      Refreshing item list for '{category}' BEFORE adding tab...")
-            # self.refresh_item_list_for_category(category)
-
             self.category_tab_widget.addTab(list_widget, category)
-            print(f"      Added tab '{category}' with its list widget to category_tab_widget.")
+            if category == current_tab_text: new_tab_index = i
 
-            if category == current_tab_text:
-                new_tab_index = i
-                print(f"      '{category}' matches previous tab text. Index set to {i}.")
-
-        print(f"  Finished processing categories. self.category_item_lists keys: {list(self.category_item_lists.keys())}")
-
-        # --- ★★★ 先にタブを設定 ---
-        print(f"  Setting current tab index to: {new_tab_index}")
-        target_index = 0 # デフォルトは最初のタブ
-        if new_tab_index != -1:
-            target_index = new_tab_index
-        elif self.category_tab_widget.count() > 0:
-            target_index = 0
-        else:
-            target_index = -1 # タブがない場合
-
-        if target_index != -1:
-             print(f"  Setting current tab index to {target_index} BEFORE unblocking signals.")
-             self.category_tab_widget.setCurrentIndex(target_index)
-        else:
-             print(f"  No tabs exist.")
-
-        # --- シグナルブロック解除 ---
         self.category_tab_widget.blockSignals(False)
+        if new_tab_index != -1: self.category_tab_widget.setCurrentIndex(new_tab_index)
+        elif self.category_tab_widget.count() > 0: self.category_tab_widget.setCurrentIndex(0)
+        else: self._update_checked_items_signal() # タブがない場合もシグナル更新
 
-        # --- ★★★ 起動時/リフレッシュ時に最初のタブのリストを更新 ---
-        if target_index != -1:
-            initial_category = self.category_tab_widget.tabText(target_index)
-            print(f"  Refreshing list for initially selected tab: '{initial_category}'")
-            self.refresh_item_list_for_category(initial_category)
-        else:
-            print(f"  No initial list to refresh.")
-
-        self._update_checked_items_signal() # シグナル発行
-        print(f"--- DEBUG: Finished refreshing categories and tabs ---")
+        # setCurrentIndexによって _on_tab_changed が呼ばれ、リストが更新されるはず
+        # ただし、タブが0個の場合や、インデックスが変わらない場合は明示的に呼ぶ必要があるかも
+        if self.category_tab_widget.count() > 0 and (new_tab_index == self.category_tab_widget.currentIndex() or new_tab_index == -1):
+             current_selected_category = self.category_tab_widget.tabText(self.category_tab_widget.currentIndex())
+             if current_selected_category:
+                  self.refresh_item_list_for_category(current_selected_category)
 
 
     def add_new_category_result(self, category_name):
         """MainWindowからカテゴリ名を受け取ってカテゴリを作成"""
         if category_name:
-             if create_category(category_name):
+             # ★★★ create_category に project_dir_name ★★★
+             if create_category(self.current_project_dir_name, category_name):
                   self.refresh_categories_and_tabs()
-                  # 作成したタブを選択
                   for i in range(self.category_tab_widget.count()):
                        if self.category_tab_widget.tabText(i) == category_name:
-                            self.category_tab_widget.setCurrentIndex(i)
-                            break
-             else:
-                  QMessageBox.warning(self, "エラー", f"カテゴリ '{category_name}' の作成に失敗しました。")
-
+                            self.category_tab_widget.setCurrentIndex(i); break
+             else: QMessageBox.warning(self, "エラー", f"カテゴリ '{category_name}' の作成に失敗しました。")
 
     def _on_tab_changed(self, index):
-        """タブが切り替わったときの処理"""
-        # --- ★★★ 実装を戻す ★★★ ---
         if index != -1:
              category = self.category_tab_widget.tabText(index)
-             print(f"\n--- DEBUG: Data tab changed to index {index}: '{category}'. Refreshing list...")
-             # ★ 表示中のタブのアイテムリストを更新する
+             print(f"\n--- DataWidget DEBUG: Tab changed to '{category}' for project '{self.current_project_dir_name}'. Refreshing list... ---")
              self.refresh_item_list_for_category(category)
-        else:
-             print(f"\n--- DEBUG: Data tab changed to index -1 (no tab selected) ---")
 
-
+    # --- アイテムリストの管理 (project_dir_name を使用) ---
     def refresh_item_list_for_category(self, category):
-        """指定されたカテゴリのアイテムリストウィジェットを更新"""
-        print(f"\n--- DEBUG: Attempting to refresh item list for category: '{category}' ---")
-        print(f"  Accessing self.category_item_lists (ID: {id(self.category_item_lists)})")
-
+        print(f"\n--- DataWidget DEBUG: Refreshing item list for category '{category}' in project '{self.current_project_dir_name}' ---")
         list_widget = self.category_item_lists.get(category)
-        if list_widget is not None:
-            print(f"  Found QListWidget for '{category}' in dictionary: ID={id(list_widget)}")
-        else:
-            # ★★★ ここでエラーになるのは依然として問題 ★★★
-            print(f"  ★★★ WARNING: QListWidget for '{category}' is None in dictionary.")
-            print(f"    Current self.category_item_lists keys: {list(self.category_item_lists.keys())}")
-            print(f"--- DEBUG: Finished refreshing item list for category '{category}' (Widget not found) ---")
-            return # ウィジェットが見つからない場合は処理中断
-
-        # ここに到達した場合、list_widget は存在するはず
-        print(f"  Target QListWidget found: {list_widget}")
+        if not list_widget:
+            print(f"  ★★★ WARNING: QListWidget for '{category}' not found.")
+            return
         list_widget.clear()
-        print(f"  List widget cleared.")
 
-        try:
-            print(f"  Calling list_items('{category}')...")
-            items_info = list_items(category)
-            print(f"  list_items('{category}') returned ({len(items_info)} items): {items_info}")
+        # ★★★ list_items に project_dir_name ★★★
+        items_info = list_items(self.current_project_dir_name, category)
+        print(f"  list_items returned ({len(items_info)} items): {items_info}")
+        checked_ids = self.checked_data_items.get(category, set())
 
-            checked_ids = self.checked_data_items.get(category, set())
+        if not items_info: print("  -> No items found.")
+        else:
+            print(f"  -> Found {len(items_info)} items. Adding to list...")
+            for item_info in items_info:
+                item_id = item_info.get('id')
+                item_name = item_info.get('name', 'N/A')
+                if not item_id: continue
+                is_checked = item_id in checked_ids
+                list_item_obj = QListWidgetItem(list_widget) # QListWidgetItem を item とは別の名前に
+                item_widget = DataItemWidget(item_name, item_id, is_checked)
+                item_widget.checkStateChanged.connect(
+                    lambda checked, cat=category, iid=item_id: \
+                        self._handle_item_check_change(cat, iid, checked)
+                )
+                item_widget.detailRequested.connect(
+                    lambda cat=category, iid=item_id: self.show_detail_window(cat, iid)
+                )
+                list_item_obj.setSizeHint(item_widget.sizeHint())
+                list_widget.addItem(list_item_obj)
+                list_widget.setItemWidget(list_item_obj, item_widget)
+        print(f"--- DataWidget DEBUG: Finished refreshing item list for '{category}' ---")
 
-            if not items_info:
-                print("  -> No items found or returned for this category. List will be empty.")
-            else:
-                print(f"  -> Found {len(items_info)} items. Starting loop...")
-                for i, item_info in enumerate(items_info):
-                    item_id = None
-                    try:
-                        if not isinstance(item_info, dict):
-                            print(f"    Warning: Item info is not a dictionary, skipping: {item_info}")
-                            continue
-                        item_id = item_info.get('id', None)
-                        item_name = item_info.get('name', 'N/A')
-                        # print(f"    Loop {i+1}: Processing item ID='{item_id}', Name='{item_name}'")
-                        if item_id is None: continue
-                        is_checked = item_id in checked_ids
-                        if list_widget is None: continue # 念のため
-                        list_item = QListWidgetItem(list_widget)
-                        item_widget = DataItemWidget(item_name, item_id, is_checked)
-                        item_widget.checkStateChanged.connect(
-                            lambda checked, cat=category, iid=item_id: \
-                                self._handle_item_check_change(cat, iid, checked)
-                        )
-                        item_widget.detailRequested.connect(
-                            lambda cat=category, iid=item_id: self.show_detail_window(cat, iid)
-                        )
-                        hint = item_widget.sizeHint()
-                        list_item.setSizeHint(hint)
-                        list_widget.addItem(list_item)
-                        list_widget.setItemWidget(list_item, item_widget)
-                        # print(f"      Item widget set successfully for ID='{item_id}'.")
-                    except Exception as e_inner:
-                        print(f"    ★★★ Error during widget creation/setting for item ID='{item_id}': {e_inner}")
-                        import traceback; traceback.print_exc()
-        except Exception as e_outer:
-            print(f"★★★ Error in refresh_item_list_for_category for '{category}': {e_outer}")
-            import traceback; traceback.print_exc()
 
-        print(f"--- DEBUG: Finished refreshing item list for category: '{category}' ---")
-
-    # --- (_handle_item_check_change, _update_checked_items_signal, get_checked_items は変更なし) ---
     def _handle_item_check_change(self, category, item_id, is_checked):
-        print(f"Data Item Check changed: Category='{category}', ID='{item_id}', Checked={is_checked}")
+        print(f"Data Item Check changed: Project='{self.current_project_dir_name}', Category='{category}', ID='{item_id}', Checked={is_checked}")
         if category not in self.checked_data_items: self.checked_data_items[category] = set()
         if is_checked:
             self.checked_data_items[category].add(item_id)
-            self.show_detail_window(category, item_id)
+            self.show_detail_window(category, item_id) # チェック時に詳細表示
         else:
             self.checked_data_items[category].discard(item_id)
-        print(f"Updated checked_data_items: {self.checked_data_items}")
         self._update_checked_items_signal()
 
     def _update_checked_items_signal(self):
@@ -262,13 +191,12 @@ class DataManagementWidget(QWidget):
     def get_checked_items(self):
         return self.checked_data_items.copy()
 
-    # --- アイテム追加はシグナル発行に変更 ---
+    # --- アイテム操作 (project_dir_name を使用) ---
     def _request_add_item(self):
-        """アイテム追加要求シグナルを発行"""
         current_index = self.category_tab_widget.currentIndex()
         if current_index != -1:
             current_category = self.category_tab_widget.tabText(current_index)
-            self.addItemRequested.emit(current_category)
+            self.addItemRequested.emit(current_category) # MainWindow へ通知
         else:
             QMessageBox.warning(self, "カテゴリ未選択", "アイテムを追加するカテゴリを選択してください。")
 
@@ -276,168 +204,119 @@ class DataManagementWidget(QWidget):
         """MainWindowからアイテム名を受け取ってアイテムを追加"""
         if category and item_name:
             new_data = {"name": item_name, "description": "", "history": [], "tags": [], "image_path": None}
-            new_id = add_item(category, new_data)
+            # ★★★ add_item に project_dir_name ★★★
+            new_id = add_item(self.current_project_dir_name, category, new_data)
             if new_id:
-                self.refresh_item_list_for_category(category) # リスト更新
-                # 追加したアイテムを選択状態にするかは任意
-                # self.show_detail_window(category, new_id) # 詳細表示
-            else:
-                QMessageBox.warning(self, "エラー", f"アイテム '{item_name}' の追加に失敗しました。")
-
+                self.refresh_item_list_for_category(category)
+            else: QMessageBox.warning(self, "エラー", f"アイテム '{item_name}' の追加に失敗しました。")
 
     def delete_checked_items(self):
-        """現在表示中のカテゴリでチェックされているアイテムを削除"""
-        current_index = self.category_tab_widget.currentIndex()
-        if current_index == -1:
-            QMessageBox.warning(self, "カテゴリ未選択", "アイテムを削除するカテゴリを選択してください。")
+        current_tab_index = self.category_tab_widget.currentIndex()
+        if current_tab_index == -1:
+            QMessageBox.warning(self, "カテゴリ未選択", "削除するアイテムが含まれるカテゴリを選択してください。")
             return
-        current_category = self.category_tab_widget.tabText(current_index)
-        checked_ids = self.checked_data_items.get(current_category, set())
-
-        if not checked_ids:
-            QMessageBox.warning(self, "アイテム未選択", "削除するアイテムにチェックを入れてください。")
+        current_category = self.category_tab_widget.tabText(current_tab_index)
+        ids_to_delete = self.checked_data_items.get(current_category, set()).copy()
+        if not ids_to_delete:
+            QMessageBox.information(self, "アイテム未選択", "削除するアイテムがチェックされていません。")
             return
 
-        # 削除対象の名前を取得 (表示用)
-        items_to_delete_names = []
-        list_widget = self.category_item_lists.get(current_category)
-        if list_widget:
-             for i in range(list_widget.count()):
-                  item = list_widget.item(i)
-                  widget = list_widget.itemWidget(item)
-                  if isinstance(widget, DataItemWidget) and widget.item_id in checked_ids:
-                       items_to_delete_names.append(widget.name)
-
-        reply = QMessageBox.question(self, '削除確認',
-                                   f"カテゴリ '{current_category}' のチェックされたアイテム:\n{', '.join(items_to_delete_names)}\nを削除しますか？",
+        reply = QMessageBox.question(self, "削除確認",
+                                   f"カテゴリ '{current_category}' のチェックされた {len(ids_to_delete)} 個のアイテムを削除しますか？\nこの操作は元に戻せません。",
                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-
         if reply == QMessageBox.Yes:
             deleted_count = 0
-            # カテゴリの全データをロード (削除はID指定なのでこれでOK)
-            category_data = load_data_category(current_category)
-            ids_actually_deleted = []
+            # ★★★ load_data_category と save_data_category に project_dir_name ★★★
+            category_data = load_data_category(self.current_project_dir_name, current_category)
+            if category_data is None:
+                QMessageBox.warning(self, "エラー", f"カテゴリ '{current_category}' のデータ読み込みに失敗しました。")
+                return
 
-            for item_id in checked_ids:
-                if item_id in category_data:
-                    del category_data[item_id]
-                    ids_actually_deleted.append(item_id)
+            temp_data = category_data.copy() # 変更用にコピー
+            for item_id in ids_to_delete:
+                if item_id in temp_data:
+                    del temp_data[item_id]
                     deleted_count += 1
-
             if deleted_count > 0:
-                if save_data_category(current_category, category_data):
-                    # チェック状態からも削除
-                    self.checked_data_items[current_category].difference_update(ids_actually_deleted)
-                    # リストを再描画
-                    self.refresh_item_list_for_category(current_category)
-                    # 詳細ウィンドウが削除されたアイテムを表示していたらクリア
-                    if self._detail_window and self._detail_window.current_item_id in ids_actually_deleted:
-                         self._detail_window.clear_view()
-                    self._update_checked_items_signal() # チェック状態変更シグナル発行
-                    print(f"{deleted_count}個のアイテムをカテゴリ '{current_category}' から削除しました。")
+                if save_data_category(self.current_project_dir_name, current_category, temp_data):
+                    QMessageBox.information(self, "削除完了", f"{deleted_count} 個のアイテムを削除しました。")
+                    self.checked_data_items[current_category].clear() # チェック状態をクリア
+                    self.refresh_item_list_for_category(current_category) # リスト更新
+                    self._update_checked_items_signal()
                 else:
-                     QMessageBox.warning(self, "エラー", "アイテムの削除に失敗しました（保存エラー）。")
+                    QMessageBox.warning(self, "保存エラー", "アイテム削除後のデータ保存に失敗しました。")
+            else:
+                QMessageBox.information(self, "削除なし", "削除対象のアイテムが見つかりませんでした。")
 
 
-    # --- 詳細ウィンドウの管理 ---
+    # --- 詳細ウィンドウの管理 (project_dir_name を使用) ---
     def ensure_detail_window_exists(self):
-        """詳細ウィンドウが存在しない場合、作成して接続する"""
         if self._detail_window is None:
-
-            # --- ★★★ MainWindow の config を DetailWindow のコンストラクタに渡す ★★★ ---
             main_window_instance = self.window()
             main_config_to_pass = {}
-            if main_window_instance and hasattr(main_window_instance, 'config'):
-                main_config_to_pass = main_window_instance.config
-            self._detail_window = DetailWindow(main_config=main_config_to_pass) # ここで渡す
-            # --------------------------------------------------------------------
-
-            # 詳細ウィンドウが保存されたら、メインリストを更新
+            if main_window_instance and hasattr(main_window_instance, 'global_config'): # MainWindow側のconfig変数名に注意
+                # DetailWindow に渡すのはプロジェクト設定とグローバルデフォルトモデル
+                project_settings = {}
+                if hasattr(main_window_instance, 'current_project_settings'):
+                    project_settings = main_window_instance.current_project_settings
+                main_config_to_pass = {
+                    "model": project_settings.get("model", main_window_instance.global_config.get("default_model")),
+                    # 他に DetailWindow がグローバル設定を参照する必要があれば追加
+                }
+            self._detail_window = DetailWindow(main_config=main_config_to_pass)
             self._detail_window.dataSaved.connect(self._handle_detail_saved)
-            # 詳細ウィンドウが閉じられたら参照をリセット
             self._detail_window.windowClosed.connect(self._handle_detail_closed)
 
     def show_detail_window(self, category, item_id):
-        """指定されたアイテムの詳細ウィンドウを表示/更新し、位置を調整"""
         self.ensure_detail_window_exists()
         self._last_detail_item = {"category": category, "id": item_id}
 
-        # --- ★★★ 位置とサイズ調整処理を修正 ★★★ ---
+        # DetailWindow に渡す main_config を再設定 (プロジェクト固有モデルなど)
+        main_window_instance = self.window()
+        current_project_model = None
+        if main_window_instance and hasattr(main_window_instance, 'current_project_settings'):
+            current_project_model = main_window_instance.current_project_settings.get('model')
+        if not current_project_model and main_window_instance and hasattr(main_window_instance, 'global_config'):
+            current_project_model = main_window_instance.global_config.get('default_model')
+
+        if self._detail_window and current_project_model: # main_config を更新
+             self._detail_window.main_config["model"] = current_project_model
+
+        # 位置調整ロジック (変更なし)
         main_window = self.window()
         if main_window:
-            # メインウィンドウのスクリーンを取得し、利用可能領域を取得
             screen = main_window.screen()
-            if screen: # スクリーンが取得できた場合のみ
-                screen_geo = screen.availableGeometry() # 利用可能な領域
-
-                # --- 修正: main_window.geometry() を使用 ---
-                main_geo = main_window.geometry() # geometry() を使う
-                main_right = main_geo.right()
-                main_top = main_geo.top()
-                main_height = main_geo.height()
-                # --------------------------------------
-
-                detail_width = 500 # 希望幅
-                detail_height = main_height # 高さを合わせる
-
-                # 初期位置をメインウィンドウの右隣に設定
-                new_x = main_right + 5
-                new_y = main_top # ★ メインウィンドウの上端に合わせる
-
-                # 右にはみ出す場合の調整
-                if new_x + detail_width > screen_geo.right():
-                    new_x = main_geo.left() - detail_width - 5 # 左隣に
-                    if new_x < screen_geo.left(): # それでも左にはみ出す場合
-                        new_x = screen_geo.left() # 画面左端
-
-                # 上下のはみ出し調整
-                if new_y < screen_geo.top():
-                    new_y = screen_geo.top()
+            if screen:
+                screen_geo = screen.availableGeometry()
+                main_top_left_global = main_window.mapToGlobal(QPoint(0, 0))
+                main_width = main_window.width()
+                main_height = main_window.height()
+                detail_width = 500
+                detail_height = main_height
+                new_x = main_top_left_global.x() + main_width + 5
+                new_y = main_top_left_global.y()
+                if new_x + detail_width > screen_geo.right(): new_x = main_top_left_global.x() - detail_width - 5
+                if new_x < screen_geo.left(): new_x = screen_geo.left()
+                if new_y < screen_geo.top(): new_y = screen_geo.top()
                 if new_y + detail_height > screen_geo.bottom():
-                    # 下にはみ出す場合は高さを調整
                     detail_height = screen_geo.bottom() - new_y
-                    if detail_height < 100: # 最小高さ保証 (任意)
-                         detail_height = 100
-                         # 高さを縮めても上にはみ出す場合は上にずらす
-                         if new_y + detail_height > screen_geo.bottom():
-                              new_y = screen_geo.bottom() - detail_height
-
-                print(f"  Moving/Resizing detail window to X:{new_x}, Y:{new_y}, W:{detail_width}, H:{detail_height}")
-                # --- 修正: setGeometry を使用 ---
+                    if detail_height < 100: detail_height = 100
+                    if new_y + detail_height > screen_geo.bottom(): new_y = screen_geo.bottom() - detail_height
                 self._detail_window.setGeometry(new_x, new_y, detail_width, detail_height)
-            else:
-                print("  Warning: Could not get screen geometry.")
-                self._detail_window.resize(500, 600)
-        else:
-             print("  Warning: Could not get main window for positioning.")
-             self._detail_window.resize(500, 600)
-        # -----------------------------------------
 
+        # ★★★ DetailWindow の load_data には project_dir_name は不要 (DetailWindowは知らない) ★★★
         self._detail_window.load_data(category, item_id)
-        if not self._detail_window.isVisible():
-            self._detail_window.show()
+        if not self._detail_window.isVisible(): self._detail_window.show()
         self._detail_window.activateWindow()
         self._detail_window.raise_()
 
-
     def _handle_detail_saved(self, category, item_id):
-        """詳細ウィンドウでの保存完了シグナルを処理"""
-        print(f"Detail saved for: Category='{category}', ID='{item_id}'")
-        # 対応するカテゴリのアイテムリストをリフレッシュして名前の変更などを反映
-        # ただし、現在表示中のタブが異なっていても更新してしまうので注意
-        if category in self.category_item_lists:
-             self.refresh_item_list_for_category(category)
-             # もしキャッシュを使っているなら、ここでキャッシュも更新する
-             # self.item_data_cache[category][item_id] = get_item(category, item_id)
+        """詳細ウィンドウでデータが保存されたときの処理"""
+        print(f"DataWidget: Detail saved for '{category}' - '{item_id}' in project '{self.current_project_dir_name}'. Refreshing list.")
+        self.refresh_item_list_for_category(category)
+        # 必要ならチェック状態なども更新
 
     def _handle_detail_closed(self):
         """詳細ウィンドウが閉じられたときの処理"""
-        print("Detail window reference reset.")
-        self._detail_window = None # ウィンドウが閉じられたら参照を消す
-
-    # 親ウィジェットが閉じられるときに詳細ウィンドウも閉じる（任意）
-    def closeEvent(self, event):
-        if self._detail_window:
-            self._detail_window.close()
-        super().closeEvent(event)
-
+        self._last_detail_item = {"category": None, "id": None}
+        # print("DataWidget: Detail window closed.")
