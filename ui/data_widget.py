@@ -111,24 +111,36 @@ class DataManagementWidget(QWidget):
         self.category_tab_widget.blockSignals(False)
 
 
-        # --- ★★★ 初期タブのリスト更新ロジックを修正 ★★★ ---
-        current_idx = self.category_tab_widget.currentIndex()
-        if current_idx != -1: # 有効なタブが選択されている場合
-            initial_category = self.category_tab_widget.tabText(current_idx)
-            print(f"  DataWidget: Refreshing list for initially selected tab (Index {current_idx}): '{initial_category}' after tabs rebuilt.")
-            self.refresh_item_list_for_category(initial_category)
-        elif self.category_tab_widget.count() > 0: # タブは存在するが何も選択されていない場合 (通常は setCurrentIndex で発生しないはず)
-            self.category_tab_widget.setCurrentIndex(0) # 最初のタブを選択し、_on_tab_changed をトリガー
-            # _on_tab_changed が呼ばれるので、ここでの明示的なリスト更新は不要
-            print(f"  DataWidget: Set current index to 0 as no tab was selected but tabs exist.")
+        # --- ★★★ タブ設定と初期リスト更新のロジック修正 ★★★ ---
+        target_initial_load_category = None
+        if self.category_tab_widget.count() > 0: # タブが1つ以上ある場合
+            if new_tab_index != -1:
+                self.category_tab_widget.setCurrentIndex(new_tab_index)
+                target_initial_load_category = self.category_tab_widget.tabText(new_tab_index)
+                print(f"  DataWidget: Restored previous tab (Index {new_tab_index}): '{target_initial_load_category}'")
+            else:
+                self.category_tab_widget.setCurrentIndex(0) # 最初のタブを選択
+                target_initial_load_category = self.category_tab_widget.tabText(0)
+                print(f"  DataWidget: Set to first tab (Index 0): '{target_initial_load_category}'")
         else: # タブが一つもない場合
-            print(f"  DataWidget: No tabs to display, no initial list to refresh.")
+            print(f"  DataWidget: No tabs to display.")
             self._update_checked_items_signal() # チェックアイテムシグナルは更新
+
+        self.category_tab_widget.blockSignals(False) # シグナルブロック解除
+
+        # setCurrentIndex によって _on_tab_changed が呼ばれることを期待するが、
+        # 確実に最初のリストを表示するために、ここで明示的に呼ぶことも検討。
+        # ただし、_on_tab_changed が確実に動作するなら不要な二重呼び出しになる。
+        # 今回は、_on_tab_changed を信頼し、初期選択されたタブのリスト更新はそちらに任せる。
+        # _on_tab_changed が呼ばれないケース（例：タブが1つだけでインデックスが変わらない）を考慮する必要がある。
+        if target_initial_load_category:
+            # _on_tab_changed が呼ばれるか、またはインデックスが変わらない場合に備えて、
+            # ここで明示的にリストを更新する（ただし、_on_tab_changed との二重呼び出しの可能性あり）
+            print(f"  DataWidget: Explicitly attempting to refresh list for '{target_initial_load_category}' after tab setup.")
+            self.refresh_item_list_for_category(target_initial_load_category)
         # ----------------------------------------------------
 
-        # self._update_checked_items_signal() # ★ ここでの呼び出しを上に移動
         print(f"--- DataWidget DEBUG: Finished refreshing categories and tabs for project '{self.current_project_dir_name}' ---")
-
 
 
     def add_new_category_result(self, category_name):
@@ -145,8 +157,10 @@ class DataManagementWidget(QWidget):
     def _on_tab_changed(self, index):
         if index != -1:
              category = self.category_tab_widget.tabText(index)
-             print(f"\n--- DataWidget DEBUG: Tab changed to '{category}' for project '{self.current_project_dir_name}'. Refreshing list... ---")
+             print(f"\n--- DataWidget DEBUG: _on_tab_changed: Tab changed to index {index}, category '{category}' for project '{self.current_project_dir_name}'. Refreshing list... ---")
              self.refresh_item_list_for_category(category)
+        else:
+             print(f"\n--- DataWidget DEBUG: _on_tab_changed: Tab changed to index -1 (no tab selected) for project '{self.current_project_dir_name}'. ---")
 
     # --- アイテムリストの管理 (project_dir_name を使用) ---
     def refresh_item_list_for_category(self, category):
