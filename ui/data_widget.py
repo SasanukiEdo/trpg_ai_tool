@@ -89,56 +89,54 @@ class DataManagementWidget(QWidget):
         print(f"\n--- DataWidget DEBUG: Refreshing categories for project '{self.current_project_dir_name}'. Prev tab: '{current_tab_text}' ---")
 
         self.category_tab_widget.clear()
-        self.category_item_lists.clear()
+        self.category_item_lists.clear() # ★ 辞書もクリア
 
-        # ★★★ list_categories に project_dir_name を渡す ★★★
         categories = list_categories(self.current_project_dir_name)
         print(f"  Loaded categories: {categories}")
         if not categories:
-             # ★★★ create_category に project_dir_name を渡す ★★★
              if create_category(self.current_project_dir_name, "未分類"):
                   categories.append("未分類")
                   print(f"  Created default category '未分類'.")
 
         self.checked_data_items = {cat: self.checked_data_items.get(cat, set()) for cat in categories}
         new_tab_index = -1
+        # --- ★★★ QListWidget 作成時に親を指定する試み ★★★ ---
+        created_list_widgets_temp = {} # 一時的に保持する辞書
+
         for i, category in enumerate(categories):
-            list_widget = QListWidget()
-            self.category_item_lists[category] = list_widget
+            # list_widget = QListWidget() # 古いコード
+            list_widget = QListWidget(self.category_tab_widget) # ★ 親ウィジェットとしてタブウィジェットを指定
+            print(f"  Created QListWidget for '{category}' with parent: {list_widget}")
+            # self.category_item_lists[category] = list_widget # ★ すぐには格納しない
+            created_list_widgets_temp[category] = list_widget # ★ 一時辞書に格納
+
             self.category_tab_widget.addTab(list_widget, category)
+            print(f"    Added tab '{category}' to category_tab_widget with list_widget: {list_widget}")
             if category == current_tab_text: new_tab_index = i
 
-        self.category_tab_widget.blockSignals(False)
+        # --- ★★★ ループ完了後、一時辞書の内容を self.category_item_lists にコピー ★★★ ---
+        self.category_item_lists = created_list_widgets_temp.copy()
+        print(f"  Copied list widgets to self.category_item_lists. Keys: {list(self.category_item_lists.keys())}")
+        for cat_name, lw in self.category_item_lists.items():
+             print(f"    For category '{cat_name}', QListWidget is: {lw}")
+        # ----------------------------------------------------------
 
-
-        # --- ★★★ タブ設定と初期リスト更新のロジック修正 ★★★ ---
         target_initial_load_category = None
-        if self.category_tab_widget.count() > 0: # タブが1つ以上ある場合
+        if self.category_tab_widget.count() > 0:
             if new_tab_index != -1:
                 self.category_tab_widget.setCurrentIndex(new_tab_index)
                 target_initial_load_category = self.category_tab_widget.tabText(new_tab_index)
-                print(f"  DataWidget: Restored previous tab (Index {new_tab_index}): '{target_initial_load_category}'")
             else:
-                self.category_tab_widget.setCurrentIndex(0) # 最初のタブを選択
+                self.category_tab_widget.setCurrentIndex(0)
                 target_initial_load_category = self.category_tab_widget.tabText(0)
-                print(f"  DataWidget: Set to first tab (Index 0): '{target_initial_load_category}'")
-        else: # タブが一つもない場合
-            print(f"  DataWidget: No tabs to display.")
-            self._update_checked_items_signal() # チェックアイテムシグナルは更新
+        else:
+            self._update_checked_items_signal()
 
         self.category_tab_widget.blockSignals(False) # シグナルブロック解除
 
-        # setCurrentIndex によって _on_tab_changed が呼ばれることを期待するが、
-        # 確実に最初のリストを表示するために、ここで明示的に呼ぶことも検討。
-        # ただし、_on_tab_changed が確実に動作するなら不要な二重呼び出しになる。
-        # 今回は、_on_tab_changed を信頼し、初期選択されたタブのリスト更新はそちらに任せる。
-        # _on_tab_changed が呼ばれないケース（例：タブが1つだけでインデックスが変わらない）を考慮する必要がある。
         if target_initial_load_category:
-            # _on_tab_changed が呼ばれるか、またはインデックスが変わらない場合に備えて、
-            # ここで明示的にリストを更新する（ただし、_on_tab_changed との二重呼び出しの可能性あり）
-            print(f"  DataWidget: Explicitly attempting to refresh list for '{target_initial_load_category}' after tab setup.")
-            self.refresh_item_list_for_category(target_initial_load_category)
-        # ----------------------------------------------------
+            print(f"  DataWidget: Explicitly attempting to refresh list for '{target_initial_load_category}' after tab setup (in refresh_categories_and_tabs).")
+            self.refresh_item_list_for_category(target_initial_load_category) # ★ ここで呼ぶ
 
         print(f"--- DataWidget DEBUG: Finished refreshing categories and tabs for project '{self.current_project_dir_name}' ---")
 
