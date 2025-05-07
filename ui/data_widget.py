@@ -13,7 +13,7 @@ if project_root not in sys.path: sys.path.insert(0, project_root)
 
 from core.data_manager import (
     list_categories, list_items, get_item, add_item, update_item, delete_item,
-    create_category, load_data_category, save_data_category
+    create_category # load_data_category, save_data_category は data_manager 内部で使われる
 )
 from ui.detail_window import DetailWindow
 from ui.data_item_widget import DataItemWidget
@@ -26,13 +26,12 @@ class DataManagementWidget(QWidget):
     def __init__(self, project_dir_name, parent=None):
         super().__init__(parent)
         self.current_project_dir_name = project_dir_name
-        # ★★★ self.category_item_lists はタブウィジェットが持つウィジェットを直接参照する方針も検討したが、
-        #     まずは辞書で管理する従来の方針で、生成と参照のタイミングを厳密にする。
-        self.category_item_lists = {}
+        # --- ★★★ self.category_item_lists を削除 ★★★ ---
+        # self.category_item_lists = {} # この辞書による管理をやめる
         self.checked_data_items = {}
         self._detail_window = None
         self._last_detail_item = {"category": None, "id": None}
-        print(f"DataManagementWidget __init__: self.category_item_lists (ID: {id(self.category_item_lists)}) created for project '{self.current_project_dir_name}'")
+        print(f"DataManagementWidget __init__ for project '{self.current_project_dir_name}'")
         self.init_ui()
 
     def set_project(self, project_dir_name):
@@ -40,14 +39,12 @@ class DataManagementWidget(QWidget):
         old_project = self.current_project_dir_name
         self.current_project_dir_name = project_dir_name
         self.checked_data_items.clear()
-        # ★★★ refresh_categories_and_tabs を呼び出す前に self.category_item_lists もクリアする ★★★
-        self.category_item_lists.clear() # プロジェクト変更時は辞書もクリア
-        print(f"  DataManagementWidget set_project: Cleared self.category_item_lists (ID: {id(self.category_item_lists)})")
-        self.refresh_categories_and_tabs()
+        self.refresh_categories_and_tabs() # これがUIを再構築し、リストも更新する
         if self._detail_window and self._detail_window.isVisible():
             self._detail_window.close()
         self._update_checked_items_signal()
         print(f"  DataManagementWidget set_project: Project changed from '{old_project}' to '{self.current_project_dir_name}'. UI refreshed.")
+
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -61,7 +58,7 @@ class DataManagementWidget(QWidget):
         main_layout.addLayout(category_button_layout)
 
         self.category_tab_widget = QTabWidget()
-        self.category_tab_widget.currentChanged.connect(self._on_tab_changed) # シグナル接続
+        self.category_tab_widget.currentChanged.connect(self._on_tab_changed)
         main_layout.addWidget(self.category_tab_widget)
 
         item_button_layout = QHBoxLayout()
@@ -77,22 +74,17 @@ class DataManagementWidget(QWidget):
         self.refresh_categories_and_tabs() # 初期読み込み
         self.ensure_detail_window_exists()
 
+
     def refresh_categories_and_tabs(self):
-        """カテゴリ一覧を読み込み、タブを再構築し、リストを更新する"""
-        # --- ★★★ 0. シグナルをブロック ---
+        """カテゴリ一覧を読み込み、タブを再構築し、表示中のタブのリストを更新する"""
         self.category_tab_widget.blockSignals(True)
         print(f"\n--- DataWidget DEBUG: Refreshing categories for project '{self.current_project_dir_name}' ---")
-        print(f"  Phase 0: Signals blocked. Current self.category_item_lists (ID: {id(self.category_item_lists)}) keys: {list(self.category_item_lists.keys())}")
 
-        # --- ★★★ 1. 既存のタブとリストウィジェット参照をクリア ---
         previous_selected_tab_text = self.category_tab_widget.tabText(self.category_tab_widget.currentIndex())
-        self.category_tab_widget.clear() # これによりタブ内のウィジェットも破棄されるはず
-        self.category_item_lists.clear() # ★ 必ずクリアする
-        print(f"  Phase 1: Tabs and self.category_item_lists (ID: {id(self.category_item_lists)}) cleared.")
+        self.category_tab_widget.clear() # これによりタブ内のウィジェットも破棄される
 
-        # --- ★★★ 2. カテゴリをロード ---
         categories = list_categories(self.current_project_dir_name)
-        print(f"  Phase 2: Loaded categories: {categories}")
+        print(f"  Loaded categories: {categories}")
         if not categories:
             if create_category(self.current_project_dir_name, "未分類"):
                 categories.append("未分類")
@@ -100,52 +92,28 @@ class DataManagementWidget(QWidget):
 
         self.checked_data_items = {cat: self.checked_data_items.get(cat, set()) for cat in categories}
 
-        # --- ★★★ 3. 新しいタブとリストウィジェットを作成し、辞書に格納 ---
-        newly_created_list_widgets = {} # ローカル変数で作成
+        idx_to_select = 0 # デフォルトは最初のタブ
         for i, category in enumerate(categories):
-            list_widget = QListWidget(self.category_tab_widget) # ★ 親を指定
-            print(f"    Creating QListWidget for '{category}': {list_widget} (Parent: {list_widget.parent()})")
-            newly_created_list_widgets[category] = list_widget # ★ ローカル辞書に格納
+            list_widget = QListWidget(self.category_tab_widget) # 親を指定
+            print(f"    Creating QListWidget for '{category}': {list_widget}")
+            # ★★★ self.category_item_lists への格納をやめる ★★★
             self.category_tab_widget.addTab(list_widget, category)
             print(f"      Added tab for '{category}' with widget {list_widget}")
+            if category == previous_selected_tab_text:
+                idx_to_select = i
 
-        # --- ★★★ 4. 作成したリストウィジェットを self.category_item_lists に一括で設定 ---
-        self.category_item_lists = newly_created_list_widgets # ★ ここでインスタンス変数に代入
-        print(f"  Phase 4: self.category_item_lists (ID: {id(self.category_item_lists)}) populated. Keys: {list(self.category_item_lists.keys())}")
-        for cat_name, lw_debug in self.category_item_lists.items():
-            print(f"    Verify: Category '{cat_name}', Widget in dict: {lw_debug}")
-
-
-        # --- ★★★ 5. 表示するタブを選択 (まだシグナルはブロック中) ---
-        selected_category_for_refresh = None
         if self.category_tab_widget.count() > 0:
-            idx_to_select = 0
-            if previous_selected_tab_text: # 前に選択していたタブがあればそれを再選択
-                for i in range(self.category_tab_widget.count()):
-                    if self.category_tab_widget.tabText(i) == previous_selected_tab_text:
-                        idx_to_select = i
-                        break
             self.category_tab_widget.setCurrentIndex(idx_to_select)
             selected_category_for_refresh = self.category_tab_widget.tabText(idx_to_select)
-            print(f"  Phase 5: Current tab set to index {idx_to_select} ('{selected_category_for_refresh}') with signals blocked.")
+            print(f"  Current tab set to index {idx_to_select} ('{selected_category_for_refresh}') with signals blocked.")
+            # --- ★★★ シグナルブロック中にリストを直接更新 ★★★ ---
+            print(f"  Manually refreshing list for '{selected_category_for_refresh}' during tab rebuild.")
+            self.refresh_item_list_for_category(selected_category_for_refresh) # ★ ここで呼ぶ
         else:
-            print(f"  Phase 5: No tabs exist.")
+            print(f"  No tabs exist.")
             self._update_checked_items_signal()
 
-
-        # --- ★★★ 6. シグナルブロックを解除 ---
         self.category_tab_widget.blockSignals(False)
-        print(f"  Phase 6: Signals unblocked.")
-
-        # --- ★★★ 7. 選択されているタブのリストを明示的に更新 ---
-        # setCurrentIndex がシグナルブロック中に呼ばれたため、_on_tab_changed はトリガーされない。
-        # したがって、ここで明示的にリストを更新する必要がある。
-        if selected_category_for_refresh:
-            print(f"  Phase 7: Manually refreshing list for '{selected_category_for_refresh}'.")
-            self.refresh_item_list_for_category(selected_category_for_refresh)
-        else:
-            print(f"  Phase 7: No category selected for refresh.")
-
         print(f"--- DataWidget DEBUG: Finished refreshing categories and tabs for project '{self.current_project_dir_name}' ---")
 
 
@@ -153,70 +121,238 @@ class DataManagementWidget(QWidget):
         """タブがユーザー操作などで切り替わったときに呼ばれる"""
         if index != -1:
             category = self.category_tab_widget.tabText(index)
-            print(f"\n--- DataWidget DEBUG: _on_tab_changed: Tab changed to index {index}, category '{category}' for project '{self.current_project_dir_name}'. Refreshing list... ---")
-            print(f"  _on_tab_changed: Current self.category_item_lists (ID: {id(self.category_item_lists)}) keys: {list(self.category_item_lists.keys())}")
-            for cat_name_debug, lw_debug in self.category_item_lists.items():
-                print(f"    _on_tab_changed debug dump: Category '{cat_name_debug}', Widget: {lw_debug}")
+            print(f"\n--- DataWidget DEBUG: _on_tab_changed: Tab changed to index {index}, category '{category}'. Refreshing list... ---")
             self.refresh_item_list_for_category(category)
         else:
-            print(f"\n--- DataWidget DEBUG: _on_tab_changed: Tab changed to index -1 (no tab selected) for project '{self.current_project_dir_name}'. ---")
+            print(f"\n--- DataWidget DEBUG: _on_tab_changed: Tab changed to index -1 (no tab selected). ---")
 
 
-    def refresh_item_list_for_category(self, category):
+    def refresh_item_list_for_category(self, category_name):
         """指定されたカテゴリのアイテムリストウィジェットを更新"""
-        print(f"\n--- DataWidget DEBUG: Attempting to refresh item list for category: '{category}' in project '{self.current_project_dir_name}' ---")
-        print(f"  refresh_item_list_for_category: Accessing self.category_item_lists (ID: {id(self.category_item_lists)})")
-        for cat_name_debug, lw_debug in self.category_item_lists.items():
-            print(f"    refresh_item_list_for_category debug dump: Category '{cat_name_debug}', Widget: {lw_debug}")
+        print(f"\n--- DataWidget DEBUG: Attempting to refresh item list for category: '{category_name}' in project '{self.current_project_dir_name}' ---")
 
-        list_widget = self.category_item_lists.get(category)
-        if not list_widget:
-            print(f"  ★★★ CRITICAL ERROR: QListWidget for '{category}' not found in self.category_item_lists. Aborting refresh. ★★★")
-            # フォールバックも試みる (デバッグ用)
-            current_idx = self.category_tab_widget.currentIndex()
-            if current_idx != -1 and self.category_tab_widget.tabText(current_idx) == category:
-                widget_from_tab = self.category_tab_widget.widget(current_idx)
-                print(f"    Fallback attempt: Widget from QTabWidget.widget({current_idx}) is {widget_from_tab} (type: {type(widget_from_tab)})")
-                if isinstance(widget_from_tab, QListWidget):
-                     print(f"    FALLBACK SUCCESSFUL: Using widget directly from QTabWidget for '{category}'.")
-                     list_widget = widget_from_tab # これで動けば辞書管理に問題
-            if not list_widget: # それでもダメなら諦める
-                return
+        # --- ★★★ QTabWidget から現在のタブのウィジェットを取得 ★★★ ---
+        list_widget_to_update = None
+        current_tab_index = self.category_tab_widget.currentIndex()
+        if current_tab_index != -1:
+            if self.category_tab_widget.tabText(current_tab_index) == category_name:
+                widget = self.category_tab_widget.widget(current_tab_index)
+                if isinstance(widget, QListWidget):
+                    list_widget_to_update = widget
+                    print(f"  Found QListWidget for '{category_name}' directly from QTabWidget.widget({current_tab_index}): {list_widget_to_update}")
+                else:
+                    print(f"  ★★★ CRITICAL ERROR: Widget at current tab index {current_tab_index} ('{category_name}') is NOT a QListWidget. It's a {type(widget)}. Aborting refresh. ★★★")
+                    return
+            else:
+                # 要求されたカテゴリと現在表示中のタブが異なる場合 (通常は _on_tab_changed 経由で呼ばれるので一致するはず)
+                # 安全のため、一致するタブを探す (もしあれば)
+                for i in range(self.category_tab_widget.count()):
+                    if self.category_tab_widget.tabText(i) == category_name:
+                        widget = self.category_tab_widget.widget(i)
+                        if isinstance(widget, QListWidget):
+                            list_widget_to_update = widget
+                            print(f"  Found QListWidget for '{category_name}' by searching tabs (index {i}): {list_widget_to_update}")
+                            break
+                if not list_widget_to_update:
+                    print(f"  ★★★ CRITICAL ERROR: QListWidget for '{category_name}' NOT found by searching tabs either. Aborting refresh. ★★★")
+                    return
+        else: # タブが選択されていない場合
+            print(f"  ★★★ CRITICAL ERROR: No tab selected. Cannot find QListWidget for '{category_name}'. Aborting refresh. ★★★")
+            return
+        # -------------------------------------------------------
 
-        print(f"  Target QListWidget for '{category}' is: {list_widget} (Parent: {list_widget.parent() if list_widget else 'N/A'})")
-        list_widget.clear()
-        print(f"  List widget for '{category}' cleared.")
+        if not list_widget_to_update: # 二重チェック
+            print(f"  ★★★ CRITICAL ERROR (Double Check): list_widget_to_update is None for '{category_name}'. Aborting. ★★★")
+            return
 
-        items_info = list_items(self.current_project_dir_name, category)
-        # ... (アイテム追加のループは変更なし) ...
-        checked_ids = self.checked_data_items.get(category, set())
-        if not items_info: print(f"  -> No items found for '{category}'.")
+        print(f"  Target QListWidget for '{category_name}' is: {list_widget_to_update} (Parent: {list_widget_to_update.parent()})")
+        list_widget_to_update.clear()
+        print(f"  List widget for '{category_name}' cleared.")
+
+        items_info = list_items(self.current_project_dir_name, category_name)
+        checked_ids = self.checked_data_items.get(category_name, set())
+        if not items_info: print(f"  -> No items found for '{category_name}'.")
         else:
-            print(f"  -> Found {len(items_info)} items for '{category}'. Adding to list...")
+            print(f"  -> Found {len(items_info)} items for '{category_name}'. Adding to list...")
             for item_info in items_info:
                 item_id = item_info.get('id')
                 item_name = item_info.get('name', 'N/A')
                 if not item_id: continue
                 is_checked = item_id in checked_ids
-                list_item_obj = QListWidgetItem(list_widget)
+                list_item_obj = QListWidgetItem(list_widget_to_update)
                 item_widget = DataItemWidget(item_name, item_id, is_checked)
                 item_widget.checkStateChanged.connect(
-                    lambda checked, cat=category, iid=item_id: \
+                    lambda checked, cat=category_name, iid=item_id: \
                         self._handle_item_check_change(cat, iid, checked)
                 )
                 item_widget.detailRequested.connect(
-                    lambda cat=category, iid=item_id: self.show_detail_window(cat, iid)
+                    lambda cat=category_name, iid=item_id: self.show_detail_window(cat, iid)
                 )
                 list_item_obj.setSizeHint(item_widget.sizeHint())
-                list_widget.addItem(list_item_obj)
-                list_widget.setItemWidget(list_item_obj, item_widget)
-        print(f"--- DataWidget DEBUG: Finished refreshing item list for '{category}' ---")
+                list_widget_to_update.addItem(list_item_obj)
+                list_widget_to_update.setItemWidget(list_item_obj, item_widget)
+        print(f"--- DataWidget DEBUG: Finished refreshing item list for '{category_name}' ---")
 
-    # --- (add_new_category_result 以降のメソッドは、self.current_project_dir_name を使うように適宜修正済みと仮定) ---
-    # ... (変更が多い場合は、それらも提示しますが、まずは上記でリスト表示が解決するか確認したい)
-    # 既存の _handle_item_check_change, _update_checked_items_signal, get_checked_items,
-    # _request_add_item, add_new_item_result, delete_checked_items,
-    # ensure_detail_window_exists, show_detail_window, _handle_detail_saved, _handle_detail_closed
-    # は、内部で data_manager の関数を呼ぶ際に self.current_project_dir_name を渡すように
-    # 前回までの修正で対応済みのはずです。
+    # --- (add_new_category_result, _handle_item_check_change, _update_checked_items_signal,
+    #      get_checked_items, _request_add_item, add_new_item_result, delete_checked_items,
+    #      ensure_detail_window_exists, show_detail_window, _handle_detail_saved, _handle_detail_closed
+    #      は、内部で self.current_project_dir_name を使用する前提で、大きな変更はなしと仮定。
+    #      ただし、delete_checked_items で load_data_category / save_data_category を呼ぶ部分は、
+    #      data_manager 内部でパスが解決されるので、project_dir_name と category_name だけ渡せばOK)
+    #      以下、変更が少ないと思われるメソッドの例 (必要なら全メソッド見直します)
+
+    def add_new_category_result(self, category_name):
+        if category_name:
+             if create_category(self.current_project_dir_name, category_name):
+                  self.refresh_categories_and_tabs()
+                  for i in range(self.category_tab_widget.count()):
+                       if self.category_tab_widget.tabText(i) == category_name:
+                            self.category_tab_widget.setCurrentIndex(i); break
+             else: QMessageBox.warning(self, "エラー", f"カテゴリ '{category_name}' の作成に失敗しました。")
+
+    def _handle_item_check_change(self, category, item_id, is_checked):
+        # ... (変更なし)
+        print(f"Data Item Check changed: Project='{self.current_project_dir_name}', Category='{category}', ID='{item_id}', Checked={is_checked}")
+        if category not in self.checked_data_items: self.checked_data_items[category] = set()
+        if is_checked:
+            self.checked_data_items[category].add(item_id)
+            self.show_detail_window(category, item_id)
+        else:
+            self.checked_data_items[category].discard(item_id)
+        self._update_checked_items_signal()
+
+    def _update_checked_items_signal(self):
+        self.checkedItemsChanged.emit(self.checked_data_items.copy())
+
+    def get_checked_items(self):
+        return self.checked_data_items.copy()
+
+    def _request_add_item(self):
+        # ... (変更なし)
+        current_index = self.category_tab_widget.currentIndex()
+        if current_index != -1:
+            current_category = self.category_tab_widget.tabText(current_index)
+            self.addItemRequested.emit(current_category)
+        else:
+            QMessageBox.warning(self, "カテゴリ未選択", "アイテムを追加するカテゴリを選択してください。")
+
+    def add_new_item_result(self, category, item_name):
+        # ... (変更なし、add_item が project_dir_name を取るように修正済み)
+        if category and item_name:
+            new_data = {"name": item_name, "description": "", "history": [], "tags": [], "image_path": None}
+            new_id = add_item(self.current_project_dir_name, category, new_data)
+            if new_id:
+                self.refresh_item_list_for_category(category)
+            else: QMessageBox.warning(self, "エラー", f"アイテム '{item_name}' の追加に失敗しました。")
+
+    def delete_checked_items(self):
+        # ... (変更なし、load_data_category, save_data_category が project_dir_name を取るように修正済み)
+        current_tab_index = self.category_tab_widget.currentIndex()
+        if current_tab_index == -1:
+            QMessageBox.warning(self, "カテゴリ未選択", "削除するアイテムが含まれるカテゴリを選択してください。")
+            return
+        current_category = self.category_tab_widget.tabText(current_tab_index)
+        ids_to_delete = self.checked_data_items.get(current_category, set()).copy()
+        if not ids_to_delete:
+            QMessageBox.information(self, "アイテム未選択", "削除するアイテムがチェックされていません。")
+            return
+
+        reply = QMessageBox.question(self, "削除確認",
+                                   f"カテゴリ '{current_category}' のチェックされた {len(ids_to_delete)} 個のアイテムを削除しますか？\nこの操作は元に戻せません。",
+                                   QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            deleted_count = 0
+            # data_manager の関数はプロジェクト名を引数に取る
+            from core.data_manager import load_data_category as dm_load_cat, save_data_category as dm_save_cat
+            category_data = dm_load_cat(self.current_project_dir_name, current_category)
+            if category_data is None:
+                QMessageBox.warning(self, "エラー", f"カテゴリ '{current_category}' のデータ読み込みに失敗しました。")
+                return
+
+            temp_data = category_data.copy()
+            for item_id in ids_to_delete:
+                if item_id in temp_data:
+                    del temp_data[item_id]
+                    deleted_count += 1
+            if deleted_count > 0:
+                if dm_save_cat(self.current_project_dir_name, current_category, temp_data):
+                    QMessageBox.information(self, "削除完了", f"{deleted_count} 個のアイテムを削除しました。")
+                    self.checked_data_items[current_category].clear()
+                    self.refresh_item_list_for_category(current_category)
+                    self._update_checked_items_signal()
+                else:
+                    QMessageBox.warning(self, "保存エラー", "アイテム削除後のデータ保存に失敗しました。")
+            else:
+                QMessageBox.information(self, "削除なし", "削除対象のアイテムが見つかりませんでした。")
+
+    # 詳細ウィンドウ関連も、基本的には DetailWindow 側がデータ操作を data_manager に依頼する形なので
+    # DataManagementWidget は project_dir_name を意識しなくて良いはず。
+    # DetailWindow の初期化時に渡す main_config に、プロジェクト固有のモデル名が入っていればOK。
+    def ensure_detail_window_exists(self):
+        # ... (変更なし、MainWindow からプロジェクト設定が渡るように修正済み)
+        if self._detail_window is None:
+            main_window_instance = self.window()
+            main_config_to_pass = {}
+            if main_window_instance and hasattr(main_window_instance, 'current_project_settings'):
+                project_settings = main_window_instance.current_project_settings
+                default_global_model = ""
+                if hasattr(main_window_instance, 'global_config'):
+                    default_global_model = main_window_instance.global_config.get("default_model", "gemini-1.5-pro-latest")
+
+                main_config_to_pass = {
+                    "model": project_settings.get("model", default_global_model),
+                }
+            self._detail_window = DetailWindow(main_config=main_config_to_pass, project_dir_name=self.current_project_dir_name) # ★ project_dir_name も渡す
+            self._detail_window.dataSaved.connect(self._handle_detail_saved)
+            self._detail_window.windowClosed.connect(self._handle_detail_closed)
+
+
+    def show_detail_window(self, category, item_id):
+        # ... (変更なし、ensure_detail_window_existsでproject_dir_nameは渡されている)
+        self.ensure_detail_window_exists()
+        self._last_detail_item = {"category": category, "id": item_id}
+
+        # DetailWindowに渡すmain_config (主にモデル名) を最新に保つ
+        main_window_instance = self.window()
+        current_project_model = None
+        if main_window_instance and hasattr(main_window_instance, 'current_project_settings'):
+            current_project_model = main_window_instance.current_project_settings.get('model')
+        if not current_project_model and main_window_instance and hasattr(main_window_instance, 'global_config'):
+            current_project_model = main_window_instance.global_config.get('default_model')
+        if self._detail_window and current_project_model:
+             self._detail_window.main_config["model"] = current_project_model
+        # ★ DetailWindow にプロジェクト名も渡っているので、load_data はカテゴリとIDだけで良いはず
+        # self._detail_window.current_project_dir_name = self.current_project_dir_name # DetailWindow側で保持させる
+
+        # 位置調整ロジック
+        main_window = self.window()
+        if main_window:
+            screen = main_window.screen()
+            if screen:
+                screen_geo = screen.availableGeometry()
+                main_top_left_global = main_window.mapToGlobal(QPoint(0, 0))
+                main_width = main_window.width()
+                main_height = main_window.height()
+                detail_width = 500; detail_height = main_height
+                new_x = main_top_left_global.x() + main_width + 5
+                new_y = main_top_left_global.y()
+                if new_x + detail_width > screen_geo.right(): new_x = main_top_left_global.x() - detail_width - 5
+                if new_x < screen_geo.left(): new_x = screen_geo.left()
+                if new_y < screen_geo.top(): new_y = screen_geo.top()
+                if new_y + detail_height > screen_geo.bottom():
+                    detail_height = screen_geo.bottom() - new_y
+                    if detail_height < 100: detail_height = 100
+                    if new_y + detail_height > screen_geo.bottom(): new_y = screen_geo.bottom() - detail_height
+                self._detail_window.setGeometry(new_x, new_y, detail_width, detail_height)
+
+        self._detail_window.load_data(category, item_id) # DetailWindow が自身のプロジェクト名を使う
+        if not self._detail_window.isVisible(): self._detail_window.show()
+        self._detail_window.activateWindow(); self._detail_window.raise_()
+
+    def _handle_detail_saved(self, category, item_id):
+        print(f"DataWidget: Detail saved for '{category}' - '{item_id}' in project '{self.current_project_dir_name}'. Refreshing list.")
+        self.refresh_item_list_for_category(category)
+
+    def _handle_detail_closed(self):
+        self._last_detail_item = {"category": None, "id": None}
 

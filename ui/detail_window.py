@@ -29,10 +29,11 @@ class DetailWindow(QWidget):
     dataSaved = pyqtSignal(str, str) # category, item_id (保存が完了したことを通知)
     windowClosed = pyqtSignal()      # ウィンドウが閉じられたことを通知
 
-    def __init__(self, main_config=None, parent=None):
+    def __init__(self, main_config=None, project_dir_name=None, parent=None):
         super().__init__(parent)
-        self.main_config = main_config if main_config is not None else {} # メイン設定を保持
-        
+        self.main_config = main_config if main_config is not None else {}
+        self.current_project_dir_name = project_dir_name # ★ プロジェクト名を保持
+        # ----------------------------------------------------
         self.setWindowFlags(Qt.Window)
         self.setWindowTitle("詳細情報")
         self.setMinimumWidth(400)
@@ -71,10 +72,15 @@ class DetailWindow(QWidget):
 
 
     def load_data(self, category, item_id):
-        """指定されたアイテムのデータを読み込んで表示"""
         self.clear_view()
-        print(f"DetailWindow: Loading data for Category='{category}', ID='{item_id}'")
-        item_data_loaded = get_item(category, item_id) # 変数名変更
+        if not self.current_project_dir_name: # プロジェクト名がなければエラー
+            QMessageBox.critical(self, "エラー", "プロジェクトが指定されていません。詳細を読み込めません。")
+            return
+        print(f"DetailWindow: Loading data for Project='{self.current_project_dir_name}', Category='{category}', ID='{item_id}'")
+
+        # ★ get_item に self.current_project_dir_name を渡す
+        item_data_loaded = get_item(self.current_project_dir_name, category, item_id)
+        # ... (以降の処理は item_data_loaded を使う)
         if not item_data_loaded:
             QMessageBox.warning(self, "エラー", f"アイテム (ID: {item_id}) のデータの読み込みに失敗しました。")
             return
@@ -287,52 +293,79 @@ class DetailWindow(QWidget):
         self.img_path_label.setText("未設定")
 
     def add_history_entry_ui(self):
-         """履歴追加"""
-         if not self.current_category or not self.current_item_id: return
-         entry_text, ok = QMessageBox.getText(self, "履歴追加", "追加する履歴を入力:")
-         if ok and entry_text:
-              if add_history_entry(self.current_category, self.current_item_id, entry_text):
-                   # 成功したらデータを再読み込みして表示更新
-                   self.load_data(self.current_category, self.current_item_id)
-              else:
-                   QMessageBox.warning(self, "エラー", "履歴の追加に失敗しました。")
-         elif ok:
-              QMessageBox.warning(self, "入力エラー", "履歴を入力してください。")
-
-    def save_details(self):
-        """変更を保存する"""
-        if not self.current_category or not self.current_item_id:
-            QMessageBox.warning(self, "保存エラー", "保存対象のアイテムが選択されていません。")
+        if not self.current_item_id or not self.current_category or not self.current_project_dir_name: # ★ project_dir_name もチェック
+            QMessageBox.warning(self, "エラー", "履歴を追加するアイテムが選択されていません。")
             return
 
-        updated_data = {}
-        try:
-            # ウィジェットから値を取得 (DataManagementWidget.save_item_details と同様)
-            updated_data['name'] = self.detail_widgets['name'].text()
-            updated_data['description'] = self.detail_widgets['description'].toPlainText()
-            tags_str = self.detail_widgets['tags'].text()
-            updated_data['tags'] = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
-            img_path_text = self.detail_widgets['image_path'].text()
-            updated_data['image_path'] = img_path_text if img_path_text != "未設定" else None
-            # id, category, history はここでは更新しない
-
-            # 更新処理実行
-            if update_item(self.current_category, self.current_item_id, updated_data):
-                QMessageBox.information(self, "保存完了", "変更を保存しました。")
-                # 保存成功シグナルを発行
-                self.dataSaved.emit(self.current_category, self.current_item_id)
-                # 保存後もウィンドウは閉じない（ユーザーが閉じるまで）
-                # 保存したデータで表示を更新（任意）
-                self.item_data.update(updated_data) # ローカルのデータも更新
+        text, ok = QInputDialog.getText(self, "履歴追加", "新しい履歴エントリ:")
+        if ok and text:
+            # --- ★★★ add_history_entry に self.current_project_dir_name を渡す ★★★ ---
+            if add_history_entry(self.current_project_dir_name, self.current_category, self.current_item_id, text):
+                QMessageBox.information(self, "成功", "履歴エントリを追加しました。")
+                # 表示を更新するために再度データを読み込むか、部分的に更新する
+                self.load_data(self.current_category, self.current_item_id) # 再読み込みが簡単
             else:
-                QMessageBox.warning(self, "保存エラー", "変更の保存に失敗しました。")
+                QMessageBox.warning(self, "エラー", "履歴エントリの追加に失敗しました。")
+        elif ok:
+            QMessageBox.warning(self, "入力エラー", "履歴内容を入力してください。")
 
-        except KeyError as e:
-             print(f"保存エラー: 必要なウィジェットが見つかりません。キー: {e}")
-             QMessageBox.critical(self, "内部エラー", f"保存に必要なUI要素が見つかりませんでした。\nキー: {e}")
-        except Exception as e:
-             print(f"保存エラー: 予期せぬエラーが発生しました: {e}")
-             QMessageBox.critical(self, "内部エラー", f"保存中に予期せぬエラーが発生しました:\n{e}")
+
+    def save_details(self):
+        if not self.item_data or not self.current_category or not self.current_item_id or not self.current_project_dir_name: # ★ project_dir_name もチェック
+            QMessageBox.warning(self, "エラー", "保存するデータがありません。")
+            return
+
+        updated_data_payload = {}
+        changed = False
+
+        # 名前
+        new_name = self.detail_widgets.get('name').text() if 'name' in self.detail_widgets else self.item_data.get('name')
+        if new_name != self.item_data.get('name'):
+            updated_data_payload['name'] = new_name
+            changed = True
+
+        # 説明/メモ
+        new_desc = self.detail_widgets.get('description').toPlainText() if 'description' in self.detail_widgets else self.item_data.get('description')
+        if new_desc != self.item_data.get('description'):
+            updated_data_payload['description'] = new_desc
+            changed = True
+
+        # タグ (カンマ区切り文字列からリストへ)
+        if 'tags' in self.detail_widgets:
+            tags_str = self.detail_widgets.get('tags').text()
+            new_tags = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+            # 順序も比較するため、一度ソートしてから比較するか、setで比較
+            if set(new_tags) != set(self.item_data.get('tags', [])):
+                updated_data_payload['tags'] = new_tags
+                changed = True
+
+        # 画像パス (self.img_path_label.text() から取得する想定だったが、
+        # select_image_file / clear_image_file で self.item_data['image_path'] が直接更新される設計なら不要)
+        # もし self.img_path_label が直接編集されるUIなら、ここで取得して比較
+        current_img_path_in_data = self.item_data.get('image_path')
+        if 'image_path' in self.detail_widgets and hasattr(self.detail_widgets['image_path'], 'text'): # QLabelの場合
+             # QLabelの場合、select_image_fileやclear_image_fileでitem_dataが更新される想定
+             # ここではitem_dataの変更を検知する形にする
+             if self.item_data.get('image_path') != current_img_path_in_data: # select/clearでitem_dataが変更されたか
+                 updated_data_payload['image_path'] = self.item_data.get('image_path')
+                 changed = True
+        # 注意: history は add_history_entry_ui で個別に追加・保存されるため、ここでは比較・保存しない
+
+        if not changed:
+            QMessageBox.information(self, "変更なし", "保存する変更点がありません。")
+            return
+
+        # --- ★★★ update_item に self.current_project_dir_name を渡す ★★★ ---
+        if update_item(self.current_project_dir_name, self.current_category, self.current_item_id, updated_data_payload):
+            QMessageBox.information(self, "保存完了", "変更を保存しました。")
+            # ローカルの item_data も更新 (重要)
+            self.item_data.update(updated_data_payload)
+            # 必要ならウィンドウタイトルも更新 (名前変更時など)
+            if 'name' in updated_data_payload:
+                self.setWindowTitle(f"詳細: {updated_data_payload['name']} ({self.current_category})")
+            self.dataSaved.emit(self.current_category, self.current_item_id) # 親ウィジェットに通知
+        else:
+            QMessageBox.warning(self, "保存エラー", "変更の保存に失敗しました。")
 
 
     def closeEvent(self, event):
