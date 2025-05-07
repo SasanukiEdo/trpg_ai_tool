@@ -6,12 +6,28 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt # 必要であれば
 
+# --- ★★★ config_manager からグローバル設定を読み込むために追加 ★★★ ---
+import sys
+import os
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path: sys.path.insert(0, project_root)
+from core.config_manager import load_global_config
+# --------------------------------------------------------------------
+
 # --- サブプロンプト編集/追加ダイアログ ---
 class SubPromptEditDialog(QDialog):
+
+    MODEL_PLACEHOLDER_TEXT = "（プロジェクト設定に従う）"
+
     def __init__(self, initial_data=None, parent=None, is_editing=False, current_category=None):
         super().__init__(parent)
         self.is_editing = is_editing # ★ is_editing をインスタンス変数として保持 (任意)
         self.current_category = current_category # ★ カテゴリ名も保持 (任意)
+
+        # --- ★★★ グローバル設定から利用可能なモデルリストを取得 ★★★ ---
+        global_config = load_global_config()
+        self.available_models = global_config.get("available_models", ["gemini-1.5-pro-latest"]) # フォールバック
+        # ---------------------------------------------------------
 
         if initial_data is None:
             initial_data = {"name": "", "prompt": "", "model": ""} # デフォルトモデルは呼び出し元で設定済みの想定
@@ -36,16 +52,20 @@ class SubPromptEditDialog(QDialog):
         self.prompt_input.setMinimumHeight(150)
         layout.addRow("プロンプト:", self.prompt_input)
 
-        # モデル選択 (ここでも MainWindow のプロジェクト設定やグローバル設定のデフォルトモデルを参照できると良い)
-        available_models = ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest", "gemini-pro"] # これは共通
+         # --- ★★★ モデル選択コンボボックスの修正 ★★★ ---
         self.model_combo = QComboBox()
-        self.model_combo.addItems(available_models)
+        # 最初に「プロジェクト設定のモデルを使用」の選択肢を追加
+        self.model_placeholder_text = "(プロジェクト設定のモデルを使用)"
+        self.model_combo.addItem(self.model_placeholder_text)
+        self.model_combo.addItems(self.available_models) # グローバル設定のリストを使用
+
         current_model_in_data = initial_data.get("model", "")
-        if current_model_in_data in available_models:
+        if current_model_in_data and current_model_in_data in self.available_models:
             self.model_combo.setCurrentText(current_model_in_data)
-        elif available_models: # データにモデルがない場合や不正な場合はリストの先頭
-            self.model_combo.setCurrentIndex(0)
+        else: # データにモデルがないか、リストにない場合はプレースホルダーを選択
+            self.model_combo.setCurrentText(self.model_placeholder_text)
         layout.addRow("使用モデル:", self.model_combo)
+        # -------------------------------------------
 
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
@@ -54,16 +74,32 @@ class SubPromptEditDialog(QDialog):
         self.setMinimumWidth(450)
 
     def get_data(self):
+        name = self.name_input.text().strip()
+        prompt = self.prompt_input.toPlainText().strip()
+        selected_model_text = self.model_combo.currentText()
+
+        # --- ★★★ モデルがプレースホルダーなら空文字列を保存 ★★★ ---
+        model_to_save = ""
+        if selected_model_text != self.model_placeholder_text:
+            model_to_save = selected_model_text
+        # -------------------------------------------------
+
         return {
-            "name": self.name_input.text().strip(),
-            "prompt": self.prompt_input.toPlainText().strip(),
-            "model": self.model_combo.currentText()
+            "name": name,
+            "prompt": prompt,
+            "model": model_to_save # 空白または選択されたモデル名
         }
 
 
     def accept(self):
-        """OKボタンが押されたときの処理"""
-        if self.get_data() is not None:
-            super().accept()
-        else:
-            pass # エラーメッセージは get_data 内で表示
+        # 名前の重複チェック (編集時かつ名前が変更された場合、または新規追加時)
+        name = self.name_input.text().strip()
+        if not name:
+            QMessageBox.warning(self, "入力エラー", "名前を入力してください。")
+            return
+
+        # MainWindow からサブプロンプトのリストを取得して重複チェックする方が望ましいが、
+        # ここでは SubPromptEditDialog 単体で完結させるため、一旦省略。
+        # 必要であれば、MainWindow のインスタンスを渡してチェック機能を実装する。
+
+        super().accept()

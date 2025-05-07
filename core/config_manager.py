@@ -11,7 +11,12 @@ PROJECT_SETTINGS_FILENAME = "project_settings.json"
 # --- グローバル設定のデフォルト ---
 DEFAULT_GLOBAL_CONFIG = {
     "active_project": "default_project",
-    "default_model": "gemini-1.5-pro-latest"
+    "default_model": "gemini-1.5-pro-latest",
+    "available_models": [
+        "gemini-1.5-pro-latest",
+        "gemini-1.5-flash-latest",
+        "gemini-pro"
+    ]
 }
 
 # --- プロジェクト設定のデフォルト ---

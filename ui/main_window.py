@@ -211,6 +211,8 @@ class MainWindow(QWidget):
         # self.data_management_widget.checkedItemsChanged.connect(self.handle_data_check_change) # 必要なら接続
         # ----------------------------------------------------------------
         splitter.addWidget(self.data_management_widget)
+        self.data_management_widget.addCategoryRequested.connect(self._handle_add_category_request)
+        self.data_management_widget.addItemRequested.connect(self._handle_add_item_request)
         splitter.setSizes([self.height() // 2, self.height() // 2]) # おおよその分割比率
 
         right_layout.addWidget(splitter)
@@ -290,11 +292,18 @@ class MainWindow(QWidget):
 
         # 2. 選択されたサブプロンプト
         active_subprompts_content = []
+        subprompt_specific_models = []
         for category, names in self.checked_subprompts.items():
             if category in self.subprompts:
                 for name in names:
                     if name in self.subprompts[category]:
-                        prompt_text = self.subprompts[category][name].get("prompt", "")
+                        sub_data = self.subprompts[category][name]
+                        prompt_text = sub_data.get("prompt", "")
+                        # --- ★★★ サブプロンプトのモデルを取得 ★★★ ---
+                        sub_model = sub_data.get("model", "")
+                        if sub_model: # サブプロンプトにモデル指定があればそれを記録
+                            subprompt_specific_models.append(sub_model)
+                        # ------------------------------------
                         if prompt_text:
                             active_subprompts_content.append(f"--- サブプロンプト: {category} - {name} ---\n{prompt_text}")
         if active_subprompts_content:
@@ -327,13 +336,23 @@ class MainWindow(QWidget):
         print("--------------------------")
 
         # AIに送信 (モデルはプロジェクト設定から取得)
-        target_model = self.current_project_settings.get("model", self.global_config.get("default_model"))
-        ai_response, error_msg = generate_response(target_model, final_prompt)
+        # --- ★★★ AIに送信するモデルの決定ロジック ★★★ ---
+        target_model_for_ai = self.current_project_settings.get("model", self.global_config.get("default_model")) # まずプロジェクトモデル
+        # サブプロンプトに固有のモデル指定があれば、それを優先する（複数あれば最初のものを採用するなどのルールが必要）
+        # ここでは、チェックされたサブプロンプトの中に一つでもモデル指定があれば、その中で最初に見つかったものを使う、という単純なルールにする
+        if subprompt_specific_models:
+            target_model_for_ai = subprompt_specific_models[0]
+            print(f"  Using model specified in subprompt: {target_model_for_ai}")
+        else:
+            print(f"  No specific model in subprompts, using project model: {target_model_for_ai}")
+        # ------------------------------------------------
+
+        ai_response, error_msg = generate_response(target_model_for_ai, final_prompt) # ★ 決定したモデルを使用
 
         if error_msg:
             self.response_display.append(f"<font color='red'><b>エラー:</b> {error_msg}</font><br>")
         elif ai_response:
-            self.response_display.append(f"<font color='green'><b>Gemini ({target_model}):</b></font><br>{ai_response}<br>")
+            self.response_display.append(f"<font color='green'><b>Gemini ({target_model_for_ai}):</b></font><br>{ai_response}<br>")
         else:
             self.response_display.append("<font color='orange'><b>AIからの応答がありませんでした。</b></font><br>")
 

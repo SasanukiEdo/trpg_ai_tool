@@ -21,6 +21,10 @@ class SettingsDialog(QDialog):
 
         layout = QFormLayout(self)
 
+        # --- ★★★ グローバル設定から利用可能なモデルリストを取得 ★★★ ---
+        available_models_from_config = self.global_config_edit.get("available_models", ["gemini-1.5-pro-latest"])
+        # ---------------------------------------------------------
+
         # --- APIキー管理 (変更なし) ---
         self.api_key_status_label = QLabel()
         self.update_api_key_status_label()
@@ -47,12 +51,12 @@ class SettingsDialog(QDialog):
         layout.addRow("プロジェクト表示名:", self.project_display_name_input)
 
         # プロジェクト使用モデル
-        available_models = ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest", "gemini-pro"]
         self.project_model_combo = QComboBox()
-        self.project_model_combo.addItems(available_models)
+        self.project_model_combo.addItems(available_models_from_config)
+        # ----------------------------------------
         current_project_model = self.project_settings_edit.get("model", DEFAULT_PROJECT_SETTINGS.get("model"))
-        if current_project_model in available_models: self.project_model_combo.setCurrentText(current_project_model)
-        elif available_models: self.project_model_combo.setCurrentIndex(0)
+        if current_project_model in available_models_from_config: self.project_model_combo.setCurrentText(current_project_model)
+        elif available_models_from_config: self.project_model_combo.setCurrentIndex(0)
         layout.addRow("プロジェクト使用モデル:", self.project_model_combo)
 
         # メインシステムプロンプト (プロジェクト固有)
@@ -62,14 +66,16 @@ class SettingsDialog(QDialog):
         self.project_system_prompt_input.setMinimumHeight(150)
         layout.addRow("メインシステムプロンプト:", self.project_system_prompt_input)
 
-        # --- グローバル設定 ---
+        # グローバル設定
         layout.addRow(QLabel("--- アプリケーション全体設定 ---"))
         # 新規プロジェクト作成時のデフォルトモデル (グローバル設定)
         self.global_default_model_combo = QComboBox()
-        self.global_default_model_combo.addItems(available_models)
+        # --- ★★★ 利用可能なモデルリストを使用 ★★★ ---
+        self.global_default_model_combo.addItems(available_models_from_config)
+        # ----------------------------------------
         current_global_default_model = self.global_config_edit.get("default_model", DEFAULT_GLOBAL_CONFIG.get("default_model"))
-        if current_global_default_model in available_models: self.global_default_model_combo.setCurrentText(current_global_default_model)
-        elif available_models: self.global_default_model_combo.setCurrentIndex(0)
+        if current_global_default_model in available_models_from_config: self.global_default_model_combo.setCurrentText(current_global_default_model)
+        elif available_models_from_config: self.global_default_model_combo.setCurrentIndex(0)
         layout.addRow("新規プロジェクト用デフォルトモデル:", self.global_default_model_combo)
 
         # ボタン

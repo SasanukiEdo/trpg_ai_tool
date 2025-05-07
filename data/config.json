@@ -1,4 +1,10 @@
 {
     "active_project": "default_project",
-    "default_model": "gemini-1.5-pro-latest"
-}
+    "default_model": "gemini-1.5-pro-latest",
+    "available_models": [
+      "gemini-1.5-pro-latest",
+      "gemini-1.5-flash-latest",
+      "gemini-pro",
+      "gemini-pro-vision" 
+    ]
+  }
