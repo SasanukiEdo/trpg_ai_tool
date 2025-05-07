@@ -1,32 +1,12 @@
 {
-    "アイテム-24256d1f-0e7c-4a75-bf5a-b363ad6a57e9": {
+    "アイテム-6dcf6abc-3533-47c0-8f4e-01f5fabb08bb": {
         "name": "回復薬",
-        "description": "HPを少し回復する",
-        "id": "アイテム-24256d1f-0e7c-4a75-bf5a-b363ad6a57e9",
+        "tags": [
+            "消耗品",
+            "回復"
+        ],
+        "id": "アイテム-6dcf6abc-3533-47c0-8f4e-01f5fabb08bb",
         "category": "アイテム",
-        "history": [],
-        "tags": [],
-        "status": {},
-        "image_path": null
-    },
-    "アイテム-b1ce0215-2ad7-426d-a0bd-3b9d4b34e20a": {
-        "name": "test",
-        "description": "",
-        "history": [],
-        "tags": [],
-        "image_path": null,
-        "id": "アイテム-b1ce0215-2ad7-426d-a0bd-3b9d4b34e20a",
-        "category": "アイテム",
-        "status": {}
-    },
-    "アイテム-416b03bd-582b-4adb-a38d-1a260ce62af6": {
-        "name": "aaaaa",
-        "description": "",
-        "history": [],
-        "tags": [],
-        "image_path": null,
-        "id": "アイテム-416b03bd-582b-4adb-a38d-1a260ce62af6",
-        "category": "アイテム",
-        "status": {}
+        "history": []
     }
 }

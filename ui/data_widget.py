@@ -109,16 +109,26 @@ class DataManagementWidget(QWidget):
             if category == current_tab_text: new_tab_index = i
 
         self.category_tab_widget.blockSignals(False)
-        if new_tab_index != -1: self.category_tab_widget.setCurrentIndex(new_tab_index)
-        elif self.category_tab_widget.count() > 0: self.category_tab_widget.setCurrentIndex(0)
-        else: self._update_checked_items_signal() # タブがない場合もシグナル更新
 
-        # setCurrentIndexによって _on_tab_changed が呼ばれ、リストが更新されるはず
-        # ただし、タブが0個の場合や、インデックスが変わらない場合は明示的に呼ぶ必要があるかも
-        if self.category_tab_widget.count() > 0 and (new_tab_index == self.category_tab_widget.currentIndex() or new_tab_index == -1):
-             current_selected_category = self.category_tab_widget.tabText(self.category_tab_widget.currentIndex())
-             if current_selected_category:
-                  self.refresh_item_list_for_category(current_selected_category)
+
+        # --- ★★★ 初期タブのリスト更新ロジックを修正 ★★★ ---
+        current_idx = self.category_tab_widget.currentIndex()
+        if current_idx != -1: # 有効なタブが選択されている場合
+            initial_category = self.category_tab_widget.tabText(current_idx)
+            print(f"  DataWidget: Refreshing list for initially selected tab (Index {current_idx}): '{initial_category}' after tabs rebuilt.")
+            self.refresh_item_list_for_category(initial_category)
+        elif self.category_tab_widget.count() > 0: # タブは存在するが何も選択されていない場合 (通常は setCurrentIndex で発生しないはず)
+            self.category_tab_widget.setCurrentIndex(0) # 最初のタブを選択し、_on_tab_changed をトリガー
+            # _on_tab_changed が呼ばれるので、ここでの明示的なリスト更新は不要
+            print(f"  DataWidget: Set current index to 0 as no tab was selected but tabs exist.")
+        else: # タブが一つもない場合
+            print(f"  DataWidget: No tabs to display, no initial list to refresh.")
+            self._update_checked_items_signal() # チェックアイテムシグナルは更新
+        # ----------------------------------------------------
+
+        # self._update_checked_items_signal() # ★ ここでの呼び出しを上に移動
+        print(f"--- DataWidget DEBUG: Finished refreshing categories and tabs for project '{self.current_project_dir_name}' ---")
+
 
 
     def add_new_category_result(self, category_name):
