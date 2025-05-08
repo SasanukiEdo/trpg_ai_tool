@@ -1,71 +1,107 @@
-# ui/subprompt_dialog.py の内容
+# ui/subprompt_dialog.py
+
+"""サブプロンプトの新規作成および編集を行うためのダイアログを提供します。
+
+このダイアログ (`SubPromptEditDialog`) は、ユーザーがサブプロンプトの名前、
+プロンプト本文、および使用するAIモデル（任意）を指定できるようにします。
+利用可能なAIモデルのリストは、グローバル設定から取得されます。
+"""
 
 from PyQt5.QtWidgets import (
     QDialog, QLineEdit, QFormLayout, QDialogButtonBox, QTextEdit, QComboBox,
-    QLabel, QHBoxLayout, QMessageBox
+    QMessageBox, QWidget
 )
-from PyQt5.QtCore import Qt # 必要であれば
+from PyQt5.QtCore import Qt
 
-# --- ★★★ config_manager からグローバル設定を読み込むために追加 ★★★ ---
 import sys
 import os
+# --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if project_root not in sys.path: sys.path.insert(0, project_root)
-from core.config_manager import load_global_config
-# --------------------------------------------------------------------
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-# --- サブプロンプト編集/追加ダイアログ ---
+# --- coreモジュールインポート ---
+from core.config_manager import load_global_config # 利用可能モデルリスト取得用
+
 class SubPromptEditDialog(QDialog):
+    """サブプロンプトの作成または編集を行うダイアログクラス。
 
-    MODEL_PLACEHOLDER_TEXT = "（プロジェクト設定に従う）"
+    ユーザーはサブプロンプトの名前、プロンプト本文、および使用するAIモデルを
+    このダイアログを通じて設定します。モデル選択では、プロジェクト設定のモデルを
+    使用するオプションも提供されます。
 
-    def __init__(self, initial_data=None, parent=None, is_editing=False, current_category=None):
+    Attributes:
+        name_input (QLineEdit): サブプロンプトの名前を入力するフィールド。
+        prompt_input (QTextEdit): サブプロンプトの本文を入力するテキストエリア。
+        model_combo (QComboBox): 使用するAIモデルを選択するコンボボックス。
+    """
+
+    def __init__(self,
+                 initial_data: dict | None = None,
+                 parent: QWidget | None = None, # QWidgetをインポートしていないので型ヒント修正
+                 is_editing: bool = False,
+                 current_category: str | None = None):
+        """SubPromptEditDialogのコンストラクタ。
+
+        Args:
+            initial_data (dict | None, optional):
+                編集時にダイアログに初期表示するサブプロンプトのデータ。
+                キーとして 'name', 'prompt', 'model' を含む辞書を想定。
+                新規作成時は None または空の辞書。デフォルトは None。
+            parent (QWidget | None, optional): 親ウィジェット。デフォルトは None。
+            is_editing (bool, optional):
+                ダイアログが編集モードであるかを示すフラグ。
+                Trueなら編集モード、Falseなら新規作成モード。デフォルトは False。
+            current_category (str | None, optional):
+                現在操作対象となっているサブプロンプトのカテゴリ名。
+                ウィンドウタイトルに表示するために使用。デフォルトは None。
+        """
         super().__init__(parent)
-        self.is_editing = is_editing # ★ is_editing をインスタンス変数として保持 (任意)
-        self.current_category = current_category # ★ カテゴリ名も保持 (任意)
+        self.is_editing = is_editing
+        """bool: ダイアログが編集モードか新規作成モードかを示すフラグ。"""
+        # self.current_category = current_category # 現在はウィンドウタイトル以外では未使用
 
-        # --- ★★★ グローバル設定から利用可能なモデルリストを取得 ★★★ ---
+        # グローバル設定から利用可能なモデルリストを取得
         global_config = load_global_config()
-        self.available_models = global_config.get("available_models", ["gemini-1.5-pro-latest"]) # フォールバック
-        # ---------------------------------------------------------
+        self.available_models = global_config.get(
+            "available_models",
+            ["gemini-1.5-pro-latest"] # フォールバック用の最小限のリスト
+        )
+        """list[str]: 利用可能なAIモデル名のリスト。"""
 
         if initial_data is None:
-            initial_data = {"name": "", "prompt": "", "model": ""} # デフォルトモデルは呼び出し元で設定済みの想定
+            initial_data = {"name": "", "prompt": "", "model": ""} # 新規作成時のデフォルト
+        self.initial_name = initial_data.get("name", "") if is_editing else ""
+        """str: 編集モードの場合の、編集開始前のサブプロンプト名。名前変更時の重複チェックなどに使用可能。"""
 
+
+        _display_category = f" ({current_category})" if current_category else ""
         if self.is_editing:
-            self.setWindowTitle(f"サブプロンプト編集 ({current_category} - {initial_data.get('name', '')})")
+            self.setWindowTitle(f"サブプロンプト編集{_display_category} - {self.initial_name}")
         else:
-            self.setWindowTitle(f"サブプロンプト追加 ({current_category})")
-    # -----------------------------------------------
+            self.setWindowTitle(f"サブプロンプト追加{_display_category}")
 
         layout = QFormLayout(self)
 
         self.name_input = QLineEdit(initial_data.get("name", ""))
-        if self.is_editing:
-             # 編集時は名前フィールドを読み取り専用にするか、
-             # 名前変更を許可する場合は MainWindow 側で古いキーの削除など適切な処理が必要
-             # ここでは一旦編集可能にしておくが、 MainWindow.add_or_edit_subprompt で対応済み
-             pass
         layout.addRow("名前:", self.name_input)
 
         self.prompt_input = QTextEdit(initial_data.get("prompt", ""))
         self.prompt_input.setMinimumHeight(150)
         layout.addRow("プロンプト:", self.prompt_input)
 
-         # --- ★★★ モデル選択コンボボックスの修正 ★★★ ---
         self.model_combo = QComboBox()
-        # 最初に「プロジェクト設定のモデルを使用」の選択肢を追加
         self.model_placeholder_text = "(プロジェクト設定のモデルを使用)"
+        """str: モデルコンボボックスで「プロジェクト設定モデル使用」を示すテキスト。"""
         self.model_combo.addItem(self.model_placeholder_text)
-        self.model_combo.addItems(self.available_models) # グローバル設定のリストを使用
+        self.model_combo.addItems(self.available_models)
 
         current_model_in_data = initial_data.get("model", "")
         if current_model_in_data and current_model_in_data in self.available_models:
             self.model_combo.setCurrentText(current_model_in_data)
-        else: # データにモデルがないか、リストにない場合はプレースホルダーを選択
+        else: # データにモデルがない(空文字列含む)か、リストにない場合はプレースホルダーを選択
             self.model_combo.setCurrentText(self.model_placeholder_text)
         layout.addRow("使用モデル:", self.model_combo)
-        # -------------------------------------------
 
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
@@ -73,33 +109,104 @@ class SubPromptEditDialog(QDialog):
         layout.addRow(button_box)
         self.setMinimumWidth(450)
 
-    def get_data(self):
+    def get_data(self) -> dict[str, str]:
+        """ダイアログで編集されたサブプロンプトのデータを取得します。
+
+        このメソッドは、ダイアログが `Accepted` で閉じられた後に呼び出されることを想定しています。
+        モデル選択で「プロジェクト設定のモデルを使用」が選ばれている場合、
+        'model' の値は空文字列になります。
+
+        Returns:
+            dict[str, str]: キー 'name', 'prompt', 'model' を持つ辞書。
+                            'model' は空文字列または選択されたモデル名。
+        """
         name = self.name_input.text().strip()
         prompt = self.prompt_input.toPlainText().strip()
         selected_model_text = self.model_combo.currentText()
 
-        # --- ★★★ モデルがプレースホルダーなら空文字列を保存 ★★★ ---
-        model_to_save = ""
+        model_to_save = "" # デフォルトは空文字列（プロジェクト設定モデル使用）
         if selected_model_text != self.model_placeholder_text:
             model_to_save = selected_model_text
-        # -------------------------------------------------
 
         return {
             "name": name,
             "prompt": prompt,
-            "model": model_to_save # 空白または選択されたモデル名
+            "model": model_to_save
         }
 
-
     def accept(self):
-        # 名前の重複チェック (編集時かつ名前が変更された場合、または新規追加時)
+        """OKボタンが押されたときの処理。入力値の基本的な検証を行います。
+
+        名前が空でないかを確認します。
+        より高度な検証（例: 名前の重複チェック）は、
+        このダイアログの呼び出し元で行うことを推奨します。
+        """
         name = self.name_input.text().strip()
         if not name:
             QMessageBox.warning(self, "入力エラー", "名前を入力してください。")
-            return
+            # self.name_input.setFocus() # フォーカスを名前入力に戻す (任意)
+            return # acceptを中止
 
-        # MainWindow からサブプロンプトのリストを取得して重複チェックする方が望ましいが、
-        # ここでは SubPromptEditDialog 単体で完結させるため、一旦省略。
-        # 必要であれば、MainWindow のインスタンスを渡してチェック機能を実装する。
+        # ここで MainWindow が持つ現在のカテゴリ内のサブプロンプト名リストと照合し、
+        # 重複チェックを行うことも可能だが、ダイアログの責務としては必須ではない。
+        # (is_editing が True で self.initial_name と name が異なる場合、または
+        #  is_editing が False の場合にチェック)
 
-        super().accept()
+        super().accept() # QDialog.Accepted を発行
+
+if __name__ == '__main__':
+    """SubPromptEditDialog の基本的な表示テスト。"""
+    # QApplicationのインスタンスが外部で作成済みであるという前提
+    # from PyQt5.QtWidgets import QApplication # ここでインポートすると二重になる可能性
+    # app = QApplication(sys.argv) # MainWindowなどから実行時は不要
+
+    # テスト用のダミーデータ
+    test_initial_data_new = {"model": "gemini-1.5-pro-latest"} # 新規作成時、特定のモデルを初期選択させたい場合
+    test_initial_data_edit = {
+        "name": "既存プロンプト",
+        "prompt": "これは編集対象のプロンプトです。",
+        "model": "gemini-1.5-flash-latest"
+    }
+
+    print("--- SubPromptEditDialog テスト ---")
+
+    # 新規作成モードのテスト
+    print("\n1. 新規作成モード:")
+    dialog_new = SubPromptEditDialog(
+        initial_data=test_initial_data_new,
+        current_category="テストカテゴリ1"
+    )
+    if dialog_new.exec_() == QDialog.Accepted:
+        print("  新規作成ダイアログ: OK")
+        print(f"  取得データ: {dialog_new.get_data()}")
+    else:
+        print("  新規作成ダイアログ: Cancel")
+
+    # 編集モードのテスト
+    print("\n2. 編集モード:")
+    dialog_edit = SubPromptEditDialog(
+        initial_data=test_initial_data_edit,
+        is_editing=True,
+        current_category="テストカテゴリ2"
+    )
+    if dialog_edit.exec_() == QDialog.Accepted:
+        print("  編集ダイアログ: OK")
+        print(f"  取得データ: {dialog_edit.get_data()}")
+    else:
+        print("  編集ダイアログ: Cancel")
+
+    # モデルが空（プレースホルダ選択）の場合のテスト
+    print("\n3. モデル空選択テスト:")
+    dialog_model_empty = SubPromptEditDialog(
+        initial_data={"name": "モデル空", "prompt":"テスト", "model":""},
+        current_category="テストカテゴリ3"
+    )
+    if dialog_model_empty.exec_() == QDialog.Accepted:
+        print("  モデル空ダイアログ: OK")
+        print(f"  取得データ: {dialog_model_empty.get_data()}") # modelが "" になるはず
+    else:
+        print("  モデル空ダイアログ: Cancel")
+
+    print("\n--- テスト完了 (QApplicationインスタンスがなければここで終了) ---")
+    # sys.exit(app.exec_()) # MainWindowなどから実行時は不要
+
