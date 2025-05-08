@@ -1,0 +1,168 @@
+## TRPG AI Tool 現状の構造概要（2025/5/7）
+
+### 1. 主要ディレクトリとファイル構成
+
+現在のプロジェクト (`trpg_ai_tool`) の主要なファイル構成は以下の通りです。UI関連 (`ui/`)、コアロジック関連 (`core/`)、データ関連 (`data/`) が分離されています。
+
+```
+trpg_ai_tool/
+├── main.py              # アプリケーション起動スクリプト
+│
+├── core/                  # コアロジック (UI非依存)
+│   ├── api_key_manager.py     # APIキーのOS資格情報への保存・取得
+│   ├── config_manager.py      # グローバル設定、プロジェクト設定の読み書き
+│   ├── data_manager.py        # プロジェクトごとのゲームデータ (カテゴリ/アイテム) の読み書き・管理
+│   ├── gemini_handler.py      # Gemini API との通信
+│   └── subprompt_manager.py   # プロジェクトごとのサブプロンプトの読み書き
+│
+├── ui/                    # UI関連
+│   ├── main_window.py         # メインウィンドウ、プロジェクト管理基盤、UI部品間の連携
+│   ├── data_widget.py         # データ管理エリアのUIとロジック (プロジェクト対応)
+│   ├── detail_window.py       # データ詳細表示・編集用の別ウィンドウ (プロジェクト対応)
+│   ├── settings_dialog.py     # 設定ダイアログ (グローバル/プロジェクト設定対応、モデルリスト共通化)
+│   ├── subprompt_dialog.py    # サブプロンプト追加・編集ダイアログ (モデルリスト共通化、空白選択対応)
+│   ├── data_item_widget.py    # データリストの各項目用カスタムウィジェット
+│   └── ai_text_edit_dialog.py # AI支援によるテキスト編集ダイアログ
+│
+└── data/                  # データファイル保存場所
+    ├── config.json          # グローバル設定 (アクティブプロジェクト名, 利用可能モデルリストなど)
+    └── （プロジェクトディレクトリ名）/  # プロジェクトごとにフォルダを作成
+        ├── project_settings.json # プロジェクト設定 (表示名, メインプロンプト, プロジェクトモデル)
+        ├── subprompts.json       # サブプロンプトデータ
+        └── gamedata/             # ゲームデータ用フォルダ
+            ├── (カテゴリ名).json   # 例: キャラクター.json, アイテム.json
+            └── ...
+```
+
+*   **`main.py`**: アプリケーションの起動スクリプト。`MainWindow` をインスタンス化して表示します。
+*   **`core/`**: UIに依存しないコアロジックを格納するディレクトリ。
+    *   `api_key_manager.py`: OSの資格情報ストアを利用してAPIキーを安全に保存・取得・削除します。
+        *   主な関数: `save_api_key()`, `get_api_key()`, `delete_api_key()`
+    *   `config_manager.py`: グローバル設定 (`data/config.json`) とプロジェクト固有設定 (`data/(プロジェクト名)/project_settings.json`) の読み書きを管理します。
+        *   主な関数: `load_global_config()`, `save_global_config()`, `load_project_settings()`, `save_project_settings()`, `list_project_dir_names()`
+    *   `data_manager.py`: プロジェクトごとのゲームデータ（キャラクター、アイテムなど、カテゴリ別JSONファイル）のCRUD操作を管理します。
+        *   主な関数: `list_categories()`, `create_category()`, `load_data_category()`, `save_data_category()`, `list_items()`, `get_item()`, `add_item()`, `update_item()`, `delete_item()`
+    *   `gemini_handler.py`: Gemini APIとの通信を担います。APIキーの設定と応答生成を行います。
+        *   主な関数: `configure_gemini_api()`, `generate_response()`, `is_configured()`
+    *   `subprompt_manager.py`: プロジェクトごとのサブプロンプトデータ (`subprompts.json`) の読み書きを管理します。
+        *   主な関数: `load_subprompts()`, `save_subprompts()`
+*   **`ui/`**: PyQt5を使用したUI関連のクラスを格納するディレクトリ。
+    *   `main_window.py` (`MainWindow`): アプリケーションのメインウィンドウ。全体のレイアウト、ユーザー入力、AI応答表示、サブプロンプト管理UI、データ管理UIの統合、設定ダイアログの呼び出しなど、中心的な役割を担います。プロジェクトの切り替え（現在は内部的な対応のみ）や、各マネージャーへのプロジェクト名連携も行います。
+        *   重要なインスタンス変数:
+            *   `self.global_config`: グローバル設定。
+            *   `self.current_project_dir_name`: 現在アクティブなプロジェクトのディレクトリ名。
+            *   `self.current_project_settings`: 現在アクティブなプロジェクトの設定（メインプロンプト、モデルなど）。
+            *   `self.subprompts`: 現在アクティブなプロジェクトのサブプロンプトデータ。
+            *   `self.checked_subprompts`: チェックされたサブプロンプトの状態。
+            *   `self.data_management_widget`: `DataManagementWidget` のインスタンス。
+        *   主要なメソッド: `_load_current_project_data()`, `init_ui()`, `configure_gemini()`, `open_settings_dialog()`, `on_send_button_clicked()`, `refresh_subprompt_tabs()`, `add_or_edit_subprompt()` など。
+    *   `data_widget.py` (`DataManagementWidget`): データ（キャラクター、アイテムなど）のカテゴリ別タブ表示、アイテムリスト表示、アイテム追加・削除ボタンなどのUIとロジックを提供します。`MainWindow` からプロジェクト名を受け取り、対応するデータを表示・操作します。
+        *   主要なメソッド: `set_project()`, `refresh_categories_and_tabs()`, `refresh_item_list_for_category()`, `add_new_category_result()`, `add_new_item_result()`, `delete_checked_items()`, `show_detail_window()`
+    *   `detail_window.py` (`DetailWindow`): 選択されたデータアイテムの詳細情報を表示・編集するための別ウィンドウ。`DataManagementWidget` からプロジェクト名とアイテム情報を受け取ります。AIによる説明/メモ編集機能も持ちます。
+        *   主要なメソッド: `load_data()`, `save_details()`, `_on_ai_update_description_clicked()`
+    *   `settings_dialog.py` (`SettingsDialog`): APIキー管理、グローバル設定（新規プロジェクト用デフォルトモデル、利用可能モデルリスト）、プロジェクト固有設定（表示名、使用モデル、メインシステムプロンプト）を編集するためのダイアログ。
+        *   主要なメソッド: `__init__()` (設定受け取り), `get_updated_configs()` (編集結果返し)
+    *   `subprompt_dialog.py` (`SubPromptEditDialog`): サブプロンプトの新規作成・編集を行うためのダイアログ。モデル選択では「プロジェクト設定モデルを使用」も可能です。
+        *   主要なメソッド: `__init__()` (初期データ受け取り), `get_data()` (編集結果返し)
+    *   `ai_text_edit_dialog.py` (`AIAssistedEditDialog`): AIによるテキスト（現在「説明/メモ」欄）の編集を支援するダイアログ。ユーザー指示入力欄とAI提案表示欄を持ちます。
+    *   `data_item_widget.py` (`DataItemWidget`): `DataManagementWidget` のアイテムリスト内の各項目を表示するためのカスタムウィジェット（チェックボックス、名前、詳細ボタン）。
+*   **`data/`**: アプリケーションが使用するデータを保存するディレクトリ。
+    *   `config.json`: グローバル設定ファイル。
+    *   `(プロジェクトディレクトリ名)/`: 各プロジェクトのデータが格納されるサブディレクトリ。
+        *   `project_settings.json`: プロジェクト固有の設定ファイル。
+        *   `subprompts.json`: プロジェクトのサブプロンプトデータ。
+        *   `gamedata/`: プロジェクトのゲームデータ（カテゴリ別JSONファイル）を格納するサブディレクトリ。
+
+
+### 2. 主要な処理フロー
+
+*   **起動時**:
+    1.  `main.py` が `MainWindow` を作成・表示。
+    2.  `MainWindow.__init__` で `core.config_manager.load_global_config()` を呼び出し、グローバル設定（アクティブプロジェクト名、利用可能モデルリストなど）をロード。
+    3.  `MainWindow._load_current_project_data()` で、アクティブなプロジェクトの `project_settings.json` と `subprompts.json` をロード。
+    4.  `MainWindow.init_ui()` でUIを構築。`DataManagementWidget` にアクティブプロジェクト名が渡され、初期のカテゴリとアイテムリスト（空の場合あり）を表示。サブプロンプトタブも構築。
+    5.  `MainWindow.configure_gemini()` でOS資格情報からAPIキーを読み込み、Gemini APIクライアントを設定。
+*   **AIとの対話 (`MainWindow.on_send_button_clicked`)**:
+    1.  メインシステムプロンプト（プロジェクト設定から）、選択されたサブプロンプト、選択されたデータアイテム情報（`DataManagementWidget` 経由で `core.data_manager` から取得）、ユーザー入力を結合して最終的なプロンプトを作成。
+    2.  使用するAIモデルを決定（サブプロンプトに指定があればそれを優先、なければプロジェクト設定のモデル）。
+    3.  `core.gemini_handler.generate_response()` を呼び出し、AIに応答を要求。
+    4.  結果を応答履歴エリアに表示。
+*   **設定変更 (`MainWindow.open_settings_dialog` と `SettingsDialog`)**:
+    1.  `SettingsDialog` がグローバル設定と現在のプロジェクト設定を受け取って表示。
+    2.  ユーザーが編集し「OK」を押すと、`SettingsDialog` は更新された設定情報を返す。
+    3.  `MainWindow` は受け取った情報を元に、`core.config_manager.save_global_config()` と `core.config_manager.save_project_settings()` を呼び出して変更を保存。UIも更新。
+*   **サブプロンプト管理 (`MainWindow` と `SubPromptEditDialog`)**:
+    1.  ユーザーが追加・編集・削除操作を行うと、`MainWindow` が `self.subprompts` (メモリ上のデータ) を更新。
+    2.  `core.subprompt_manager.save_subprompts()` を呼び出し、現在のプロジェクトの `subprompts.json` に変更を保存。UIを再描画。
+*   **データ管理 (`DataManagementWidget`, `DetailWindow`, `MainWindow`)**:
+    1.  カテゴリ追加・アイテム追加・削除などの操作は、まず `DataManagementWidget` が受け付け、一部は `MainWindow` にシグナルで通知して処理を委譲（例: `QInputDialog` での入力）。
+    2.  最終的なデータ変更は `core.data_manager` の関数（例: `create_category`, `add_item`, `delete_item`）を、現在のプロジェクト名を指定して呼び出すことで行われる。
+    3.  アイテム詳細は `DetailWindow` で編集・保存され、その際も `core.data_manager.update_item` などがプロジェクト名を指定して呼び出される。
+
+
+### 3. データフローと状態管理の詳細
+
+*   **主要なUI操作とデータの流れ**:
+    *   **AIへの送信**: ユーザー入力 → `MainWindow.on_send_button_clicked` → プロンプト構築（メインプロンプト、サブプロンプト、選択データアイテム）→ `gemini_handler.generate_response` → AI応答 → `MainWindow.response_display` に表示。
+    *   **サブプロンプト編集**: `SubPromptItemWidget` の編集ボタン → `MainWindow.add_or_edit_subprompt` → `SubPromptEditDialog` 表示 → ユーザー編集 → `SubPromptEditDialog.get_data()` → `MainWindow` で `self.subprompts` 更新 → `subprompt_manager.save_subprompts` でファイル保存 → `MainWindow.refresh_subprompt_tabs` でUI更新。
+    *   **データアイテム詳細表示・編集**: `DataItemWidget` の詳細ボタン → `DataManagementWidget.show_detail_window` → `DetailWindow` 表示・データロード (`data_manager.get_item`) → ユーザー編集 → `DetailWindow.save_details` → `data_manager.update_item` でファイル保存 → `DetailWindow.dataSaved` シグナル発行 → `DataManagementWidget._handle_detail_saved` → `DataManagementWidget.refresh_item_list_for_category` でUI更新。
+*   **状態を保持する主要な変数**:
+    *   `MainWindow`: `self.global_config`, `self.current_project_dir_name`, `self.current_project_settings`, `self.subprompts`, `self.checked_subprompts`。これらがアプリケーション全体の現在の「状態」を定義しています。
+    *   `DataManagementWidget`: `self.checked_data_items`（どのアイテムがチェックされているか）。
+    *   各ダイアログ: 編集中のデータを一時的に保持。
+*   **データの永続化タイミング**:
+    *   設定変更時: `SettingsDialog` でOK後、`MainWindow` が `save_global_config` と `save_project_settings` を呼び出す。
+    *   サブプロンプト変更時: `SubPromptEditDialog` でOK後、`MainWindow` が `save_subprompts` を呼び出す。
+    *   データアイテム変更時: `DetailWindow` で保存ボタン後、`save_details` 内で `update_item` を呼び出す。アイテム追加・削除時も `DataManagementWidget` 経由で `data_manager` の保存系関数が呼ばれる。
+    *   メインプロンプトの変更: `MainWindow.closeEvent` でプロジェクト設定に保存。
+
+
+### 4. UIコンポーネント間の連携方法
+
+*   **シグナルとスロット**: PyQtの基本的な連携方法です。
+    *   例: `DataManagementWidget.addCategoryRequested.connect(self._handle_add_category_request)` (MainWindow内)
+    *   カスタムウィジェット (`SubPromptItemWidget`, `DataItemWidget`) から親ウィジェットへの通知。
+    *   `DetailWindow.dataSaved` シグナル。
+*   **メソッド呼び出し**: 親ウィジェットが子ウィジェットのメソッドを直接呼び出す、またはその逆（あまり推奨されないが、状況による）。
+    *   例: `MainWindow` が `DataManagementWidget` の `set_project()` を呼び出す（次のステップで実装予定）。
+*   **データの受け渡し**:
+    *   ダイアログのコンストラクタ経由で初期データを渡す。
+    *   ダイアログのメソッド (`get_data()`, `get_updated_configs()`) 経由で編集結果を受け取る。
+    *   ウィジェットのメソッド引数として渡す。
+
+
+### 5. UIデザインとレイアウトに関するメモ（現状と今後の改善点）
+
+*   **主要なレイアウト**: `MainWindow` は `QHBoxLayout` で左右分割。左側はプロンプト関連、右側は設定・サブプロンプト・データ管理。右側はさらに `QSplitter` で上下分割。
+*   **現状の課題**:
+    *   プロジェクト選択UIがまだない。
+    *   設定ダイアログの項目が増えてきたため、将来的にはタブ化などで整理が必要になるかもしれない。
+    *   エラーメッセージやユーザーへのフィードバックが、`QMessageBox` やコンソール出力に頼っている部分が多い。より洗練された通知方法も検討可能。
+*   検索結果[2]にあるような「画面設計書」という概念は、UIが複雑化する前に現状の画面構成を簡単にまとめておくのも良いかもしれません（必ずしもツールを使う必要はなく、テキストベースでOK）。
+
+
+### 6. 依存ライブラリと外部API
+
+*   **PyQt5**: GUIフレームワーク。
+*   **google-generativeai**: Gemini APIとの連携用。
+*   **keyring**: APIキーのOS資格情報ストアへのアクセス用。
+*   **標準ライブラリ**: `json`, `os`, `uuid`, `datetime` など。
+
+
+### 7. 今後の拡張性に関する考慮事項
+
+*   **モジュール性**: `core` と `ui` が分離されている点は良いです。`core` 内の各マネージャーも役割分担ができています。
+*   **APIハンドラーの抽象化**: 現在は `gemini_handler` ですが、将来的に他のAIモデルに対応する場合、この部分を抽象化して、モデルごとのハンドラーを差し替えられるような設計にすると拡張性が高まります（例: 共通の `AIHandlerBase` クラスを作り、`GeminiHandler`, `ClaudeHandler` などがそれを継承する）。
+*   **データ構造の変更への対応**: 新しい設定項目やデータフィールドを追加する場合、既存のJSONファイルとの互換性をどう保つか（マイグレーション処理など）を考慮する必要があります。`load_...` 関数内で、キーが存在しない場合にデフォルト値で補完する処理は、その一助となります。検索結果[1]はWebアプリの文脈ですが、「モデルファイル」という概念でデータ定義を一元管理する考え方は参考になります。
+
+
+### 8. 今後の開発で特に意識する点
+
+*   **プロジェクトコンテキスト**: ほとんどのデータ操作や設定は、`MainWindow` が保持する `self.current_project_dir_name` を基点に行われます。新しい機能を追加する際は、この「現在のプロジェクト」を意識し、各マネージャー関数に正しくプロジェクト名を渡す必要があります。
+*   **UIとデータの同期**: プロジェクトが切り替わった場合（次のステップでUI実装予定）、またはデータが変更された場合に、UIの各部分（メインプロンプト入力欄、サブプロンプトタブ、データ管理タブ、ウィンドウタイトルなど）が適切に更新されるように、`_load_current_project_data()` や各種 `refresh_...()` メソッドの呼び出しタイミングが重要になります。
+
+
+### 9. ドキュメントとコメント
+
+*   現状、コード内のコメントは適度にありますが、特に複雑なロジックやクラス間の連携部分には、処理の意図を説明するコメントをさらに充実させると、将来の自分や他の人がコードを理解しやすくなります。
+*   検索結果[5]にあるように、ソースコードからドキュメントを自動生成するツール（Sphinxなど）の導入も、プロジェクトが大きくなるにつれて検討する価値があります。
