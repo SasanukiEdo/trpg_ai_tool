@@ -1,15 +1,25 @@
 # ui/main_window.py
 
+"""TRPG AI Toolのメインウィンドウとアプリケーション全体の制御を提供します。
+
+このモジュールは `MainWindow` クラスを定義しており、ユーザーインターフェースの
+主要な部分（メインプロンプト入力、AI応答表示、サブプロンプト管理、
+データ管理など）を統合し、ユーザー操作に応じて各機能モジュールと連携します。
+
+プロジェクト単位でのデータ管理の基盤となり、アクティブなプロジェクトの
+設定やデータを読み込み、UIに反映する役割も担います。
+"""
+
 import sys
 import os
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
     QTextBrowser, QListWidget, QListWidgetItem, QMessageBox, QAbstractItemView,
     QTabWidget, QApplication, QDialog, QSplitter, QFrame, QCheckBox,
-    QSizePolicy, QStyle, qApp, QInputDialog
+    QSizePolicy, QStyle, qApp, QInputDialog # QInputDialog を追加
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
-from PyQt5.QtGui import QDesktopServices # 使用しない可能性あり
+# from PyQt5.QtGui import QDesktopServices # 現在未使用のためコメントアウト
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -20,524 +30,669 @@ if project_root not in sys.path:
 from core.config_manager import (
     load_global_config, save_global_config,
     load_project_settings, save_project_settings,
-    list_project_dir_names # プロジェクト一覧取得用
+    list_project_dir_names, # プロジェクト一覧取得用 (将来的に使用)
+    DEFAULT_PROJECT_SETTINGS # プロジェクト初期化用
 )
 from core.subprompt_manager import load_subprompts, save_subprompts
-from core.data_manager import get_item # 他にも data_manager の関数を UI から直接呼ぶなら追加
-from core.api_key_manager import get_api_key as get_os_api_key
+from core.data_manager import get_item # AIプロンプト構築時に使用
+from core.api_key_manager import get_api_key as get_os_api_key # OS資格情報からAPIキー取得
 
 # --- uiモジュールインポート ---
 from ui.settings_dialog import SettingsDialog
 from ui.subprompt_dialog import SubPromptEditDialog
-from ui.data_widget import DataManagementWidget # DataManagementWidget をインポート
+from ui.data_widget import DataManagementWidget
+# from ui.ai_text_edit_dialog import AIAssistedEditDialog # DetailWindow内で使用
 
 # --- Gemini API ハンドラー ---
 from core.gemini_handler import configure_gemini_api, generate_response, is_configured
 
 
 # ==============================================================================
-# サブプロンプト項目用カスタムウィジェット
+# サブプロンプト項目用カスタムウィジェット (MainWindow内で定義)
 # ==============================================================================
 class SubPromptItemWidget(QWidget):
+    """サブプロンプトリストの各項目を表示・操作するためのカスタムウィジェット。
+
+    サブプロンプト名を表示するチェックボックス、編集ボタン、削除ボタンを提供します。
+    これらの操作はシグナルを通じて親ウィジェット（MainWindow）に通知されます。
+
+    Attributes:
+        checkStateChanged (pyqtSignal): チェックボックスの状態変更時に発行。bool値を渡す。
+        editRequested (pyqtSignal): 編集ボタンクリック時に発行。
+        deleteRequested (pyqtSignal): 削除ボタンクリック時に発行。
+        name (str): このウィジェットが表すサブプロンプトの名前。
+    """
     checkStateChanged = pyqtSignal(bool)
     editRequested = pyqtSignal()
     deleteRequested = pyqtSignal()
 
-    def __init__(self, name, is_checked=False, parent=None):
+    def __init__(self, name: str, is_checked: bool = False, parent: QWidget | None = None):
+        """SubPromptItemWidgetのコンストラクタ。
+
+        Args:
+            name (str): 表示するサブプロンプトの名前。
+            is_checked (bool, optional): チェックボックスの初期状態。デフォルトは False。
+            parent (QWidget | None, optional): 親ウィジェット。デフォルトは None。
+        """
         super().__init__(parent)
-        self.name = name
+        self.name: str = name
+        """str: このウィジェットが表すサブプロンプトの名前。"""
+
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(5, 2, 5, 2)
+        layout.setContentsMargins(5, 2, 5, 2) # 余白を小さく
+
         self.checkbox = QCheckBox(name)
         self.checkbox.setChecked(is_checked)
         self.checkbox.stateChanged.connect(lambda state: self.checkStateChanged.emit(state == Qt.Checked))
-        layout.addWidget(self.checkbox, 1) # チェックボックスがスペースを優先的に使う
+        layout.addWidget(self.checkbox, 1) # チェックボックスがスペースを優先的に使用
+
         edit_button = QPushButton()
-        edit_button.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton)) # SP_LineEditClearButton SP_DialogSaveButton
-        edit_button.setToolTip("編集")
+        edit_button.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton)) # 編集アイコン
+        edit_button.setToolTip(f"サブプロンプト「{name}」を編集")
         edit_button.setFixedSize(24, 24)
         edit_button.clicked.connect(self.editRequested.emit)
         layout.addWidget(edit_button)
+
         delete_button = QPushButton()
-        delete_button.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
-        delete_button.setToolTip("削除")
+        delete_button.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon)) # 削除アイコン
+        delete_button.setToolTip(f"サブプロンプト「{name}」を削除")
         delete_button.setFixedSize(24, 24)
         delete_button.clicked.connect(self.deleteRequested.emit)
         layout.addWidget(delete_button)
+
         self.setLayout(layout)
 
-    def set_name(self, name):
+    def set_name(self, name: str):
+        """ウィジェットに表示されるサブプロンプト名を更新します。
+
+        Args:
+            name (str): 新しいサブプロンプト名。
+        """
         self.name = name
         self.checkbox.setText(name)
+        # ツールチップも更新 (edit_button, delete_button は直接アクセスできないので親で再生成が適切かも)
+        # ここでは簡単のため省略。MainWindow.refresh_subprompt_tabs で再生成される。
 
-    def set_checked(self, checked):
+    def set_checked(self, checked: bool):
+        """チェックボックスの状態をプログラムから設定します。シグナルは発行しません。
+
+        Args:
+            checked (bool): 新しいチェック状態。
+        """
+        self.checkbox.blockSignals(True) # シグナル発行を一時的に抑制
         self.checkbox.setChecked(checked)
+        self.checkbox.blockSignals(False)
 
-    def is_checked(self):
+    def is_checked(self) -> bool:
+        """現在のチェックボックスの状態を返します。
+
+        Returns:
+            bool: チェックされていれば True、そうでなければ False。
+        """
         return self.checkbox.isChecked()
 
 # ==============================================================================
 # メインウィンドウクラス
 # ==============================================================================
 class MainWindow(QWidget):
+    """TRPG AI Tool のメインウィンドウクラス。
+
+    アプリケーションのUI全体の構築、ユーザーインタラクションの処理、
+    コア機能モジュールとの連携、プロジェクトデータの管理など、
+    アプリケーションの中心的な役割を担います。
+
+    Attributes:
+        global_config (dict): アプリケーション全体のグローバル設定。
+        current_project_dir_name (str): 現在アクティブなプロジェクトのディレクトリ名。
+        current_project_settings (dict): 現在アクティブなプロジェクトの固有設定。
+        subprompts (dict): 現在アクティブなプロジェクトのサブプロンプトデータ。
+        checked_subprompts (dict): {カテゴリ名: {サブプロンプト名のセット}} でチェック状態を保持。
+        gemini_configured (bool): Gemini APIが設定済みかを示すフラグ。
+        system_prompt_input_main (QTextEdit): メインシステムプロンプト入力エリア。
+        response_display (QTextBrowser): AI応答履歴表示エリア。
+        user_input (QTextEdit): ユーザーメッセージ入力エリア。
+        send_button (QPushButton): メッセージ送信ボタン。
+        settings_button (QPushButton): 設定ダイアログを開くボタン。
+        subprompt_tab_widget (QTabWidget): サブプロンプトカテゴリ表示用タブ。
+        data_management_widget (DataManagementWidget): データ管理エリア用ウィジェット。
+    """
+
     def __init__(self):
+        """MainWindowのコンストラクタ。UIの初期化とプロジェクトデータの読み込みを行います。"""
         super().__init__()
-        # --- ★★★ 1. アクティブプロジェクト名と関連設定の初期化 ★★★ ---
+        self.global_config: dict = {}
+        """dict: `data/config.json` から読み込まれたグローバル設定。"""
+        self.current_project_dir_name: str = "default_project" # フォールバック値
+        """str: 現在アクティブなプロジェクトのディレクトリ名。"""
+        self.current_project_settings: dict = {}
+        """dict: 現在アクティブなプロジェクトの `project_settings.json` の内容。"""
+        self.subprompts: dict = {}
+        """dict: 現在アクティブなプロジェクトの `subprompts.json` の内容。
+        {カテゴリ名: {サブプロンプト名: {"prompt": ..., "model": ...}}} の形式。
+        """
+        self.checked_subprompts: dict[str, set[str]] = {}
+        """dict[str, set[str]]: {カテゴリ名: {チェックされたサブプロンプト名のセット}}。"""
+        self.gemini_configured: bool = False
+        """bool: Gemini APIが正しく設定されていれば True。"""
+
+        self._initialize_configs_and_project() # 設定とプロジェクトデータを初期化
+        self.init_ui()                        # UIを構築
+        self.configure_gemini()               # Gemini APIクライアントを設定
+
+    def _initialize_configs_and_project(self):
+        """グローバル設定を読み込み、アクティブなプロジェクトのデータをロードします。"""
+        print("--- MainWindow: Initializing configurations and project data ---")
         self.global_config = load_global_config()
-        self.current_project_dir_name = self.global_config.get("active_project", "default_project") # ディレクトリ名
-        self.current_project_settings = {} # プロジェクト固有設定 (main_system_prompt, model など)
-        self.subprompts = {} # プロジェクトごとのサブプロンプト
-        self.checked_subprompts = {} # プロジェクトごとのチェック状態
-
-        self._load_current_project_data() # ★ プロジェクトデータをロードするメソッド呼び出し
-        # ----------------------------------------------------------
-
-        self.gemini_configured = False # API設定フラグ
-        self.init_ui()
-        self.configure_gemini() # API設定を試みる
+        self.current_project_dir_name = self.global_config.get("active_project", "default_project")
+        print(f"  Active project directory name from global config: '{self.current_project_dir_name}'")
+        self._load_current_project_data() # 実際のデータ読み込み
 
     def _load_current_project_data(self):
-        """現在アクティブなプロジェクトのデータを読み込む"""
-        print(f"--- Loading data for project: '{self.current_project_dir_name}' ---")
-        # プロジェクト設定 (main_system_prompt, model, project_display_name) の読み込み
-        project_settings = load_project_settings(self.current_project_dir_name)
-        if project_settings is None: # 読み込み失敗またはプロジェクト存在せず
-            print(f"警告: プロジェクト '{self.current_project_dir_name}' の設定を読み込めませんでした。デフォルトを使用します。")
-            # 必要ならここで新しいプロジェクトを初期化するロジック
-            if not os.path.exists(os.path.join("data", self.current_project_dir_name)):
-                 print(f"  プロジェクトフォルダ {self.current_project_dir_name} が存在しません。作成を試みます。")
-                 # プロジェクトフォルダとデフォルト設定ファイルを作成
-                 from core.config_manager import DEFAULT_PROJECT_SETTINGS, save_project_settings
-                 if save_project_settings(self.current_project_dir_name, DEFAULT_PROJECT_SETTINGS.copy()):
-                      project_settings = DEFAULT_PROJECT_SETTINGS.copy()
-                 else:
-                      # それでもダメなら最低限のフォールバック
-                      project_settings = {"main_system_prompt": "Error loading prompt.", "model": "gemini-1.5-pro-latest", "project_display_name": self.current_project_dir_name + " (Error)"}
-            else: # フォルダはあるが設定ファイル読み込み失敗
-                 project_settings = {"main_system_prompt": "Error loading prompt.", "model": "gemini-1.5-pro-latest", "project_display_name": self.current_project_dir_name + " (Error)"}
-        self.current_project_settings = project_settings
-        print(f"  Project settings loaded: {self.current_project_settings}")
+        """現在アクティブなプロジェクトの各種設定・データを読み込み、インスタンス変数に格納します。
 
-        # サブプロンプトの読み込み
+        `self.current_project_settings` と `self.subprompts` を更新します。
+        プロジェクトが存在しない場合はデフォルトで初期化を試みます。
+        UI要素が存在する場合は、それらも更新します。
+        """
+        print(f"--- MainWindow: Loading data for project: '{self.current_project_dir_name}' ---")
+        project_settings_loaded = load_project_settings(self.current_project_dir_name)
+        if project_settings_loaded is None: # 読み込み/作成失敗
+            print(f"  FATAL: Failed to load or initialize project settings for '{self.current_project_dir_name}'. Using fallback.")
+            self.current_project_settings = DEFAULT_PROJECT_SETTINGS.copy()
+            self.current_project_settings["project_display_name"] = f"{self.current_project_dir_name} (読込エラー)"
+        else:
+            self.current_project_settings = project_settings_loaded
+        print(f"  Project settings loaded: Name='{self.current_project_settings.get('project_display_name')}', Model='{self.current_project_settings.get('model')}'")
+
         self.subprompts = load_subprompts(self.current_project_dir_name)
+        # チェック状態はプロジェクトごとに初期化 (カテゴリが存在すれば空セット、なければキー自体なし)
         self.checked_subprompts = {
-            cat: set() for cat in self.subprompts.keys()
-        } # チェック状態を初期化
+            cat: self.checked_subprompts.get(cat, set()) for cat in self.subprompts.keys()
+        }
         print(f"  Subprompts loaded: {len(self.subprompts)} categories.")
 
-        # メインシステムプロンプトをUIに反映 (init_ui 後に呼ばれるため、UI要素が存在する前提)
-        if hasattr(self, 'system_prompt_input_main'): # UI要素があるか確認
+        # UI要素が既に初期化されていれば、内容を反映
+        if hasattr(self, 'system_prompt_input_main'):
             self.system_prompt_input_main.setPlainText(
                 self.current_project_settings.get("main_system_prompt", "")
             )
-        # ウィンドウタイトルにプロジェクト表示名を設定
-        display_name = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
-        self.setWindowTitle(f"TRPG AI Tool - {display_name}")
-
+        project_display_name = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
+        self.setWindowTitle(f"TRPG AI Tool - {project_display_name}")
 
     def init_ui(self):
-        self.setWindowTitle(f"TRPG AI Tool - Loading...") # 初期タイトル
-        self.setGeometry(300, 300, 1200, 800) # ウィンドウサイズ
+        """メインウィンドウのユーザーインターフェースを構築します。"""
+        self.setWindowTitle(f"TRPG AI Tool - 初期化中...") # _load_current_project_dataで更新される
+        self.setGeometry(200, 200, 1300, 850) # ウィンドウサイズを少し調整
 
-        main_layout = QHBoxLayout(self) # 水平分割
+        main_layout = QHBoxLayout(self)
 
-        # --- 左側エリア (メインプロンプト、AI応答履歴、入力) ---
-        left_layout = QVBoxLayout()
-        # 左上: メインシステムプロンプト
+        # --- 左側エリア (メインプロンプト、AI応答履歴、ユーザー入力) ---
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+
         left_layout.addWidget(QLabel("メインシステムプロンプト:"))
         self.system_prompt_input_main = QTextEdit()
         self.system_prompt_input_main.setPlaceholderText("AIへの全体的な指示を入力...")
-        self.system_prompt_input_main.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.system_prompt_input_main.setFixedHeight(100) # 高さを固定または最小/最大設定
-        # ★★★ 初期値は _load_current_project_data で設定される ★★★
-        # self.system_prompt_input_main.setPlainText(self.current_project_settings.get("main_system_prompt", ""))
+        self.system_prompt_input_main.setMinimumHeight(100) # 最小高さを設定
+        self.system_prompt_input_main.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed) # 高さは固定
         left_layout.addWidget(self.system_prompt_input_main)
 
-        # 左中: AI応答履歴
         left_layout.addWidget(QLabel("AI応答履歴:"))
         self.response_display = QTextBrowser()
         self.response_display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         left_layout.addWidget(self.response_display)
 
-        # 左下: ユーザー入力と送信ボタン
         input_area_layout = QHBoxLayout()
         self.user_input = QTextEdit()
         self.user_input.setPlaceholderText("ここにメッセージを入力...")
-        self.user_input.setFixedHeight(80) # 高さを固定
+        self.user_input.setFixedHeight(100) # 高さを少し増やす
         input_area_layout.addWidget(self.user_input)
-        send_button_layout = QVBoxLayout() # ボタンを縦に並べる
+        send_button_layout = QVBoxLayout()
         self.send_button = QPushButton("送信")
         self.send_button.clicked.connect(self.on_send_button_clicked)
-        self.send_button.setFixedHeight(80) # 高さを入力欄に合わせる
+        self.send_button.setFixedHeight(self.user_input.height()) # 入力欄の高さに合わせる
         send_button_layout.addWidget(self.send_button)
         input_area_layout.addLayout(send_button_layout)
         left_layout.addLayout(input_area_layout)
 
+
         # --- 右側エリア (設定ボタン、サブプロンプト、データ管理) ---
-        right_layout = QVBoxLayout()
-        # 右上: 設定ボタン
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+
         settings_button_layout = QHBoxLayout()
-        settings_button_layout.addStretch() # ボタンを右寄せ
+        settings_button_layout.addStretch()
         self.settings_button = QPushButton("設定")
+        self.settings_button.setToolTip("アプリケーション全体と現在のプロジェクトの設定を行います。")
         self.settings_button.clicked.connect(self.open_settings_dialog)
         settings_button_layout.addWidget(self.settings_button)
         right_layout.addLayout(settings_button_layout)
 
         # 右側を上下に分割するスプリッター
-        splitter = QSplitter(Qt.Vertical)
+        right_splitter = QSplitter(Qt.Vertical)
 
         # 上部: サブシステムプロンプトエリア
-        subprompt_area = QWidget()
-        subprompt_layout = QVBoxLayout(subprompt_area)
-        subprompt_label_layout = QHBoxLayout()
-        subprompt_label_layout.addWidget(QLabel("サブシステムプロンプト:"))
-        subprompt_label_layout.addStretch()
+        subprompt_area_widget = QWidget()
+        subprompt_area_layout = QVBoxLayout(subprompt_area_widget)
+        subprompt_controls_layout = QHBoxLayout()
+        subprompt_controls_layout.addWidget(QLabel("サブシステムプロンプト:"))
+        subprompt_controls_layout.addStretch()
         self.add_subprompt_category_button = QPushButton("カテゴリ追加")
+        self.add_subprompt_category_button.setToolTip("サブプロンプトの新しいカテゴリを作成します。")
         self.add_subprompt_category_button.clicked.connect(self.add_subprompt_category)
+        subprompt_controls_layout.addWidget(self.add_subprompt_category_button)
         self.add_subprompt_button = QPushButton("プロンプト追加")
-        self.add_subprompt_button.clicked.connect(lambda: self.add_or_edit_subprompt())
-        subprompt_label_layout.addWidget(self.add_subprompt_category_button)
-        subprompt_label_layout.addWidget(self.add_subprompt_button)
-        subprompt_layout.addLayout(subprompt_label_layout)
+        self.add_subprompt_button.setToolTip("現在のカテゴリに新しいサブプロンプトを追加します。")
+        self.add_subprompt_button.clicked.connect(lambda: self.add_or_edit_subprompt()) # 引数なしで呼び出し
+        subprompt_controls_layout.addWidget(self.add_subprompt_button)
+        subprompt_area_layout.addLayout(subprompt_controls_layout)
+
         self.subprompt_tab_widget = QTabWidget()
         self.subprompt_tab_widget.currentChanged.connect(self._on_subprompt_tab_changed)
-        self.subprompt_lists = {} # カテゴリ名をキー、QListWidgetを値とする辞書
-        subprompt_layout.addWidget(self.subprompt_tab_widget)
-        splitter.addWidget(subprompt_area)
+        # self.subprompt_lists は refresh_subprompt_tabs で管理される
+        subprompt_area_layout.addWidget(self.subprompt_tab_widget)
+        right_splitter.addWidget(subprompt_area_widget)
 
         # 下部: データ管理エリア
-        # --- ★★★ DataManagementWidget に project_dir_name を渡す ★★★ ---
-        self.data_management_widget = DataManagementWidget(project_dir_name=self.current_project_dir_name, parent=self)
-        # self.data_management_widget.checkedItemsChanged.connect(self.handle_data_check_change) # 必要なら接続
-        # ----------------------------------------------------------------
-        splitter.addWidget(self.data_management_widget)
-        self.data_management_widget.addCategoryRequested.connect(self._handle_add_category_request)
-        self.data_management_widget.addItemRequested.connect(self._handle_add_item_request)
-        splitter.setSizes([self.height() // 2, self.height() // 2]) # おおよその分割比率
+        self.data_management_widget = DataManagementWidget(
+            project_dir_name=self.current_project_dir_name,
+            parent=self # DataManagementWidgetがMainWindowを参照できるように
+        )
+        # DataManagementWidgetからのシグナルを接続
+        self.data_management_widget.addCategoryRequested.connect(self._handle_add_data_category_request)
+        self.data_management_widget.addItemRequested.connect(self._handle_add_data_item_request)
+        # self.data_management_widget.checkedItemsChanged.connect(...) # 必要なら接続
 
-        right_layout.addWidget(splitter)
+        right_splitter.addWidget(self.data_management_widget)
+        right_splitter.setSizes([int(self.height() * 0.4), int(self.height() * 0.6)]) # 分割比率を調整
+
+        right_layout.addWidget(right_splitter)
+
 
         # メインレイアウトに左右エリアを追加
-        main_layout.addLayout(left_layout, 7) # 左側を7割
-        main_layout.addLayout(right_layout, 3) # 右側を3割
+        main_layout.addWidget(left_widget, 7)  # 左側を7割
+        main_layout.addWidget(right_widget, 3) # 右側を3割
 
-        # UI初期化後にプロジェクトデータを再度読み込み、UIに反映
-        self._load_current_project_data()
+        # UI初期化後にプロジェクトデータを再度読み込み、UIに反映 (特にメインプロンプト)
+        self._load_current_project_data() # ウィンドウタイトルとメインプロンプト更新
         self.refresh_subprompt_tabs() # サブプロンプトタブも更新
 
-
     def configure_gemini(self):
-        """Gemini APIクライアントを設定する"""
-        api_key = get_os_api_key()
-        if api_key:
-            success, message = configure_gemini_api(api_key)
+        """Gemini APIクライアントを設定します。OS資格情報からAPIキーを取得します。"""
+        api_key_from_os = get_os_api_key()
+        if api_key_from_os:
+            success, message = configure_gemini_api(api_key_from_os)
             if success:
-                print(f"Gemini API設定完了 (OS資格情報からキー取得, Project Model: {self.current_project_settings.get('model')})")
+                print(f"Gemini API設定完了 (Project Model: {self.current_project_settings.get('model')})")
                 self.gemini_configured = True
             else:
                 QMessageBox.warning(self, "API設定エラー", f"Gemini APIクライアントの設定に失敗しました:\n{message}")
                 self.gemini_configured = False
         else:
-            QMessageBox.information(self, "APIキー未設定", "Gemini APIキーがOSの資格情報に保存されていません。\n「設定」からAPIキーを保存してください。")
+            # 初回起動時などに表示されるメッセージ
+            QMessageBox.information(self, "APIキー未設定",
+                                    "Gemini APIキーがOSの資格情報に保存されていません。\n"
+                                    "「設定」メニューからAPIキーを保存してください。")
             self.gemini_configured = False
 
     def open_settings_dialog(self):
-        """設定ダイアログを開く"""
-        # --- ★★★ SettingsDialogにグローバル設定と現在のプロジェクト設定を別々に渡す ★★★ ---
+        """設定ダイアログを開き、結果を適用します。"""
         dialog = SettingsDialog(self.global_config, self.current_project_settings, parent=self)
         if dialog.exec_() == QDialog.Accepted:
-            # --- ★★★ 更新された設定をタプルで受け取る ★★★ ---
-            updated_global_config, updated_project_settings = dialog.get_updated_configs()
+            updated_g_conf, updated_p_conf = dialog.get_updated_configs()
 
-            # グローバル設定の保存
-            if self.global_config != updated_global_config: # 変更があった場合のみ保存
-                self.global_config = updated_global_config
+            if self.global_config != updated_g_conf:
+                self.global_config = updated_g_conf
                 save_global_config(self.global_config)
                 print("グローバル設定が更新・保存されました。")
 
-            # プロジェクト固有設定の保存
-            if self.current_project_settings != updated_project_settings: # 変更があった場合のみ保存
-                self.current_project_settings = updated_project_settings
+            if self.current_project_settings != updated_p_conf:
+                self.current_project_settings = updated_p_conf
                 save_project_settings(self.current_project_dir_name, self.current_project_settings)
                 print(f"プロジェクト '{self.current_project_dir_name}' の設定が更新・保存されました。")
 
-            # 設定変更をUIに反映
-            self.system_prompt_input_main.setPlainText(self.current_project_settings.get("main_system_prompt", ""))
+            # UIへの即時反映
+            self.system_prompt_input_main.setPlainText(
+                self.current_project_settings.get("main_system_prompt", "")
+            )
             display_name = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
             self.setWindowTitle(f"TRPG AI Tool - {display_name}")
-            self.configure_gemini() # モデルが変更された可能性があるので再設定
+            self.configure_gemini() # APIキーやモデルが変更された可能性があるので再設定
+            # 利用可能モデルリストが変更された場合、サブプロンプトダイアログなども再初期化が必要になるが、
+            # 現状は SettingsDialog 内部で最新のリストが使われるため、ここでは直接影響しない。
             print("設定ダイアログの変更が適用されました。")
 
-
     def on_send_button_clicked(self):
-        """送信ボタンが押されたときの処理"""
+        """「送信」ボタンがクリックされたときの処理。AIに応答を要求します。"""
         if not self.gemini_configured:
-            QMessageBox.warning(self, "API未設定", "Gemini APIが設定されていません。設定画面からAPIキーを入力してください。")
+            QMessageBox.warning(self, "API未設定", "Gemini APIが設定されていません。「設定」からAPIキーを入力してください。")
             return
 
         user_text = self.user_input.toPlainText().strip()
         if not user_text:
+            QMessageBox.information(self, "入力なし", "送信するメッセージを入力してください。")
             return
+        # ユーザーの入力もHTML形式で改行を<br>に置換して表示
+        formatted_user_text = user_text.replace("\n", "<br>")
+        self.response_display.append(f"<div style='color: blue;'><b>あなた:</b><br>{formatted_user_text}</div><br>")
 
-        self.response_display.append(f"<font color='blue'><b>あなた:</b></font><br>{user_text}<br>")
         self.user_input.clear()
-        QApplication.processEvents() # UIの応答性を保つ
+        QApplication.processEvents() # UIの応答性を維持
 
         # --- プロンプト構築 ---
         final_prompt_parts = []
         # 1. メインシステムプロンプト
-        main_system_prompt = self.current_project_settings.get("main_system_prompt", "").strip()
-        if main_system_prompt:
-            final_prompt_parts.append(main_system_prompt)
+        main_system_prompt_text = self.current_project_settings.get("main_system_prompt", "").strip()
+        if main_system_prompt_text:
+            final_prompt_parts.append(f"## システム指示\n{main_system_prompt_text}")
 
         # 2. 選択されたサブプロンプト
-        active_subprompts_content = []
-        subprompt_specific_models = []
-        for category, names in self.checked_subprompts.items():
+        active_subprompts_for_prompt = []
+        subprompt_models_used = [] # 使用されたサブプロンプトのモデル名を収集
+        for category, checked_names in self.checked_subprompts.items():
             if category in self.subprompts:
-                for name in names:
+                for name in checked_names:
                     if name in self.subprompts[category]:
                         sub_data = self.subprompts[category][name]
-                        prompt_text = sub_data.get("prompt", "")
-                        # --- ★★★ サブプロンプトのモデルを取得 ★★★ ---
+                        prompt_content = sub_data.get("prompt", "")
                         sub_model = sub_data.get("model", "")
-                        if sub_model: # サブプロンプトにモデル指定があればそれを記録
-                            subprompt_specific_models.append(sub_model)
-                        # ------------------------------------
-                        if prompt_text:
-                            active_subprompts_content.append(f"--- サブプロンプト: {category} - {name} ---\n{prompt_text}")
-        if active_subprompts_content:
-            final_prompt_parts.append("\n--- 選択されたサブプロンプト情報 ---\n" + "\n\n".join(active_subprompts_content))
+                        if sub_model: subprompt_models_used.append(sub_model)
+                        if prompt_content:
+                            active_subprompts_for_prompt.append(
+                                f"### サブプロンプト: {category} - {name}\n{prompt_content}"
+                            )
+        if active_subprompts_for_prompt:
+            final_prompt_parts.append("\n## 選択された補助指示\n" + "\n\n".join(active_subprompts_for_prompt))
 
         # 3. 選択されたデータアイテムの情報
         checked_data_for_prompt = []
-        # --- ★★★ data_management_widget から project_dir_name を使って情報を取得 ★★★ ---
-        checked_data_items = self.data_management_widget.get_checked_items() # {category: {item_id1, item_id2}}
-        for category, item_ids in checked_data_items.items():
+        checked_data_from_widget = self.data_management_widget.get_checked_items()
+        for category, item_ids in checked_data_from_widget.items():
             for item_id in item_ids:
-                # ★ get_item に project_dir_name を渡す
                 item_detail = get_item(self.current_project_dir_name, category, item_id)
                 if item_detail:
-                    item_info_str = f"--- データ: {category} - {item_detail.get('name', 'N/A')} ---\n"
-                    item_info_str += f"名前: {item_detail.get('name', 'N/A')}\n"
-                    item_info_str += f"説明/メモ: {item_detail.get('description', '')}\n"
+                    info_str = f"### データ参照: {category} - {item_detail.get('name', 'N/A')}\n"
+                    info_str += f"  - 名前: {item_detail.get('name', 'N/A')}\n"
+                    info_str += f"  - 説明/メモ: {item_detail.get('description', '')}\n"
                     tags = item_detail.get('tags', [])
-                    if tags: item_info_str += f"タグ: {', '.join(tags)}\n"
-                    checked_data_for_prompt.append(item_info_str)
+                    if tags: info_str += f"  - タグ: {', '.join(tags)}\n"
+                    # 履歴も追加するかは検討 (長くなる可能性)
+                    # history = item_detail.get('history', [])
+                    # if history: info_str += f"  - 履歴 (抜粋): {history[-1]['entry'] if history else ''}\n" # 最新の履歴など
+                    checked_data_for_prompt.append(info_str)
         if checked_data_for_prompt:
-            final_prompt_parts.append("\n--- 選択されたデータアイテム情報 ---\n" + "\n".join(checked_data_for_prompt))
-        # -----------------------------------------------------------------------------
+            final_prompt_parts.append("\n## 参照データ\n" + "\n".join(checked_data_for_prompt))
 
         # 4. ユーザーの入力
-        final_prompt_parts.append(f"\n--- ユーザーの入力 ---\n{user_text}")
-        final_prompt = "\n\n".join(final_prompt_parts).strip()
+        final_prompt_parts.append(f"\n## ユーザーの現在の入力\n{user_text}")
+        final_prompt_to_ai = "\n\n".join(final_prompt_parts).strip()
+
         print("--- Final Prompt to AI ---")
-        print(final_prompt)
+        print(final_prompt_to_ai) # デバッグ用にコンソールへ出力
         print("--------------------------")
 
-        # AIに送信 (モデルはプロジェクト設定から取得)
-        # --- ★★★ AIに送信するモデルの決定ロジック ★★★ ---
-        target_model_for_ai = self.current_project_settings.get("model", self.global_config.get("default_model")) # まずプロジェクトモデル
-        # サブプロンプトに固有のモデル指定があれば、それを優先する（複数あれば最初のものを採用するなどのルールが必要）
-        # ここでは、チェックされたサブプロンプトの中に一つでもモデル指定があれば、その中で最初に見つかったものを使う、という単純なルールにする
-        if subprompt_specific_models:
-            target_model_for_ai = subprompt_specific_models[0]
-            print(f"  Using model specified in subprompt: {target_model_for_ai}")
+        # AIに送信するモデルの決定
+        target_model = self.current_project_settings.get("model", self.global_config.get("default_model"))
+        if subprompt_models_used: # サブプロンプトにモデル指定があれば、最初のものを優先
+            target_model = subprompt_models_used[0]
+            print(f"  (Using model from subprompt: {target_model})")
         else:
-            print(f"  No specific model in subprompts, using project model: {target_model_for_ai}")
-        # ------------------------------------------------
+            print(f"  (Using project/global model: {target_model})")
 
-        ai_response, error_msg = generate_response(target_model_for_ai, final_prompt) # ★ 決定したモデルを使用
+        ai_response_text, error_message = generate_response(target_model, final_prompt_to_ai)
 
-        if error_msg:
-            self.response_display.append(f"<font color='red'><b>エラー:</b> {error_msg}</font><br>")
-        elif ai_response:
-            self.response_display.append(f"<font color='green'><b>Gemini ({target_model_for_ai}):</b></font><br>{ai_response}<br>")
+        if error_message:
+            self.response_display.append(f"<div style='color: red;'><b>エラー:</b> {error_message}</div><br>")
+        elif ai_response_text:
+            # AIの応答もHTML形式で改行を<br>に置換
+            formatted_ai_response = ai_response_text.replace("\n", "<br>")
+            self.response_display.append(f"<div style='color: green;'><b>Gemini ({target_model}):</b><br>{formatted_ai_response}</div><br>")
         else:
-            self.response_display.append("<font color='orange'><b>AIからの応答がありませんでした。</b></font><br>")
+            self.response_display.append("<div style='color: orange;'><b>AIからの応答がありませんでした。</b></div><br>")
 
-    # --- サブプロンプト管理メソッド (project_dir_name を使用するように修正) ---
+    # --- サブプロンプト管理メソッド ---
     def refresh_subprompt_tabs(self):
-        current_tab_text = None
-        current_tab_index = self.subprompt_tab_widget.currentIndex()
-        if current_tab_index != -1:
-             current_tab_text = self.subprompt_tab_widget.tabText(current_tab_index)
+        """サブプロンプトタブウィジェットの内容を現在のプロジェクトデータに基づいて再構築します。"""
+        current_tab_text_before_refresh = None
+        current_tab_idx = self.subprompt_tab_widget.currentIndex()
+        if current_tab_idx != -1:
+             current_tab_text_before_refresh = self.subprompt_tab_widget.tabText(current_tab_idx)
 
-        self.subprompt_tab_widget.clear()
-        self.subprompt_lists.clear()
+        self.subprompt_tab_widget.clear() # 既存のタブを全て削除
+        # self.subprompt_lists は廃止 (SubPromptItemWidget が直接リストに追加される)
 
-        # ★★★ self.subprompts は _load_current_project_data で既にロード済み ★★★
-        categories = sorted(self.subprompts.keys())
-        if not categories: # サブプロンプトデータが空の場合
-             if "一般" not in self.subprompts:
-                  self.subprompts["一般"] = {} # デフォルトカテゴリをメモリ上に作成
-                  categories.append("一般")
-                  # ★★★ save_subprompts に project_dir_name を渡す ★★★
-                  if save_subprompts(self.current_project_dir_name, self.subprompts):
-                       print(f"プロジェクト '{self.current_project_dir_name}' にデフォルトカテゴリ'一般'(サブプロンプト)を作成しました。")
+        categories_in_subprompts = sorted(self.subprompts.keys())
+        if not categories_in_subprompts: # サブプロンプトデータが空またはカテゴリがない場合
+             if "一般" not in self.subprompts: # デフォルトカテゴリ "一般" がメモリ上にもなければ作成
+                  self.subprompts["一般"] = {}
+                  categories_in_subprompts.append("一般")
+                  if save_subprompts(self.current_project_dir_name, self.subprompts): # ファイルにも保存
+                       print(f"プロジェクト '{self.current_project_dir_name}' にデフォルトカテゴリ'一般'(サブプロンプト)を作成・保存しました。")
 
-        # チェック状態の整合性を取る
-        self.checked_subprompts = {cat: self.checked_subprompts.get(cat, set()) for cat in categories}
+        # チェック状態辞書の整合性を取る (存在しないカテゴリのエントリを削除)
+        self.checked_subprompts = {
+            cat: checked_names for cat, checked_names in self.checked_subprompts.items()
+            if cat in categories_in_subprompts
+        }
 
-        new_tab_index = -1
-        for i, category in enumerate(categories):
-            list_widget = QListWidget()
-            self.subprompt_lists[category] = list_widget
-            checked_names_in_cat = self.checked_subprompts.get(category, set())
-            subprompt_names_in_cat = sorted(self.subprompts.get(category, {}).keys())
+        new_selected_tab_index = -1
+        for i, category_name in enumerate(categories_in_subprompts):
+            list_widget_for_category = QListWidget()
+            list_widget_for_category.setObjectName(f"subpromptList_{category_name}") # デバッグ用
+            
+            checked_names_in_this_category = self.checked_subprompts.get(category_name, set())
+            subprompt_names_in_this_category = sorted(self.subprompts.get(category_name, {}).keys())
 
-            for name in subprompt_names_in_cat:
-                is_checked = name in checked_names_in_cat
-                item = QListWidgetItem(list_widget)
-                item_widget = SubPromptItemWidget(name, is_checked)
-                item_widget.checkStateChanged.connect(
-                    lambda checked_state, current_name=name, current_category=category: \
-                        self._handle_subprompt_check_change(current_category, current_name, checked_state)
+            for sub_name in subprompt_names_in_this_category:
+                is_item_checked = sub_name in checked_names_in_this_category
+                item_container = QListWidgetItem(list_widget_for_category)
+                widget_for_item = SubPromptItemWidget(sub_name, is_item_checked)
+                # シグナル接続
+                widget_for_item.checkStateChanged.connect(
+                    lambda checked_state, current_cat=category_name, current_s_name=sub_name:
+                        self._handle_subprompt_check_change(current_cat, current_s_name, checked_state)
                 )
-                item_widget.editRequested.connect(
-                    lambda current_name=name, current_category=category: self.add_or_edit_subprompt(current_category, current_name)
+                widget_for_item.editRequested.connect(
+                    lambda current_cat=category_name, current_s_name=sub_name:
+                        self.add_or_edit_subprompt(current_cat, current_s_name)
                 )
-                item_widget.deleteRequested.connect(
-                    lambda current_name=name, current_category=category: self.delete_subprompt(current_category, [current_name])
+                widget_for_item.deleteRequested.connect(
+                    lambda current_cat=category_name, current_s_name=sub_name:
+                        self.delete_subprompt(current_cat, [current_s_name]) # 単一削除
                 )
-                item.setSizeHint(item_widget.sizeHint())
-                list_widget.addItem(item)
-                list_widget.setItemWidget(item, item_widget)
-            self.subprompt_tab_widget.addTab(list_widget, category)
-            if category == current_tab_text:
-                new_tab_index = i
-        if new_tab_index != -1:
-             self.subprompt_tab_widget.setCurrentIndex(new_tab_index)
-        elif self.subprompt_tab_widget.count() > 0:
-             self.subprompt_tab_widget.setCurrentIndex(0)
+                item_container.setSizeHint(widget_for_item.sizeHint())
+                list_widget_for_category.setItemWidget(item_container, widget_for_item)
+            
+            self.subprompt_tab_widget.addTab(list_widget_for_category, category_name)
+            if category_name == current_tab_text_before_refresh:
+                new_selected_tab_index = i
+        
+        if new_selected_tab_index != -1:
+             self.subprompt_tab_widget.setCurrentIndex(new_selected_tab_index)
+        elif self.subprompt_tab_widget.count() > 0: # 何も一致しなかったがタブはある場合
+             self.subprompt_tab_widget.setCurrentIndex(0) # 最初のタブを選択
 
-    def _on_subprompt_tab_changed(self, index):
-        # print(f"Subprompt tab changed to: {index}")
-        pass # 必要なら何か処理
+    def _on_subprompt_tab_changed(self, index: int):
+        """サブプロンプトのカテゴリタブが変更されたときに呼び出されるスロット。(現在は未使用)
 
-    def _handle_subprompt_check_change(self, category, name, is_checked):
+        Args:
+            index (int): 新しく選択されたタブのインデックス。
+        """
+        # print(f"Subprompt tab changed to index: {index}")
+        pass # 必要に応じて、タブ変更時の追加処理をここに記述
+
+    def _handle_subprompt_check_change(self, category: str, name: str, is_checked: bool):
+        """サブプロンプトアイテムのチェック状態が変更されたときの内部処理。
+
+        `self.checked_subprompts` を更新します。
+
+        Args:
+            category (str): チェック状態が変更されたサブプロンプトのカテゴリ名。
+            name (str): チェック状態が変更されたサブプロンプトの名前。
+            is_checked (bool): 新しいチェック状態。
+        """
         if category not in self.checked_subprompts:
             self.checked_subprompts[category] = set()
         if is_checked:
             self.checked_subprompts[category].add(name)
         else:
             self.checked_subprompts[category].discard(name)
-        print(f"Subprompt checked: {category} - {name} = {is_checked}")
-        # ここでプロンプトプレビューを更新するなどの処理も可能
+        print(f"Subprompt check state: Category='{category}', Name='{name}', Checked={is_checked}")
 
     def add_subprompt_category(self):
+        """「サブプロンプトカテゴリ追加」ボタンがクリックされたときの処理。"""
         category_name, ok = QInputDialog.getText(self, "サブプロンプト カテゴリ追加", "新しいカテゴリ名:")
-        if ok and category_name:
+        if ok and category_name.strip():
+            category_name = category_name.strip() # 前後の空白を除去
             if category_name not in self.subprompts:
-                self.subprompts[category_name] = {}
-                # ★★★ save_subprompts に project_dir_name ★★★
+                self.subprompts[category_name] = {} # メモリ上に新しいカテゴリ作成
                 if save_subprompts(self.current_project_dir_name, self.subprompts):
-                    self.refresh_subprompt_tabs()
+                    self.refresh_subprompt_tabs() # UI更新
                     # 追加したタブを選択状態にする
                     for i in range(self.subprompt_tab_widget.count()):
                         if self.subprompt_tab_widget.tabText(i) == category_name:
                             self.subprompt_tab_widget.setCurrentIndex(i)
                             break
-                else: QMessageBox.warning(self, "保存エラー", "カテゴリの保存に失敗しました。")
-            else: QMessageBox.warning(self, "エラー", "既に存在するカテゴリ名です。")
-        elif ok : QMessageBox.warning(self, "入力エラー", "カテゴリ名を入力してください。")
-
-
-    def add_or_edit_subprompt(self, category=None, name=None):
-        current_category_name = category
-        if not current_category_name:
-            current_tab_index = self.subprompt_tab_widget.currentIndex()
-            if current_tab_index == -1:
-                QMessageBox.warning(self, "カテゴリ未選択", "サブプロンプトを追加/編集するカテゴリを選択してください。")
-                return
-            current_category_name = self.subprompt_tab_widget.tabText(current_tab_index)
-
-        initial_data = {"name": "", "prompt": "", "model": self.current_project_settings.get("model", "")} # デフォルトモデルを初期値に
-        is_editing = False
-        if name and current_category_name in self.subprompts and name in self.subprompts[current_category_name]:
-            initial_data = self.subprompts[current_category_name][name].copy()
-            initial_data["name"] = name # 編集中は名前も渡す
-            is_editing = True
-
-        dialog = SubPromptEditDialog(initial_data, parent=self, is_editing=is_editing, current_category=current_category_name)
-        if dialog.exec_() == QDialog.Accepted:
-            new_data = dialog.get_data()
-            new_name = new_data.pop("name") # 名前はキーとして使うのでデータからは除く
-
-            if not current_category_name in self.subprompts: # 万が一カテゴリが消えていたら作成
-                self.subprompts[current_category_name] = {}
-
-            # 編集中で名前が変更された場合は、古い名前のデータを削除
-            if is_editing and name != new_name and name in self.subprompts[current_category_name]:
-                del self.subprompts[current_category_name][name]
-                # チェック状態も更新
-                if name in self.checked_subprompts.get(current_category_name, set()):
-                    self.checked_subprompts[current_category_name].remove(name)
-                    if new_name not in self.subprompts[current_category_name]: # 新しい名前がまだなければ
-                         self.checked_subprompts[current_category_name].add(new_name)
-
-
-            self.subprompts[current_category_name][new_name] = new_data
-            # ★★★ save_subprompts に project_dir_name ★★★
-            if save_subprompts(self.current_project_dir_name, self.subprompts):
-                self.refresh_subprompt_tabs()
+                else:
+                    QMessageBox.warning(self, "保存エラー", f"カテゴリ '{category_name}' の保存に失敗しました。")
+                    del self.subprompts[category_name] # 保存失敗時はメモリからも削除
             else:
-                QMessageBox.warning(self, "保存エラー", "サブプロンプトの保存に失敗しました。")
-
-    def delete_subprompt(self, category, names_to_delete):
-        if not category in self.subprompts: return
-        deleted_count = 0
-        for name in names_to_delete:
-            if name in self.subprompts[category]:
-                del self.subprompts[category][name]
-                if category in self.checked_subprompts and name in self.checked_subprompts[category]:
-                    self.checked_subprompts[category].remove(name)
-                deleted_count += 1
-        if deleted_count > 0:
-            # ★★★ save_subprompts に project_dir_name ★★★
-            if save_subprompts(self.current_project_dir_name, self.subprompts):
-                self.refresh_subprompt_tabs()
-            else:
-                QMessageBox.warning(self, "保存エラー", "サブプロンプトの削除内容の保存に失敗しました。")
-
-    # --- データ管理ウィジェット連携メソッド ---
-    def _handle_add_category_request(self):
-        """DataManagementWidgetからのカテゴリ追加要求を処理"""
-        category_name, ok = QInputDialog.getText(self, "データカテゴリ追加", "新しいカテゴリ名:")
-        if ok and category_name:
-            # ★★★ data_management_widget に直接指示を出すか、シグナル経由が良いか検討 ★★★
-            # ここでは data_management_widget のメソッドを直接呼ぶ
-            self.data_management_widget.add_new_category_result(category_name)
-        elif ok:
+                QMessageBox.warning(self, "エラー", f"カテゴリ名 '{category_name}' は既に存在します。")
+        elif ok : # OK押したが名前が空
             QMessageBox.warning(self, "入力エラー", "カテゴリ名を入力してください。")
 
-    def _handle_add_item_request(self, category_from_data_widget):
-        """DataManagementWidgetからのアイテム追加要求を処理"""
-        item_name, ok = QInputDialog.getText(self, "アイテム追加", f"カテゴリ '{category_from_data_widget}' に追加するアイテムの名前:")
-        if ok and item_name:
-            self.data_management_widget.add_new_item_result(category_from_data_widget, item_name)
+    def add_or_edit_subprompt(self, category_to_edit: str | None = None, name_to_edit: str | None = None):
+        """サブプロンプトの追加または編集ダイアログを開きます。
+
+        引数なしで呼び出された場合は「追加」モード（現在のタブカテゴリ対象）。
+        引数ありの場合は「編集」モード。
+
+        Args:
+            category_to_edit (str | None, optional): 編集対象のカテゴリ名。
+                                                     Noneの場合は現在のタブのカテゴリ。
+            name_to_edit (str | None, optional): 編集対象のサブプロンプト名。
+                                                 Noneの場合は新規追加。
+        """
+        target_category = category_to_edit
+        is_editing_mode = bool(name_to_edit) # name_to_edit があれば編集モード
+
+        if not target_category: # カテゴリ指定がない場合は現在のタブから取得
+            current_tab_index = self.subprompt_tab_widget.currentIndex()
+            if current_tab_index == -1: # タブが選択されていない（またはタブがない）
+                # デフォルトカテゴリ「一般」がなければ作成を試みる
+                if "一般" not in self.subprompts: self.add_subprompt_category() # これが成功すればタブができるはず
+                # 再度タブを確認
+                current_tab_index = self.subprompt_tab_widget.currentIndex()
+                if current_tab_index == -1: # それでもダメならエラー
+                     QMessageBox.warning(self, "カテゴリ未選択", "サブプロンプトを追加/編集するカテゴリがありません。\nまず「カテゴリ追加」でカテゴリを作成してください。")
+                     return
+            target_category = self.subprompt_tab_widget.tabText(current_tab_index)
+
+        initial_prompt_data = {"name": "", "prompt": "", "model": ""} # 新規作成時のデフォルト
+        if is_editing_mode and target_category in self.subprompts and name_to_edit in self.subprompts[target_category]:
+            initial_prompt_data = self.subprompts[target_category][name_to_edit].copy()
+            initial_prompt_data["name"] = name_to_edit # 編集時は名前も渡す
+        
+        dialog = SubPromptEditDialog(
+            initial_data=initial_prompt_data,
+            parent=self,
+            is_editing=is_editing_mode,
+            current_category=target_category
+        )
+        if dialog.exec_() == QDialog.Accepted:
+            new_sub_data = dialog.get_data()
+            new_sub_name = new_sub_data.pop("name") # 名前はキーとして使用
+
+            if not target_category in self.subprompts: # 万が一カテゴリが消えていたら(通常ありえない)
+                self.subprompts[target_category] = {}
+
+            # 編集時で名前が変更された場合、古い名前のデータを削除
+            if is_editing_mode and name_to_edit != new_sub_name and name_to_edit in self.subprompts[target_category]:
+                del self.subprompts[target_category][name_to_edit]
+                # チェック状態も移行
+                if target_category in self.checked_subprompts and name_to_edit in self.checked_subprompts[target_category]:
+                    self.checked_subprompts[target_category].remove(name_to_edit)
+                    self.checked_subprompts[target_category].add(new_sub_name) # 新しい名前でチェック
+
+            self.subprompts[target_category][new_sub_name] = new_sub_data # 新しいデータで登録/上書き
+            if save_subprompts(self.current_project_dir_name, self.subprompts):
+                self.refresh_subprompt_tabs() # UI更新
+            else:
+                QMessageBox.warning(self, "保存エラー", "サブプロンプトの保存に失敗しました。")
+                # TODO: 保存失敗時のロールバック処理 (メモリ上の変更を元に戻すなど)
+
+    def delete_subprompt(self, category_name: str, names_to_delete: list[str]):
+        """指定されたカテゴリから、指定された名前のサブプロンプトを削除します。
+
+        Args:
+            category_name (str): 削除対象サブプロンプトが含まれるカテゴリ名。
+            names_to_delete (list[str]): 削除するサブプロンプトの名前のリスト。
+        """
+        if not category_name in self.subprompts: return # カテゴリ存在チェック
+
+        deleted_something = False
+        for name in names_to_delete:
+            if name in self.subprompts[category_name]:
+                del self.subprompts[category_name][name]
+                # チェック状態からも削除
+                if category_name in self.checked_subprompts and name in self.checked_subprompts[category_name]:
+                    self.checked_subprompts[category_name].remove(name)
+                deleted_something = True
+        
+        if deleted_something:
+            if save_subprompts(self.current_project_dir_name, self.subprompts):
+                self.refresh_subprompt_tabs() # UI更新
+            else:
+                QMessageBox.warning(self, "保存エラー", "サブプロンプトの削除内容の保存に失敗しました。")
+                # TODO: 保存失敗時のロールバック処理
+
+    # --- データ管理ウィジェット連携メソッド ---
+    def _handle_add_data_category_request(self):
+        """`DataManagementWidget`からのカテゴリ追加要求を処理します。"""
+        category_name, ok = QInputDialog.getText(self, "データカテゴリ追加", "新しいカテゴリ名:")
+        if ok and category_name.strip():
+            self.data_management_widget.add_new_category_result(category_name.strip())
+        elif ok :
+            QMessageBox.warning(self, "入力エラー", "カテゴリ名を入力してください。")
+
+    def _handle_add_data_item_request(self, category_from_data_widget: str):
+        """`DataManagementWidget`からのアイテム追加要求を処理します。
+
+        Args:
+            category_from_data_widget (str): アイテムを追加する対象のカテゴリ名。
+        """
+        item_name, ok = QInputDialog.getText(self, "アイテム追加",
+                                             f"カテゴリ '{category_from_data_widget}' に追加するアイテムの名前:")
+        if ok and item_name.strip():
+            self.data_management_widget.add_new_item_result(category_from_data_widget, item_name.strip())
         elif ok:
             QMessageBox.warning(self, "入力エラー", "アイテム名を入力してください。")
 
-    # def handle_data_check_change(self, checked_items):
-    # print(f"MainWindow: Checked data items changed: {checked_items}")
-    # 必要に応じてここで何か処理
-
     def closeEvent(self, event):
-        """ウィンドウが閉じられるときの処理"""
-        # 現在のメインシステムプロンプトをプロジェクト設定に保存
-        current_main_prompt = self.system_prompt_input_main.toPlainText()
-        if self.current_project_settings.get("main_system_prompt") != current_main_prompt:
-            self.current_project_settings["main_system_prompt"] = current_main_prompt
-            save_project_settings(self.current_project_dir_name, self.current_project_settings)
-            print("終了時にメインシステムプロンプトを保存しました。")
+        """ウィンドウが閉じられるときに呼び出されるイベントハンドラ。
+
+        現在のメインシステムプロンプトをプロジェクト設定に保存します。
+        """
+        print("MainWindow is closing. Saving current main system prompt...")
+        current_main_prompt_text = self.system_prompt_input_main.toPlainText()
+        if self.current_project_settings.get("main_system_prompt") != current_main_prompt_text:
+            self.current_project_settings["main_system_prompt"] = current_main_prompt_text
+            if save_project_settings(self.current_project_dir_name, self.current_project_settings):
+                print("  Main system prompt saved successfully on close.")
+            else:
+                print("  ERROR: Failed to save main system prompt on close.")
+        # 詳細ウィンドウも明示的に閉じる (もし開いていれば)
+        if hasattr(self, 'data_management_widget') and self.data_management_widget._detail_window:
+            if self.data_management_widget._detail_window.isVisible():
+                self.data_management_widget._detail_window.close()
         super().closeEvent(event)
 
 if __name__ == '__main__':
+    """MainWindowの基本的な表示・インタラクションテスト。"""
     app = QApplication(sys.argv)
-    # アプリケーションアイコンの設定 (任意)
-    # app_icon = QIcon("path/to/your/icon.png")
-    # app.setWindowIcon(app_icon)
+    # アプリケーションのスタイル設定 (任意)
+    # app.setStyle("Fusion")
+
     main_win = MainWindow()
     main_win.show()
     sys.exit(app.exec_())
