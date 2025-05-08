@@ -15,7 +15,7 @@
             "model": "gemini-1.5-flash-latest"
         },
         "ダメージ描写": {
-            "prompt": "",
+            "prompt": "ダメージを受けたよ！",
             "model": ""
         }
     },
