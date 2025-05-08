@@ -221,7 +221,11 @@ class DetailWindow(QWidget):
             final_edited_text = self.ai_edit_dialog.get_final_text()
             # データを更新して保存
             update_payload = {'description': final_edited_text}
-            if update_item(self.current_category, self.current_item_id, update_payload):
+            if not self.current_project_dir_name or not self.current_category or not self.current_item_id:
+                QMessageBox.warning(self, "エラー", "アイテムの更新に必要な情報が不足しています。")
+                return # または self.ai_edit_dialog = None; return
+
+            if update_item(self.current_project_dir_name, self.current_category, self.current_item_id, update_payload):
                 QMessageBox.information(self, "更新完了", "「説明/メモ」を更新しました。")
                 self.item_data['description'] = final_edited_text
                 if 'description' in self.detail_widgets:
