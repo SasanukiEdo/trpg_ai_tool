@@ -8,7 +8,7 @@
 
 プロジェクト単位でのデータ管理の基盤となり、アクティブなプロジェクトの
 設定やデータを読み込み、UIに反映する役割も担います。
-プロジェクトの選択機能も提供します。
+プロジェクトの選択機能、新規作成機能も提供します。
 """
 
 import sys
@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy, QStyle, qApp, QInputDialog, QComboBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
+import re # ディレクトリ名検証用
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -32,8 +33,10 @@ from core.config_manager import (
     load_project_settings, save_project_settings,
     list_project_dir_names, # プロジェクト一覧取得用 (将来的に使用)
     DEFAULT_PROJECT_SETTINGS # プロジェクト初期化用
+    get_project_dir_path # ディレクトリ名重複チェック用
 )
-from core.subprompt_manager import load_subprompts, save_subprompts
+from core.subprompt_manager import save_subprompts, DEFAULT_SUBPROMPTS_DATA # 新規作成時用
+from core.data_manager import get_project_gamedata_path, create_category # 新規作成時用
 from core.data_manager import get_item # AIプロンプト構築時に使用
 from core.api_key_manager import get_api_key as get_os_api_key # OS資格情報からAPIキー取得
 
@@ -154,6 +157,7 @@ class MainWindow(QWidget):
         settings_button (QPushButton): 設定ダイアログを開くボタン。
         subprompt_tab_widget (QTabWidget): サブプロンプトカテゴリ表示用タブ。
         data_management_widget (DataManagementWidget): データ管理エリア用ウィジェット。
+        new_project_button (QPushButton): 新規プロジェクト作成ダイアログを開くボタン。
     """
 
     def __init__(self):
@@ -222,15 +226,14 @@ class MainWindow(QWidget):
                 self.current_project_settings.get("main_system_prompt", "")
             )
         
-        # --- ★★★ DataManagementWidget のプロジェクトも設定（UI初期化後） ★★★ ---
+        # DataManagementWidget のプロジェクトも設定（UI初期化後）
         if hasattr(self, 'data_management_widget') and self.data_management_widget:
             self.data_management_widget.set_project(self.current_project_dir_name)
-        # --------------------------------------------------------------------
 
-        # --- ★★★ サブプロンプトタブもUIがあれば更新 ★★★ ---
+        # サブプロンプトタブもUIがあれば更新
         if hasattr(self, 'subprompt_tab_widget'):
             self.refresh_subprompt_tabs()
-        # -------------------------------------------------
+
 
     def init_ui(self):
         """メインウィンドウのユーザーインターフェースを構築します。"""
@@ -273,20 +276,27 @@ class MainWindow(QWidget):
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
 
-        # --- ★★★ 右上: プロジェクト選択と設定ボタンのレイアウト ★★★ ---
-        top_controls_layout = QHBoxLayout()
-        top_controls_layout.addWidget(QLabel("プロジェクト:"))
+        # --- ★★★ 右上: プロジェクト関連コントロールのレイアウト ★★★ ---
+        project_controls_layout = QHBoxLayout()
+        project_controls_layout.addWidget(QLabel("プロジェクト:"))
         self.project_selector_combo = QComboBox()
         self.project_selector_combo.setToolTip("アクティブなプロジェクトを切り替えます。")
         self.project_selector_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.project_selector_combo.activated[str].connect(self._on_project_selected_by_display_name) # 表示名で選択されたとき
-        top_controls_layout.addWidget(self.project_selector_combo, 1) # 伸縮比率1
+        self.project_selector_combo.activated[str].connect(self._on_project_selected_by_display_name)
+        project_controls_layout.addWidget(self.project_selector_combo, 1)
+
+        # --- ★★★ 新規プロジェクトボタンを追加 ★★★ ---
+        self.new_project_button = QPushButton("新規作成")
+        self.new_project_button.setToolTip("新しいプロジェクトを作成します。")
+        self.new_project_button.clicked.connect(self._on_new_project_button_clicked)
+        project_controls_layout.addWidget(self.new_project_button)
+        # --------------------------------------------
 
         self.settings_button = QPushButton("設定")
         self.settings_button.setToolTip("アプリケーション全体と現在のプロジェクトの設定を行います。")
         self.settings_button.clicked.connect(self.open_settings_dialog)
-        top_controls_layout.addWidget(self.settings_button)
-        right_layout.addLayout(top_controls_layout)
+        project_controls_layout.addWidget(self.settings_button)
+        right_layout.addLayout(project_controls_layout)
         # -------------------------------------------------------------
 
         # 右側を上下に分割するスプリッター
@@ -315,10 +325,7 @@ class MainWindow(QWidget):
         right_splitter.addWidget(subprompt_area_widget)
 
         # 下部: データ管理エリア
-        self.data_management_widget = DataManagementWidget(
-            project_dir_name=self.current_project_dir_name,
-            parent=self # DataManagementWidgetがMainWindowを参照できるように
-        )
+        self.data_management_widget = DataManagementWidget(project_dir_name=self.current_project_dir_name, parent=self)
         # DataManagementWidgetからのシグナルを接続
         self.data_management_widget.addCategoryRequested.connect(self._handle_add_data_category_request)
         self.data_management_widget.addItemRequested.connect(self._handle_add_data_item_request)
@@ -442,6 +449,122 @@ class MainWindow(QWidget):
             self.project_selector_combo.blockSignals(False)
 
         print(f"--- MainWindow: Project switched successfully to '{new_project_dir_name}' ---")
+
+    # --- ★★★ 新規プロジェクト作成関連メソッド ★★★ ---
+    def _on_new_project_button_clicked(self):
+        """「新規プロジェクト作成」ボタンがクリックされたときの処理。
+        プロジェクト名入力ダイアログを表示し、プロジェクトを作成します。
+        """
+        dialog = QDialog(self)
+        dialog.setWindowTitle("新規プロジェクト作成")
+        layout = QVBoxLayout(dialog)
+
+        # プロジェクト表示名入力
+        layout.addWidget(QLabel("プロジェクト表示名:"))
+        display_name_edit = QLineEdit(dialog)
+        display_name_edit.setPlaceholderText("例: 龍の洞窟探検")
+        layout.addWidget(display_name_edit)
+
+        # プロジェクトディレクトリ名入力
+        layout.addWidget(QLabel("プロジェクトディレクトリ名 (半角英数字とアンダースコアのみ):"))
+        dir_name_edit = QLineEdit(dialog)
+        dir_name_edit.setPlaceholderText("例: dragon_cave_expedition")
+        layout.addWidget(dir_name_edit)
+
+        # ディレクトリ名に関する注意書き
+        dir_name_info_label = QLabel("<small><i>ディレクトリ名はファイルシステム上で使用されます。<br>一度作成すると変更できませんのでご注意ください。</i></small>")
+        dir_name_info_label.setWordWrap(True)
+        layout.addWidget(dir_name_info_label)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        
+        def try_accept():
+            display_name = display_name_edit.text().strip()
+            dir_name = dir_name_edit.text().strip()
+            if self._validate_and_create_project(display_name, dir_name):
+                dialog.accept() # 検証成功ならダイアログを閉じる
+            # 検証失敗時は _validate_and_create_project 内で QMessageBox が表示される
+
+        button_box.accepted.connect(try_accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+        dialog.setLayout(layout)
+        dialog.setMinimumWidth(350)
+
+        # ダイアログ実行は try_accept で閉じるので、ここでは exec_ の結果は使わない
+        dialog.exec_()
+
+
+    def _validate_and_create_project(self, display_name: str, dir_name: str) -> bool:
+        """入力されたプロジェクト情報を検証し、問題なければプロジェクトを作成します。
+
+        Args:
+            display_name (str): 新しいプロジェクトの表示名。
+            dir_name (str): 新しいプロジェクトのディレクトリ名。
+
+        Returns:
+            bool: プロジェクトの作成と初期化が成功した場合は True、
+                  検証失敗または作成失敗の場合は False。
+        """
+        if not display_name:
+            QMessageBox.warning(None, "入力エラー", "プロジェクト表示名を入力してください。") # Noneで親なしダイアログ
+            return False
+        if not dir_name:
+            QMessageBox.warning(None, "入力エラー", "プロジェクトディレクトリ名を入力してください。")
+            return False
+
+        # ディレクトリ名の検証 (半角英数字とアンダースコアのみ)
+        if not re.match(r"^[a-zA-Z0-9_]+$", dir_name):
+            QMessageBox.warning(None, "入力エラー",
+                                "プロジェクトディレクトリ名は半角英数字とアンダースコアのみ使用できます。")
+            return False
+
+        # ディレクトリ名の重複チェック
+        project_path = get_project_dir_path(dir_name)
+        if os.path.exists(project_path):
+            QMessageBox.warning(None, "作成エラー",
+                                f"ディレクトリ名 '{dir_name}' は既に使用されています。\n別の名前を指定してください。")
+            return False
+
+        print(f"--- MainWindow: Creating new project. Display: '{display_name}', Directory: '{dir_name}' ---")
+
+        # 1. プロジェクト設定ファイルを作成 (config_manager)
+        new_project_settings = DEFAULT_PROJECT_SETTINGS.copy()
+        new_project_settings["project_display_name"] = display_name
+        # 新規プロジェクトのモデルはグローバル設定の default_model を使用
+        new_project_settings["model"] = self.global_config.get("default_model",
+                                                               DEFAULT_PROJECT_SETTINGS["model"])
+        if not save_project_settings(dir_name, new_project_settings):
+            QMessageBox.critical(None, "作成エラー", f"プロジェクト設定ファイル ({dir_name}/{PROJECT_SETTINGS_FILENAME}) の作成に失敗しました。")
+            return False
+        print(f"  Created project settings for '{dir_name}'.")
+
+        # 2. サブプロンプトファイルを作成 (subprompt_manager) - 空のデータで
+        if not save_subprompts(dir_name, DEFAULT_SUBPROMPTS_DATA.copy()):
+            QMessageBox.warning(None, "作成警告", f"空のサブプロンプトファイル ({dir_name}/subprompts.json) の作成に失敗しました。")
+            # 失敗してもプロジェクト作成自体は続行する (致命的ではないため)
+        else:
+            print(f"  Created empty subprompts file for '{dir_name}'.")
+
+        # 3. gamedataディレクトリと、必要ならデフォルトカテゴリファイルを作成 (data_manager)
+        gamedata_path = get_project_gamedata_path(dir_name)
+        try:
+            os.makedirs(gamedata_path, exist_ok=True)
+            print(f"  Created gamedata directory for '{dir_name}'.")
+            # オプション: デフォルトで「未分類」カテゴリなどを作成する
+            if not create_category(dir_name, "キャラクター"): # 例として「キャラクター」
+                 print(f"  Warning: Failed to create default category 'キャラクター' for new project '{dir_name}'.")
+        except Exception as e:
+            QMessageBox.warning(None, "作成警告", f"ゲームデータディレクトリ ({gamedata_path}) の作成に失敗しました: {e}")
+            # これも致命的ではないとして続行
+
+        QMessageBox.information(None, "作成完了", f"プロジェクト「{display_name}」({dir_name}) を作成しました。")
+
+        # 新しいプロジェクトをアクティブにする
+        self._populate_project_selector() # まずコンボボックスを更新
+        self._switch_project(dir_name)    # 新しいプロジェクトに切り替え
+
+        return True
     # ---------------------------------------------
 
     # (configure_gemini, open_settings_dialog, on_send_button_clicked,
