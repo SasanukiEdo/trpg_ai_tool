@@ -171,6 +171,8 @@ class DetailWindow(QWidget):
 
     def _build_detail_view(self):
         """`self.item_data` に基づいて詳細表示UIを動的に構築します。
+        履歴表示に通し番号と区切り線を追加し、タイムスタンプを非表示にします。
+        履歴削除ボタン、履歴編集ボタンを追加します。
         """
         if not self.item_data: return
 
@@ -214,7 +216,12 @@ class DetailWindow(QWidget):
         add_history_button.clicked.connect(self.add_history_entry_with_ai_ui)
         history_buttons_layout.addWidget(add_history_button)
 
-        delete_history_button = QPushButton("履歴を削除...") # ...でダイアログが出ることを示唆
+        edit_history_button = QPushButton("履歴を編集")
+        edit_history_button.setToolTip("指定した番号の履歴エントリを編集します。")
+        edit_history_button.clicked.connect(self.edit_history_entry_ui) # 新しいメソッドに接続
+        history_buttons_layout.addWidget(edit_history_button)
+
+        delete_history_button = QPushButton("履歴を削除")
         delete_history_button.setToolTip("指定した番号の履歴エントリを削除します。")
         delete_history_button.clicked.connect(self.delete_history_entry_ui)
         history_buttons_layout.addWidget(delete_history_button)
@@ -427,7 +434,55 @@ class DetailWindow(QWidget):
             print("AIによる履歴追記はキャンセルされました。")
         self.ai_edit_dialog = None; self.ai_edit_dialog_mode = None # クリア
 
+    # 履歴編集UIメソッド
+    def edit_history_entry_ui(self):
+        """「履歴を編集」ボタンがクリックされたときの処理。
+        ユーザーに番号で編集対象の履歴を指定させ、複数行入力ダイアログで編集させ、変更を保存します。
+        """
+        if not self.item_data or not self.current_category or not self.current_item_id or not self.current_project_dir_name:
+            QMessageBox.warning(self, "エラー", "履歴を編集するアイテムが選択されていません。")
+            return
 
+        history_list = self.item_data.get("history", [])
+        if not history_list:
+            QMessageBox.information(self, "履歴なし", "編集できる履歴がありません。")
+            return
+
+        num_entries = len(history_list)
+        entry_number, ok = QInputDialog.getInt(
+            self, "履歴編集",
+            f"編集する履歴の番号を入力してください (1～{num_entries}):",
+            min=1, max=num_entries, value=1
+        )
+
+        if ok:
+            index_to_edit = entry_number - 1 # 0ベースのインデックス
+            if 0 <= index_to_edit < num_entries:
+                current_entry_dict = history_list[index_to_edit]
+                current_entry_text = current_entry_dict.get('entry', '')
+
+                new_entry_text, ok_multiline = QInputDialog.getMultiLineText(
+                    self, "履歴編集",
+                    f"履歴 ({entry_number}) の内容を編集してください:",
+                    current_entry_text
+                )
+
+                if ok_multiline and new_entry_text.strip() != current_entry_text.strip(): # 内容が変更された場合のみ
+                    # 履歴エントリの 'entry' を更新
+                    # (id や timestamp は変更しない)
+                    self.item_data['history'][index_to_edit]['entry'] = new_entry_text.strip()
+
+                    if update_item(self.current_project_dir_name, self.current_category, self.current_item_id, {"history": self.item_data['history']}):
+                        QMessageBox.information(self, "履歴編集完了", f"履歴エントリ ({entry_number}) を更新しました。")
+                        self.load_data(self.current_category, self.current_item_id) # UIを再読み込み
+                    else:
+                        QMessageBox.warning(self, "履歴編集エラー", "履歴の編集内容の保存に失敗しました。")
+                        # 保存失敗時はメモリ上の item_data['history'] を元に戻す方が安全
+                        self.item_data['history'][index_to_edit]['entry'] = current_entry_text # 元に戻す
+                elif ok_multiline: # OK押したが変更なし
+                    QMessageBox.information(self, "変更なし", "履歴内容は変更されませんでした。")
+            else:
+                QMessageBox.warning(self, "入力エラー", f"無効な番号です。1から{num_entries}の間で指定してください。")
 
     # 履歴削除UIメソッド
     def delete_history_entry_ui(self):
