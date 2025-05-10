@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QPixmap, QImageReader
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QResizeEvent
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -90,6 +91,9 @@ class DetailWindow(QWidget):
         self.ai_edit_dialog: AIAssistedEditDialog | None = None
         self.ai_edit_dialog_mode: str | None = None # ★ AI編集ダイアログのモード
         """str | None: AI編集支援ダイアログが何の編集に使われているか ('description' or 'history')"""
+
+        self._original_image_pixmap: QPixmap | None = None
+        """QPixmap | None: 読み込んだ画像のスケーリングされていないオリジナルピクスマップ。"""
 
         self.setWindowFlags(Qt.Window) # 独立したウィンドウとして表示
         self.setWindowTitle("詳細情報 (アイテム未選択)")
@@ -375,7 +379,10 @@ class DetailWindow(QWidget):
             print(f"  Saved relative image path: {relative_image_path}")
 
             # 5. プレビューを更新
-            self._update_image_preview(relative_image_path) # 相対パスを渡す
+            from PyQt5.QtCore import QTimer # QTimer をインポート
+            # self._update_image_preview(relative_image_path) # 直接呼び出すのをやめる
+            QTimer.singleShot(0, lambda path=relative_image_path: self._update_image_preview(path))
+            print(f"  Scheduled delayed image preview update for: {relative_image_path}")
 
     def clear_image_file(self):
         """「画像をクリア」ボタンがクリックされたときの処理。画像パスをクリアします。"""
@@ -385,17 +392,18 @@ class DetailWindow(QWidget):
 
     def _update_image_preview(self, relative_image_path: str | None):
         """指定された相対画像パスに基づいて画像プレビューを更新します。
+        オリジナルのピクスマップを保持し、表示時にラベルサイズに合わせてスケーリングします。
         相対パスはプロジェクトルートからのパス (例: 'images/キャラ絵.png') とします。
 
         Args:
-            relative_image_path (str | None): 表示する画像のプロジェクト相対パス。
-                                            Noneの場合はプレビューをクリア。
+            relative_image_path (str | None): 表示する画像のプロジェクト相対パス。Noneの場合はプレビューをクリア。
         """
         if 'image_preview' not in self.detail_widgets or 'image_path_display' not in self.detail_widgets:
             return
-        if not self.current_project_dir_name: # プロジェクト名がないと絶対パスを解決できない
+        if not self.current_project_dir_name and relative_image_path: # プロジェクト名がないと絶対パス解決不可
             self.img_preview_label.setText("画像プレビュー (プロジェクト未指定)")
-            self.img_path_label.setText("画像パス: (プロジェクト未指定)")
+            self.img_path_label.setText(f"画像パス: {relative_image_path} (プロジェクト未指定)")
+            self._original_image_pixmap = None # オリジナルもクリア
             return
 
         absolute_image_path = None
@@ -409,34 +417,51 @@ class DetailWindow(QWidget):
             absolute_image_path = os.path.join(project_root_abs_path, relative_image_path)
             print(f"  Attempting to load image from absolute path: {absolute_image_path} (relative: {relative_image_path})")
 
+        self._original_image_pixmap = None # まずクリア
 
         if absolute_image_path and os.path.exists(absolute_image_path):
             try:
-                reader = QImageReader(absolute_image_path)
-                if reader.canRead():
-                    preview_width = self.img_preview_label.width() - 10
-                    preview_height = self.img_preview_label.height() - 10
-                    if preview_width < 50: preview_width = 150
-                    if preview_height < 50: preview_height = 100
-                    reader.setScaledSize(reader.size().scaled(preview_width, preview_height, Qt.KeepAspectRatio))
-                    pixmap = QPixmap.fromImageReader(reader)
-                    if not pixmap.isNull():
-                        self.img_preview_label.setPixmap(pixmap)
-                        self.img_path_label.setText(f"画像パス: {relative_image_path}") # 表示は相対パスのまま
-                    else:
-                        self.img_preview_label.setText(f"画像プレビュー失敗:\n{reader.errorString()}")
-                        self.img_path_label.setText(f"画像パス(読込エラー): {relative_image_path}")
+                # オリジナルのピクスマップを読み込んで保持
+                original_pixmap = QPixmap(absolute_image_path)
+                if not original_pixmap.isNull():
+                    self._original_image_pixmap = original_pixmap
+                    
+                    # --- ★★★ 初回表示時のスケーリング (resizeEventでも行う) ★★★ ---
+                    # QTimer.singleShot(0, ...) で呼ばれることを期待し、
+                    # この時点である程度正しいラベルサイズが取得できると仮定する。
+                    # それでもダメなら、resizeEvent の初回呼び出しに完全に任せる。
+                    label_to_scale_for_initial_display = self.detail_widgets.get('image_preview')
+                    if isinstance(label_to_scale_for_initial_display, QLabel):
+                        current_label_size = label_to_scale_for_initial_display.size()
+                        # 非常に小さい場合は、ラベルの minimumSize を使う
+                        if current_label_size.width() < self.img_preview_label.minimumWidth() or \
+                           current_label_size.height() < self.img_preview_label.minimumHeight():
+                            current_label_size.setWidth(max(current_label_size.width(), self.img_preview_label.minimumWidth()))
+                            current_label_size.setHeight(max(current_label_size.height(), self.img_preview_label.minimumHeight()))
+
+                        scaled_pixmap = self._original_image_pixmap.scaled(
+                            current_label_size,
+                            Qt.KeepAspectRatio,
+                            Qt.SmoothTransformation
+                        )
+                        label_to_scale_for_initial_display.setPixmap(scaled_pixmap)
+                    # --------------------------------------------------------
+                    self.img_path_label.setText(f"画像パス: {relative_image_path}")
                 else:
-                    self.img_preview_label.setText(f"画像形式非対応:\n{os.path.basename(absolute_image_path)}")
-                    self.img_path_label.setText(f"画像パス(形式非対応): {relative_image_path}")
+                    self.img_preview_label.clear(); self.img_preview_label.setText(f"画像読込失敗:\n{os.path.basename(absolute_image_path)}"); self.img_path_label.setText(f"画像パス(読込エラー): {relative_image_path}")
             except Exception as e:
-                print(f"Error updating image preview for {absolute_image_path}: {e}")
+                self._original_image_pixmap = None
+                self.img_preview_label.clear()
                 self.img_preview_label.setText(f"画像表示エラー:\n{os.path.basename(absolute_image_path)}")
                 self.img_path_label.setText(f"画像パス(表示エラー): {relative_image_path}")
         elif relative_image_path: # パスはあるがファイルが見つからない
+            self._original_image_pixmap = None
+            self.img_preview_label.clear()
             self.img_preview_label.setText(f"画像ファイル未発見:\n{relative_image_path}")
             self.img_path_label.setText(f"画像パス(未発見): {relative_image_path}")
         else: # relative_image_path が None
+            self._original_image_pixmap = None
+            self.img_preview_label.clear()
             self.img_preview_label.setText("画像プレビューなし")
             self.img_path_label.setText("画像パス: (選択されていません)")
 
@@ -656,6 +681,30 @@ class DetailWindow(QWidget):
         self.windowClosed.emit()
         # 必要なら未保存の変更があるか確認して警告を出す処理を追加
         super().closeEvent(event)
+
+
+    def resizeEvent(self, event: 'QResizeEvent'): # QResizeEventの型ヒントは文字列で
+        """ウィンドウがリサイズされたときに呼び出されるイベントハンドラ。
+        画像プレビューを新しいウィンドウサイズに合わせて再スケーリングします。
+
+        Args:
+            event (QResizeEvent): リサイズイベントオブジェクト。
+        """
+        super().resizeEvent(event) # 親クラスのresizeEventを呼び出す
+        
+        # オリジナル画像があり、プレビューラベルも存在する場合のみ処理
+        if self._original_image_pixmap and 'image_preview' in self.detail_widgets:
+            label_to_scale = self.detail_widgets['image_preview']
+            if isinstance(label_to_scale, QLabel) and not self._original_image_pixmap.isNull():
+                # ラベルの現在のサイズに合わせてオリジナルピクスマップをスケーリング
+                # (setScaledContents(True) があれば、これだけでも良い場合があるが、
+                #  より細かく制御したい場合や、アスペクト比を確実に保ちたい場合に有効)
+                scaled_pixmap = self._original_image_pixmap.scaled(
+                    label_to_scale.size(), # QLabelの現在のサイズ
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
+                label_to_scale.setPixmap(scaled_pixmap)
 
 if __name__ == '__main__':
     """DetailWindow の基本的な表示・インタラクションテスト。"""
