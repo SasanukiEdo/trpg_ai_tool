@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
     QTextBrowser, QListWidget, QListWidgetItem, QMessageBox, QAbstractItemView,
     QTabWidget, QApplication, QDialog, QSplitter, QFrame, QCheckBox,
-    QSizePolicy, QStyle, qApp, QInputDialog, QComboBox
+    QSizePolicy, QStyle, qApp, QInputDialog, QComboBox, QLineEdit,QDialogButtonBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
 import re # ディレクトリ名検証用
@@ -35,7 +35,7 @@ from core.config_manager import (
     DEFAULT_PROJECT_SETTINGS, # プロジェクト初期化用
     get_project_dir_path # ディレクトリ名重複チェック用
 )
-from core.subprompt_manager import save_subprompts, DEFAULT_SUBPROMPTS_DATA # 新規作成時用
+from core.subprompt_manager import load_subprompts, save_subprompts, DEFAULT_SUBPROMPTS_DATA # 新規作成時用
 from core.data_manager import get_project_gamedata_path, create_category, get_item  # 新規作成時用
 from core.api_key_manager import get_api_key as get_os_api_key # OS資格情報からAPIキー取得
 
