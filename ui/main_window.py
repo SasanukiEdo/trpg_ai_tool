@@ -8,6 +8,7 @@
 
 プロジェクト単位でのデータ管理の基盤となり、アクティブなプロジェクトの
 設定やデータを読み込み、UIに反映する役割も担います。
+プロジェクトの選択機能も提供します。
 """
 
 import sys
@@ -16,10 +17,9 @@ from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
     QTextBrowser, QListWidget, QListWidgetItem, QMessageBox, QAbstractItemView,
     QTabWidget, QApplication, QDialog, QSplitter, QFrame, QCheckBox,
-    QSizePolicy, QStyle, qApp, QInputDialog # QInputDialog を追加
+    QSizePolicy, QStyle, qApp, QInputDialog, QComboBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
-# from PyQt5.QtGui import QDesktopServices # 現在未使用のためコメントアウト
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -41,7 +41,6 @@ from core.api_key_manager import get_api_key as get_os_api_key # OS資格情報�
 from ui.settings_dialog import SettingsDialog
 from ui.subprompt_dialog import SubPromptEditDialog
 from ui.data_widget import DataManagementWidget
-# from ui.ai_text_edit_dialog import AIAssistedEditDialog # DetailWindow内で使用
 
 # --- Gemini API ハンドラー ---
 from core.gemini_handler import configure_gemini_api, generate_response, is_configured
@@ -79,7 +78,7 @@ class SubPromptItemWidget(QWidget):
         """str: このウィジェットが表すサブプロンプトの名前。"""
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(5, 2, 5, 2) # 余白を小さく
+        layout.setContentsMargins(5, 2, 5, 2)
 
         self.checkbox = QCheckBox(name)
         self.checkbox.setChecked(is_checked)
@@ -110,8 +109,6 @@ class SubPromptItemWidget(QWidget):
         """
         self.name = name
         self.checkbox.setText(name)
-        # ツールチップも更新 (edit_button, delete_button は直接アクセスできないので親で再生成が適切かも)
-        # ここでは簡単のため省略。MainWindow.refresh_subprompt_tabs で再生成される。
 
     def set_checked(self, checked: bool):
         """チェックボックスの状態をプログラムから設定します。シグナルは発行しません。
@@ -140,6 +137,7 @@ class MainWindow(QWidget):
     アプリケーションのUI全体の構築、ユーザーインタラクションの処理、
     コア機能モジュールとの連携、プロジェクトデータの管理など、
     アプリケーションの中心的な役割を担います。
+    プロジェクト選択機能も提供します。
 
     Attributes:
         global_config (dict): アプリケーション全体のグローバル設定。
@@ -148,6 +146,7 @@ class MainWindow(QWidget):
         subprompts (dict): 現在アクティブなプロジェクトのサブプロンプトデータ。
         checked_subprompts (dict): {カテゴリ名: {サブプロンプト名のセット}} でチェック状態を保持。
         gemini_configured (bool): Gemini APIが設定済みかを示すフラグ。
+        project_selector_combo (QComboBox): プロジェクト選択用コンボボックス。
         system_prompt_input_main (QTextEdit): メインシステムプロンプト入力エリア。
         response_display (QTextBrowser): AI応答履歴表示エリア。
         user_input (QTextEdit): ユーザーメッセージ入力エリア。
@@ -174,6 +173,9 @@ class MainWindow(QWidget):
         """dict[str, set[str]]: {カテゴリ名: {チェックされたサブプロンプト名のセット}}。"""
         self.gemini_configured: bool = False
         """bool: Gemini APIが正しく設定されていれば True。"""
+        # --- ★★★ プロジェクト選択コンボボックス用のプロジェクト情報リスト ★★★ ---
+        self._projects_list_for_combo: list[tuple[str, str]] = [] # (表示名, ディレクトリ名) のタプルのリスト
+        # -------------------------------------------------------------------
 
         self._initialize_configs_and_project() # 設定とプロジェクトデータを初期化
         self.init_ui()                        # UIを構築
@@ -188,11 +190,11 @@ class MainWindow(QWidget):
         self._load_current_project_data() # 実際のデータ読み込み
 
     def _load_current_project_data(self):
-        """現在アクティブなプロジェクトの各種設定・データを読み込み、インスタンス変数に格納します。
+        """現在アクティブなプロジェクトの各種設定・データを読み込み、UI要素も更新します。
 
-        `self.current_project_settings` と `self.subprompts` を更新します。
-        プロジェクトが存在しない場合はデフォルトで初期化を試みます。
-        UI要素が存在する場合は、それらも更新します。
+        `self.current_project_settings`, `self.subprompts` を更新し、
+        ウィンドウタイトル、メインシステムプロンプト表示などを更新します。
+        `DataManagementWidget` のプロジェクトも設定します（UI初期化後）。
         """
         print(f"--- MainWindow: Loading data for project: '{self.current_project_dir_name}' ---")
         project_settings_loaded = load_project_settings(self.current_project_dir_name)
@@ -202,7 +204,10 @@ class MainWindow(QWidget):
             self.current_project_settings["project_display_name"] = f"{self.current_project_dir_name} (読込エラー)"
         else:
             self.current_project_settings = project_settings_loaded
-        print(f"  Project settings loaded: Name='{self.current_project_settings.get('project_display_name')}', Model='{self.current_project_settings.get('model')}'")
+        
+        project_display_name_for_title = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
+        self.setWindowTitle(f"TRPG AI Tool - {project_display_name_for_title}")
+        print(f"  Project settings loaded: Name='{project_display_name_for_title}', Model='{self.current_project_settings.get('model')}'")
 
         self.subprompts = load_subprompts(self.current_project_dir_name)
         # チェック状態はプロジェクトごとに初期化 (カテゴリが存在すれば空セット、なければキー自体なし)
@@ -216,8 +221,16 @@ class MainWindow(QWidget):
             self.system_prompt_input_main.setPlainText(
                 self.current_project_settings.get("main_system_prompt", "")
             )
-        project_display_name = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
-        self.setWindowTitle(f"TRPG AI Tool - {project_display_name}")
+        
+        # --- ★★★ DataManagementWidget のプロジェクトも設定（UI初期化後） ★★★ ---
+        if hasattr(self, 'data_management_widget') and self.data_management_widget:
+            self.data_management_widget.set_project(self.current_project_dir_name)
+        # --------------------------------------------------------------------
+
+        # --- ★★★ サブプロンプトタブもUIがあれば更新 ★★★ ---
+        if hasattr(self, 'subprompt_tab_widget'):
+            self.refresh_subprompt_tabs()
+        # -------------------------------------------------
 
     def init_ui(self):
         """メインウィンドウのユーザーインターフェースを構築します。"""
@@ -245,7 +258,7 @@ class MainWindow(QWidget):
         input_area_layout = QHBoxLayout()
         self.user_input = QTextEdit()
         self.user_input.setPlaceholderText("ここにメッセージを入力...")
-        self.user_input.setFixedHeight(100) # 高さを少し増やす
+        self.user_input.setFixedHeight(100)
         input_area_layout.addWidget(self.user_input)
         send_button_layout = QVBoxLayout()
         self.send_button = QPushButton("送信")
@@ -260,13 +273,21 @@ class MainWindow(QWidget):
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
 
-        settings_button_layout = QHBoxLayout()
-        settings_button_layout.addStretch()
+        # --- ★★★ 右上: プロジェクト選択と設定ボタンのレイアウト ★★★ ---
+        top_controls_layout = QHBoxLayout()
+        top_controls_layout.addWidget(QLabel("プロジェクト:"))
+        self.project_selector_combo = QComboBox()
+        self.project_selector_combo.setToolTip("アクティブなプロジェクトを切り替えます。")
+        self.project_selector_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.project_selector_combo.activated[str].connect(self._on_project_selected_by_display_name) # 表示名で選択されたとき
+        top_controls_layout.addWidget(self.project_selector_combo, 1) # 伸縮比率1
+
         self.settings_button = QPushButton("設定")
         self.settings_button.setToolTip("アプリケーション全体と現在のプロジェクトの設定を行います。")
         self.settings_button.clicked.connect(self.open_settings_dialog)
-        settings_button_layout.addWidget(self.settings_button)
-        right_layout.addLayout(settings_button_layout)
+        top_controls_layout.addWidget(self.settings_button)
+        right_layout.addLayout(top_controls_layout)
+        # -------------------------------------------------------------
 
         # 右側を上下に分割するスプリッター
         right_splitter = QSplitter(Qt.Vertical)
@@ -301,22 +322,145 @@ class MainWindow(QWidget):
         # DataManagementWidgetからのシグナルを接続
         self.data_management_widget.addCategoryRequested.connect(self._handle_add_data_category_request)
         self.data_management_widget.addItemRequested.connect(self._handle_add_data_item_request)
-        # self.data_management_widget.checkedItemsChanged.connect(...) # 必要なら接続
-
         right_splitter.addWidget(self.data_management_widget)
         right_splitter.setSizes([int(self.height() * 0.4), int(self.height() * 0.6)]) # 分割比率を調整
 
         right_layout.addWidget(right_splitter)
 
 
-        # メインレイアウトに左右エリアを追加
-        main_layout.addWidget(left_widget, 7)  # 左側を7割
-        main_layout.addWidget(right_widget, 3) # 右側を3割
+        main_layout.addWidget(left_widget, 7)
+        main_layout.addWidget(right_widget, 3)
 
-        # UI初期化後にプロジェクトデータを再度読み込み、UIに反映 (特にメインプロンプト)
-        self._load_current_project_data() # ウィンドウタイトルとメインプロンプト更新
-        self.refresh_subprompt_tabs() # サブプロンプトタブも更新
+        # --- ★★★ UI初期化後にプロジェクトコンボボックスを初期化・設定 ★★★ ---
+        self._populate_project_selector()
+        # -----------------------------------------------------------------
 
+        self._load_current_project_data() # UI部品構築後に再度呼び出し、データ連携
+        # refresh_subprompt_tabs は _load_current_project_data 内で呼ばれるように変更
+
+    # --- ★★★ プロジェクト選択関連メソッド ★★★ ---
+    def _populate_project_selector(self):
+        """プロジェクト選択用コンボボックスに、利用可能なプロジェクトの一覧を設定します。
+
+        `data/` ディレクトリをスキャンし、各プロジェクトの表示名とディレクトリ名を
+        コンボボックスに登録します。現在アクティブなプロジェクトが選択された状態にします。
+        """
+        self.project_selector_combo.blockSignals(True) # 更新中のシグナル発行を抑制
+        self.project_selector_combo.clear()
+        self._projects_list_for_combo.clear()
+
+        project_dir_names = list_project_dir_names()
+        print(f"  Populating project selector. Found project dirs: {project_dir_names}")
+
+        current_project_found_in_list = False
+        for dir_name in project_dir_names:
+            settings = load_project_settings(dir_name) # 表示名を取得するため設定をロード
+            display_name = dir_name # フォールバック
+            if settings and settings.get("project_display_name"):
+                display_name = settings.get("project_display_name")
+            
+            self._projects_list_for_combo.append((display_name, dir_name))
+            self.project_selector_combo.addItem(display_name) # コンボボックスには表示名を追加
+            if dir_name == self.current_project_dir_name:
+                self.project_selector_combo.setCurrentText(display_name)
+                current_project_found_in_list = True
+                print(f"    Set current project in combo: '{display_name}' (dir: '{dir_name}')")
+
+        if not current_project_found_in_list and project_dir_names:
+            # 現在のプロジェクトがリストにないが、他のプロジェクトはある場合
+            # (例: config.jsonのactive_projectが不正だった場合など)
+            # リストの最初のプロジェクトをアクティブにする
+            print(f"  Warning: Current project '{self.current_project_dir_name}' not in valid list. Selecting first available.")
+            if self._projects_list_for_combo:
+                first_proj_display_name, first_proj_dir_name = self._projects_list_for_combo[0]
+                self.project_selector_combo.setCurrentText(first_proj_display_name)
+                # ここで実際にプロジェクトを切り替える処理を呼ぶ（_on_project_selected_by_display_name を直接呼ぶか、共通処理を切り出す）
+                self._switch_project(first_proj_dir_name) # プロジェクト切り替え実行
+
+        elif not project_dir_names: # プロジェクトが一つもない場合
+             print("  No projects found to populate selector.")
+             # ここで「プロジェクトなし」のような項目を追加したり、新規作成を促すUIを出すことも可能
+             self.project_selector_combo.addItem("(プロジェクトがありません)")
+             self.project_selector_combo.setEnabled(False) # 選択不可に
+
+        self.project_selector_combo.blockSignals(False) # シグナル発行を再開
+
+    def _on_project_selected_by_display_name(self, selected_display_name: str):
+        """プロジェクト選択コンボボックスで表示名によってプロジェクトが選択された際のスロット。
+
+        選択された表示名に対応するディレクトリ名を見つけ、プロジェクトを切り替えます。
+
+        Args:
+            selected_display_name (str): コンボボックスで選択されたプロジェクトの表示名。
+        """
+        print(f"--- MainWindow: Project selected by display name: '{selected_display_name}' ---")
+        selected_dir_name = None
+        for display_name, dir_name in self._projects_list_for_combo:
+            if display_name == selected_display_name:
+                selected_dir_name = dir_name
+                break
+        
+        if selected_dir_name and selected_dir_name != self.current_project_dir_name:
+            self._switch_project(selected_dir_name)
+        elif not selected_dir_name:
+            print(f"  Error: Could not find directory name for display name '{selected_display_name}'.")
+            # 念のためコンボボックスを再描画
+            self._populate_project_selector()
+
+
+    def _switch_project(self, new_project_dir_name: str):
+        """指定されたディレクトリ名のプロジェクトに実際に切り替える内部メソッド。
+
+        関連する設定の更新、データの再読み込み、UIの更新を行います。
+
+        Args:
+            new_project_dir_name (str): 切り替え先のプロジェクトのディレクトリ名。
+        """
+        print(f"--- MainWindow: Switching project to '{new_project_dir_name}' ---")
+        self.current_project_dir_name = new_project_dir_name
+        
+        # グローバル設定のアクティブプロジェクトを更新・保存
+        self.global_config["active_project"] = self.current_project_dir_name
+        if not save_global_config(self.global_config):
+            QMessageBox.warning(self, "保存エラー", "アクティブプロジェクトの変更の保存に失敗しました。")
+            # ここで元のプロジェクトに戻すなどの処理も検討できる
+            return
+
+        self._load_current_project_data() # 新しいプロジェクトのデータをロードし、UI部品も更新
+        # _load_current_project_data内でDataManagementWidgetのset_projectとrefresh_subprompt_tabsが呼ばれる
+
+        # コンボボックスの選択状態も（もし必要なら）再確認・設定
+        # 通常は_on_project_selected_by_display_nameから呼ばれるので不要だが、直接呼ばれた場合のため
+        current_display_name_in_combo = ""
+        for disp_name, dir_name_map in self._projects_list_for_combo:
+            if dir_name_map == self.current_project_dir_name:
+                current_display_name_in_combo = disp_name
+                break
+        if self.project_selector_combo.currentText() != current_display_name_in_combo and current_display_name_in_combo:
+            self.project_selector_combo.blockSignals(True)
+            self.project_selector_combo.setCurrentText(current_display_name_in_combo)
+            self.project_selector_combo.blockSignals(False)
+
+        print(f"--- MainWindow: Project switched successfully to '{new_project_dir_name}' ---")
+    # ---------------------------------------------
+
+    # (configure_gemini, open_settings_dialog, on_send_button_clicked,
+    #  サブプロンプト関連メソッド, データ管理ウィジェット連携メソッド, closeEvent
+    #  のDocstringsとコードは前回のままで変更なしのため、ここでは省略します)
+    # ... configure_gemini ...
+    # ... open_settings_dialog ...
+    # ... on_send_button_clicked ...
+    # ... refresh_subprompt_tabs ...
+    # ... _on_subprompt_tab_changed ...
+    # ... _handle_subprompt_check_change ...
+    # ... add_subprompt_category ...
+    # ... add_or_edit_subprompt ...
+    # ... delete_subprompt ...
+    # ... _handle_add_data_category_request ...
+    # ... _handle_add_data_item_request ...
+    # ... closeEvent ...
+
+    # --- 省略したメソッドのDocstringsとシグネチャのみ再掲（内容は前回と同じ） ---
     def configure_gemini(self):
         """Gemini APIクライアントを設定します。OS資格情報からAPIキーを取得します。"""
         api_key_from_os = get_os_api_key()
@@ -350,16 +494,10 @@ class MainWindow(QWidget):
                 self.current_project_settings = updated_p_conf
                 save_project_settings(self.current_project_dir_name, self.current_project_settings)
                 print(f"プロジェクト '{self.current_project_dir_name}' の設定が更新・保存されました。")
-
-            # UIへの即時反映
-            self.system_prompt_input_main.setPlainText(
-                self.current_project_settings.get("main_system_prompt", "")
-            )
+            self.system_prompt_input_main.setPlainText(self.current_project_settings.get("main_system_prompt", ""))
             display_name = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
             self.setWindowTitle(f"TRPG AI Tool - {display_name}")
-            self.configure_gemini() # APIキーやモデルが変更された可能性があるので再設定
-            # 利用可能モデルリストが変更された場合、サブプロンプトダイアログなども再初期化が必要になるが、
-            # 現状は SettingsDialog 内部で最新のリストが使われるため、ここでは直接影響しない。
+            self.configure_gemini()
             print("設定ダイアログの変更が適用されました。")
 
     def on_send_button_clicked(self):
@@ -591,14 +729,8 @@ class MainWindow(QWidget):
         initial_prompt_data = {"name": "", "prompt": "", "model": ""} # 新規作成時のデフォルト
         if is_editing_mode and target_category in self.subprompts and name_to_edit in self.subprompts[target_category]:
             initial_prompt_data = self.subprompts[target_category][name_to_edit].copy()
-            initial_prompt_data["name"] = name_to_edit # 編集時は名前も渡す
-        
-        dialog = SubPromptEditDialog(
-            initial_data=initial_prompt_data,
-            parent=self,
-            is_editing=is_editing_mode,
-            current_category=target_category
-        )
+            initial_prompt_data["name"] = name_to_edit
+        dialog = SubPromptEditDialog(initial_data=initial_prompt_data, parent=self, is_editing=is_editing_mode, current_category=target_category)
         if dialog.exec_() == QDialog.Accepted:
             new_sub_data = dialog.get_data()
             new_sub_name = new_sub_data.pop("name") # 名前はキーとして使用
@@ -690,9 +822,6 @@ class MainWindow(QWidget):
 if __name__ == '__main__':
     """MainWindowの基本的な表示・インタラクションテスト。"""
     app = QApplication(sys.argv)
-    # アプリケーションのスタイル設定 (任意)
-    # app.setStyle("Fusion")
-
     main_win = MainWindow()
     main_win.show()
     sys.exit(app.exec_())

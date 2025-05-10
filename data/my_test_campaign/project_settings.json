@@ -1,5 +1,5 @@
 {
     "project_display_name": "私のテストキャンペーン",
     "main_system_prompt": "これはテストキャンペーンのメインプロンプトです。",
-    "model": "gemini-pro"
+    "model": "gemini-1.5-pro-latest"
 }

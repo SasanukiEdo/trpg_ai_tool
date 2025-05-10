@@ -1,0 +1,5 @@
+{
+    "project_display_name": "no_such_project_exists_here",
+    "main_system_prompt": "あなたは優秀なAIアシスタントです。",
+    "model": "gemini-1.5-pro-latest"
+}
