@@ -582,7 +582,7 @@ class MainWindow(QWidget):
         new_project_settings["model"] = self.global_config.get("default_model",
                                                                DEFAULT_PROJECT_SETTINGS["model"])
         if not save_project_settings(dir_name, new_project_settings):
-            QMessageBox.critical(None, "作成エラー", f"プロジェクト設定ファイル ({dir_name}/{PROJECT_SETTINGS_FILENAME}) の作成に失敗しました。")
+            QMessageBox.critical(None, "作成エラー", f"プロジェクト設定ファイル ({dir_name}/{display_name}) の作成に失敗しました。")
             return False
         print(f"  Created project settings for '{dir_name}'.")
 

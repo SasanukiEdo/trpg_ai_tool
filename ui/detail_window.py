@@ -4,7 +4,7 @@
 
 このモジュールは `DetailWindow` クラスを定義しており、アイテムの名前、説明、
 履歴、タグ、画像などの属性をユーザーが確認・変更できるようにします。
-また、AIによる説明文の編集支援機能も統合されています。
+AIによる説明文の編集支援機能や、AI支援による履歴追記機能、履歴の削除機能も統合されています。
 """
 
 import sys
@@ -12,9 +12,9 @@ import os
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit,
     QPushButton, QScrollArea, QFrame, QFileDialog, QMessageBox, QDialog,
-    QSizePolicy, QSpacerItem, QInputDialog # QInputDialog は履歴追加では使わなくなるが、他の用途で残す可能性も
+    QSizePolicy, QSpacerItem, QInputDialog, QApplication
 )
-from PyQt5.QtGui import QPixmap, QImageReader # QImageReader を追加
+from PyQt5.QtGui import QPixmap, QImageReader
 from PyQt5.QtCore import Qt, pyqtSignal
 
 # --- プロジェクトルートをパスに追加 ---
@@ -33,7 +33,7 @@ class DetailWindow(QWidget):
 
     アイテムの属性（名前、説明、履歴、タグ、画像）を表示し、
     ユーザーによる編集と保存を可能にします。
-    AIによる説明文の編集支援機能や、AI支援による履歴追記機能も呼び出せます。
+    AIによる説明文の編集支援機能や、AI支援による履歴追記機能、履歴の削除機能も提供します。
 
     Attributes:
         dataSaved (pyqtSignal): アイテムデータが保存されたときに発行されるシグナル。
@@ -170,7 +170,8 @@ class DetailWindow(QWidget):
         self.save_button.setEnabled(False)
 
     def _build_detail_view(self):
-        """`self.item_data` に基づいて詳細表示UIを動的に構築します。"""
+        """`self.item_data` に基づいて詳細表示UIを動的に構築します。
+        """
         if not self.item_data: return
 
         # 名前
@@ -181,10 +182,45 @@ class DetailWindow(QWidget):
         ai_update_button = QPushButton("AIで「説明/メモ」を編集支援"); ai_update_button.clicked.connect(self._on_ai_update_description_clicked); self.content_layout.addWidget(ai_update_button)
 
         # 履歴
-        history_label = QLabel("履歴:"); history_view = QTextEdit(); history_view.setReadOnly(True); history_text = "\n".join([f"[{h.get('timestamp', '日時不明')}] {h.get('entry', '')}" for h in self.item_data.get("history", [])]); history_view.setPlainText(history_text if history_text else "履歴はありません。"); history_view.setMinimumHeight(80); self.detail_widgets['history_view'] = history_view; self.content_layout.addWidget(history_label); self.content_layout.addWidget(history_view)
-        add_history_button = QPushButton("AIで履歴エントリを生成・追加"); add_history_button.setToolTip("AIの支援を受けて新しい履歴エントリを作成し、追加します。")
-        add_history_button.clicked.connect(self.add_history_entry_with_ai_ui) # 変更
-        self.content_layout.addWidget(add_history_button)
+        history_label = QLabel("履歴:")
+        self.content_layout.addWidget(history_label) # ラベルを先に追加
+
+        history_view_container = QWidget() # 履歴表示とボタンをまとめるコンテナ
+        history_view_layout = QVBoxLayout(history_view_container)
+        history_view_layout.setContentsMargins(0,0,0,0)
+
+        self.history_view_text_edit = QTextEdit() # QTextEditはメンバ変数に
+        self.history_view_text_edit.setReadOnly(True)
+        history_entries = self.item_data.get("history", [])
+        history_display_html = ""
+        if not history_entries:
+            history_display_html = "履歴はありません。"
+        else:
+            for i, h_entry_dict in enumerate(history_entries):
+                entry_text_for_display = h_entry_dict.get('entry', '(内容なし)')
+                # タイムスタンプは表示しない、代わりに通し番号を表示
+                formatted_entry_text = entry_text_for_display.replace("\n", "<br>")
+                history_display_html += f"<b>({i + 1})</b> {formatted_entry_text}"
+                if i < len(history_entries) - 1: # 最後の要素以外には区切り線
+                    history_display_html += "<hr>" # 区切り線
+        self.history_view_text_edit.setHtml(history_display_html) # HTMLとしてセット
+        self.history_view_text_edit.setMinimumHeight(100) # 高さを調整
+        self.detail_widgets['history_view'] = self.history_view_text_edit # 保存対象外
+        history_view_layout.addWidget(self.history_view_text_edit)
+
+        history_buttons_layout = QHBoxLayout()
+        add_history_button = QPushButton("AIで履歴エントリを生成・追加")
+        add_history_button.setToolTip("AIの支援を受けて新しい履歴エントリを作成し、追加します。")
+        add_history_button.clicked.connect(self.add_history_entry_with_ai_ui)
+        history_buttons_layout.addWidget(add_history_button)
+
+        delete_history_button = QPushButton("履歴を削除...") # ...でダイアログが出ることを示唆
+        delete_history_button.setToolTip("指定した番号の履歴エントリを削除します。")
+        delete_history_button.clicked.connect(self.delete_history_entry_ui)
+        history_buttons_layout.addWidget(delete_history_button)
+        history_buttons_layout.addStretch()
+        history_view_layout.addLayout(history_buttons_layout)
+        self.content_layout.addWidget(history_view_container)
 
         # タグ
         tags_label = QLabel("タグ (カンマ区切り):"); tags_edit = QLineEdit(", ".join(self.item_data.get("tags", []))); self.detail_widgets['tags'] = tags_edit; self.content_layout.addWidget(tags_label); self.content_layout.addWidget(tags_edit)
@@ -251,14 +287,8 @@ class DetailWindow(QWidget):
         if not self.ai_edit_dialog: return
 
         instruction_text = self.ai_edit_dialog.get_instruction_text()
-        if not instruction_text.strip():
-            QMessageBox.warning(self.ai_edit_dialog, "入力エラー", "AIへの指示を入力してください。")
-            return
-
-        ai_model_to_use = self.main_config.get("model", "gemini-1.5-pro-latest")
-        print(f"DetailWindow: Requesting AI suggestion (Mode: {self.ai_edit_dialog_mode}) with model '{ai_model_to_use}'. Instruction length: {len(instruction_text)}")
-        self.ai_edit_dialog.show_processing_message(True)
-
+        if not instruction_text.strip(): QMessageBox.warning(self.ai_edit_dialog, "入力エラー", "AIへの指示を入力してください。"); return
+        ai_model_to_use = self.main_config.get("model", "gemini-1.5-pro-latest"); self.ai_edit_dialog.show_processing_message(True)
         from core.gemini_handler import generate_response as call_gemini, is_configured as gemini_is_configured
         if not gemini_is_configured():
             QMessageBox.critical(self.ai_edit_dialog, "APIエラー", "Gemini APIが設定されていません。"); self.ai_edit_dialog.show_processing_message(False); return
@@ -398,8 +428,57 @@ class DetailWindow(QWidget):
         self.ai_edit_dialog = None; self.ai_edit_dialog_mode = None # クリア
 
 
-    # save_details, closeEvent は変更なしのため省略
-    # ... (save_details, closeEvent のコードは変更なし)
+
+    # 履歴削除UIメソッド
+    def delete_history_entry_ui(self):
+        """「履歴を削除」ボタンがクリックされたときの処理。
+        ユーザーに番号で削除対象の履歴を指定させ、削除を実行します。
+        """
+        if not self.item_data or not self.current_category or not self.current_item_id or not self.current_project_dir_name:
+            QMessageBox.warning(self, "エラー", "履歴を追加するアイテムが選択されていません。")
+            return
+
+        history_list = self.item_data.get("history", [])
+        if not history_list:
+            QMessageBox.information(self, "履歴なし", "削除できる履歴がありません。")
+            return
+
+        # ユーザーに削除する履歴の番号を入力させる
+        # 履歴は1から始まる番号で表示されている想定
+        num_entries = len(history_list)
+        entry_number, ok = QInputDialog.getInt(
+            self, "履歴削除",
+            f"削除する履歴の番号を入力してください (1～{num_entries}):",
+            min=1, max=num_entries, value=1
+        )
+
+        if ok:
+            index_to_delete = entry_number - 1 # 0ベースのインデックスに変換
+            if 0 <= index_to_delete < num_entries:
+                entry_to_delete = history_list[index_to_delete]
+                entry_text_preview = entry_to_delete.get('entry', '(内容不明)')[:30] + "..." \
+                                     if len(entry_to_delete.get('entry', '')) > 30 \
+                                     else entry_to_delete.get('entry', '(内容不明)')
+
+                reply = QMessageBox.question(self, "履歴削除確認",
+                                           f"以下の履歴エントリ ({entry_number}) を本当に削除しますか？\n\n「{entry_text_preview}」\n\nこの操作は元に戻せません。",
+                                           QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if reply == QMessageBox.Yes:
+                    # 履歴リストから該当エントリを削除 (IDで照合がより確実だが、今回はインデックスで)
+                    # もし add_history_entry で履歴にIDを振っていれば、そのIDで削除する方が良い
+                    # ここでは、リストから直接削除する
+                    del self.item_data['history'][index_to_delete]
+
+                    if update_item(self.current_project_dir_name, self.current_category, self.current_item_id, {"history": self.item_data['history']}):
+                        QMessageBox.information(self, "履歴削除完了", f"履歴エントリ ({entry_number}) を削除しました。")
+                        self.load_data(self.current_category, self.current_item_id) # UIを再読み込み
+                    else:
+                        QMessageBox.warning(self, "履歴削除エラー", "履歴の削除内容の保存に失敗しました。")
+                        # 失敗した場合、メモリ上の item_data['history'] を元に戻す方が安全
+                        # (今回は簡略化のため、再ロードに任せる)
+            else:
+                QMessageBox.warning(self, "入力エラー", f"無効な番号です。1から{num_entries}の間で指定してください。")
+
     def save_details(self):
         """「変更を保存」ボタンがクリックされたときの処理。編集内容をファイルに保存します。"""
         if not self.item_data or not self.current_category or not self.current_item_id or not self.current_project_dir_name:
@@ -468,37 +547,19 @@ class DetailWindow(QWidget):
 if __name__ == '__main__':
     """DetailWindow の基本的な表示・インタラクションテスト。"""
     app = QApplication(sys.argv)
-
-    # --- テスト用のダミーデータと環境準備 ---
-    test_project_name_detail = "detail_window_test_project_hist" # 別のプロジェクト名でテスト
-    test_category_name_detail = "テストキャラ履歴"; test_item_id_detail = "char-test-hist-001"
-    from core.config_manager import save_project_settings as sps, DEFAULT_PROJECT_SETTINGS as DPS # エイリアス
+    test_project_name_detail = "detail_window_test_hist_del"; test_category_name_detail = "テストキャラ履歴削除"; test_item_id_detail = "char-test-hist-del-001"
+    from core.config_manager import save_project_settings as sps, DEFAULT_PROJECT_SETTINGS as DPS
     sps(test_project_name_detail, DPS.copy())
     from core.data_manager import create_category as dmcc, add_item as dmai
     dmcc(test_project_name_detail, test_category_name_detail)
-    dmai(test_project_name_detail, test_category_name_detail, {"id": test_item_id_detail, "name": "履歴テスト勇者", "description": "初期説明。", "history": [], "tags": ["テスト"], "image_path": None})
+    dmai(test_project_name_detail, test_category_name_detail, {"id": test_item_id_detail, "name": "履歴削除テスト勇者", "description": "初期説明。", "history": [{"id":"dummy-uuid-1", "timestamp":"2024-01-01", "entry":"冒険開始"}, {"id":"dummy-uuid-2", "timestamp":"2024-01-02", "entry":"ドラゴン遭遇"}], "tags": ["テスト"], "image_path": None})
     main_test_config = {"model": "gemini-1.5-flash-latest"}
     detail_win = DetailWindow(main_config=main_test_config, project_dir_name=test_project_name_detail)
-    detail_win.load_data(test_category_name_detail, test_item_id_detail) # データをロード
-
-    # シグナル接続テスト (コンソールに出力)
-    detail_win.dataSaved.connect(
-        lambda cat, iid: print(f"\n--- Signal: dataSaved received for Category='{cat}', ItemID='{iid}' ---")
-    )
-    detail_win.windowClosed.connect(
-        lambda: print("\n--- Signal: windowClosed received ---")
-    )
-
-    detail_win.show()
-    app_exit_code = app.exec_()
-
-    # --- テスト後のクリーンアップ ---
-    import shutil
-    test_project_dir_to_remove = os.path.join("data", test_project_name_detail)
-    if os.path.exists(test_project_dir_to_remove):
-        print(f"\nCleaning up test project directory: {test_project_dir_to_remove}")
-        shutil.rmtree(test_project_dir_to_remove)
-    # -----------------------------
-
+    detail_win.load_data(test_category_name_detail, test_item_id_detail)
+    detail_win.dataSaved.connect( lambda cat, iid: print(f"\n--- Signal: dataSaved received for Category='{cat}', ItemID='{iid}' ---"))
+    detail_win.windowClosed.connect( lambda: print("\n--- Signal: windowClosed received ---"))
+    detail_win.show(); app_exit_code = app.exec_()
+    import shutil; test_project_dir_to_remove = os.path.join("data", test_project_name_detail)
+    if os.path.exists(test_project_dir_to_remove): shutil.rmtree(test_project_dir_to_remove)
     sys.exit(app_exit_code)
 

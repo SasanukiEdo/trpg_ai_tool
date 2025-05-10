@@ -392,7 +392,7 @@ def delete_item(project_dir_name: str, category_name: str, item_id: str) -> bool
 # --- 履歴とタグのヘルパー関数 ---
 
 def add_history_entry(project_dir_name: str, category_name: str, item_id: str, entry_text: str) -> bool:
-    """指定されたアイテムに新しい履歴エントリ（タイムスタンプ付き）を追加します。
+    """指定されたアイテムに新しい履歴エントリ（IDとタイムスタンプ付き）を追加します。
 
     Args:
         project_dir_name (str): 対象プロジェクトのディレクトリ名。
@@ -411,14 +411,16 @@ def add_history_entry(project_dir_name: str, category_name: str, item_id: str, e
         print("Error: History entry text must be a string.")
         return False
 
+    history_id = str(uuid.uuid4()) # 各履歴エントリに一意のIDを付与
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    new_entry = {"timestamp": timestamp, "entry": entry_text}
+    new_entry = {"id": history_id, "timestamp": timestamp, "entry": entry_text.strip()} # strip()で前後の空白除去
 
     if 'history' not in item or not isinstance(item['history'], list):
         item['history'] = [] # 履歴フィールドがなければリストで初期化
     item['history'].append(new_entry)
 
     # アイテム全体を更新する形で履歴を保存
+    # update_item は item_data の 'history' フィールド全体を上書きする
     return update_item(project_dir_name, category_name, item_id, {"history": item['history']})
 
 def update_tags(project_dir_name: str, category_name: str, item_id: str, tags_list: list[str]) -> bool:
