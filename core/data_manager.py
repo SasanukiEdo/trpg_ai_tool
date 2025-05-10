@@ -63,6 +63,46 @@ def get_category_filepath(project_dir_name: str, category_name: str) -> str:
     filename = f"{category_name}.json"
     return os.path.join(gamedata_dir, filename)
 
+# プロジェクト画像ディレクトリ関連ヘルパー
+IMAGES_SUBDIR_NAME = "images"
+"""str: 各プロジェクトディレクトリ内で、画像ファイルが格納されるサブディレクトリの名前。"""
+
+def get_project_images_path(project_dir_name: str) -> str:
+    """指定されたプロジェクトの画像保存用サブディレクトリ (images/) のフルパスを返します。
+
+    Args:
+        project_dir_name (str): 対象プロジェクトのディレクトリ名。
+
+    Returns:
+        str: プロジェクトの images ディレクトリのフルパス。
+    """
+    if not project_dir_name:
+        print("Warning: project_dir_name is empty in get_project_images_path.")
+    # get_project_dir_path は config_manager にあるので、直接 PROJECTS_BASE_DIR を使うか、
+    # data_manager 内でプロジェクトルートパスを組み立てる
+    # ここでは PROJECTS_BASE_DIR を使う想定 (data_manager.py の先頭で定義されている想定)
+    return os.path.join(PROJECTS_BASE_DIR, project_dir_name, IMAGES_SUBDIR_NAME)
+
+def ensure_project_images_dir_exists(project_dir_name: str) -> str | None:
+    """指定されたプロジェクトの画像保存用サブディレクトリが存在することを確認し、なければ作成します。
+
+    Args:
+        project_dir_name (str): 対象プロジェクトのディレクトリ名。
+
+    Returns:
+        str | None: 画像保存用ディレクトリのフルパス。作成に失敗した場合は None。
+    """
+    images_dir_path = get_project_images_path(project_dir_name)
+    try:
+        if not os.path.exists(images_dir_path):
+            os.makedirs(images_dir_path, exist_ok=True)
+            print(f"Created images directory for project '{project_dir_name}': {images_dir_path}")
+        return images_dir_path
+    except Exception as e:
+        print(f"Error ensuring/creating images directory for project '{project_dir_name}': {e}")
+        return None
+
+
 # --- カテゴリ管理 ---
 
 def list_categories(project_dir_name: str) -> list[str]:

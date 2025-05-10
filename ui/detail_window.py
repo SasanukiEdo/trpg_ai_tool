@@ -326,15 +326,56 @@ class DetailWindow(QWidget):
 
 
     def select_image_file(self):
-        """「画像を選択」ボタンがクリックされたときの処理。ファイルダイアログを開きます。"""
-        if not self.item_data: return
-        file_path, _ = QFileDialog.getOpenFileName(
+        """「画像を選択」ボタンがクリックされたときの処理。
+        ファイルダイアログを開き、選択された画像をプロジェクトのimagesフォルダにコピーし、
+        アイテムデータには相対パスを保存します。
+        """
+        if not self.item_data or not self.current_project_dir_name:
+            QMessageBox.warning(self, "エラー", "画像を設定するアイテムまたはプロジェクトが選択されていません。")
+            return
+
+        source_file_path, _ = QFileDialog.getOpenFileName(
             self, "画像ファイルを選択", "",
             "画像ファイル (*.png *.jpg *.jpeg *.bmp *.gif)"
         )
-        if file_path:
-            self.item_data['image_path'] = file_path # ローカルデータにパスを保存
-            self._update_image_preview(file_path)
+
+        if source_file_path:
+            # 1. プロジェクトの画像用ディレクトリパスを取得し、なければ作成
+            #    core.data_manager から ensure_project_images_dir_exists をインポートしておくこと
+            from core.data_manager import ensure_project_images_dir_exists, IMAGES_SUBDIR_NAME
+            
+            project_images_dir_abs_path = ensure_project_images_dir_exists(self.current_project_dir_name)
+            if not project_images_dir_abs_path:
+                QMessageBox.critical(self, "エラー", "プロジェクトの画像保存用ディレクトリの作成に失敗しました。")
+                return
+
+            # 2. コピー先のファイルパスを決定 (ファイル名はそのまま)
+            file_name_only = os.path.basename(source_file_path)
+            destination_file_abs_path = os.path.join(project_images_dir_abs_path, file_name_only)
+
+            # 3. ファイルをコピー (shutil をインポートしておくこと)
+            #    既に同名ファイルが存在する場合の処理も考慮 (上書き確認など)
+            #    今回はシンプルに上書きする
+            import shutil
+            try:
+                # 同じファイルならコピーしない (移動やリネームの場合を考慮)
+                if not os.path.exists(destination_file_abs_path) or not os.path.samefile(source_file_path, destination_file_abs_path):
+                    shutil.copy2(source_file_path, destination_file_abs_path) # copy2はメタデータもコピー
+                    print(f"Image copied from '{source_file_path}' to '{destination_file_abs_path}'")
+                else:
+                    print(f"Image '{file_name_only}' already exists in project and is the same file. No copy needed.")
+            except Exception as e:
+                QMessageBox.critical(self, "コピーエラー", f"画像のプロジェクトフォルダへのコピーに失敗しました:\n{e}")
+                return
+
+            # 4. アイテムデータに相対パスを保存
+            #    相対パスは images/ファイル名 の形式
+            relative_image_path = os.path.join(IMAGES_SUBDIR_NAME, file_name_only).replace("\\", "/") # OSパス区切りをスラッシュに統一
+            self.item_data['image_path'] = relative_image_path
+            print(f"  Saved relative image path: {relative_image_path}")
+
+            # 5. プレビューを更新
+            self._update_image_preview(relative_image_path) # 相対パスを渡す
 
     def clear_image_file(self):
         """「画像をクリア」ボタンがクリックされたときの処理。画像パスをクリアします。"""
@@ -342,43 +383,60 @@ class DetailWindow(QWidget):
         self.item_data['image_path'] = None
         self._update_image_preview(None)
 
-    def _update_image_preview(self, image_path: str | None):
-        """指定された画像パスに基づいて画像プレビューを更新します。
+    def _update_image_preview(self, relative_image_path: str | None):
+        """指定された相対画像パスに基づいて画像プレビューを更新します。
+        相対パスはプロジェクトルートからのパス (例: 'images/キャラ絵.png') とします。
 
         Args:
-            image_path (str | None): 表示する画像のパス。Noneの場合はプレビューをクリア。
+            relative_image_path (str | None): 表示する画像のプロジェクト相対パス。
+                                            Noneの場合はプレビューをクリア。
         """
         if 'image_preview' not in self.detail_widgets or 'image_path_display' not in self.detail_widgets:
             return
+        if not self.current_project_dir_name: # プロジェクト名がないと絶対パスを解決できない
+            self.img_preview_label.setText("画像プレビュー (プロジェクト未指定)")
+            self.img_path_label.setText("画像パス: (プロジェクト未指定)")
+            return
 
-        if image_path and os.path.exists(image_path):
+        absolute_image_path = None
+        if relative_image_path:
+            # プロジェクトルートからの相対パスなので、プロジェクトベースディレクトリと結合
+            # core.data_manager から PROJECTS_BASE_DIR をインポートするか、
+            # または MainWindow 経由でプロジェクトの絶対パスを取得する。
+            # ここでは get_project_images_path のように組み立てる。
+            from core.data_manager import PROJECTS_BASE_DIR # data_managerからインポート
+            project_root_abs_path = os.path.join(PROJECTS_BASE_DIR, self.current_project_dir_name)
+            absolute_image_path = os.path.join(project_root_abs_path, relative_image_path)
+            print(f"  Attempting to load image from absolute path: {absolute_image_path} (relative: {relative_image_path})")
+
+
+        if absolute_image_path and os.path.exists(absolute_image_path):
             try:
-                # 画像サイズを制限して読み込む (QImageReader を使用)
-                reader = QImageReader(image_path)
+                reader = QImageReader(absolute_image_path)
                 if reader.canRead():
-                    # プレビューラベルのサイズに合わせてリサイズ
-                    preview_width = self.img_preview_label.width() - 10 # 少しマージン
+                    preview_width = self.img_preview_label.width() - 10
                     preview_height = self.img_preview_label.height() - 10
-                    if preview_width < 50: preview_width = 150 # 最小幅
-                    if preview_height < 50: preview_height = 100 # 最小高さ
-
+                    if preview_width < 50: preview_width = 150
+                    if preview_height < 50: preview_height = 100
                     reader.setScaledSize(reader.size().scaled(preview_width, preview_height, Qt.KeepAspectRatio))
                     pixmap = QPixmap.fromImageReader(reader)
-
                     if not pixmap.isNull():
                         self.img_preview_label.setPixmap(pixmap)
-                        self.img_path_label.setText(f"画像パス: {image_path}")
+                        self.img_path_label.setText(f"画像パス: {relative_image_path}") # 表示は相対パスのまま
                     else:
                         self.img_preview_label.setText(f"画像プレビュー失敗:\n{reader.errorString()}")
-                        self.img_path_label.setText(f"画像パス(読込エラー): {image_path}")
-                else: # canRead() が False
-                    self.img_preview_label.setText(f"画像形式非対応:\n{os.path.basename(image_path)}")
-                    self.img_path_label.setText(f"画像パス(形式非対応): {image_path}")
+                        self.img_path_label.setText(f"画像パス(読込エラー): {relative_image_path}")
+                else:
+                    self.img_preview_label.setText(f"画像形式非対応:\n{os.path.basename(absolute_image_path)}")
+                    self.img_path_label.setText(f"画像パス(形式非対応): {relative_image_path}")
             except Exception as e:
-                print(f"Error updating image preview for {image_path}: {e}")
-                self.img_preview_label.setText(f"画像表示エラー:\n{os.path.basename(image_path)}")
-                self.img_path_label.setText(f"画像パス(表示エラー): {image_path}")
-        else:
+                print(f"Error updating image preview for {absolute_image_path}: {e}")
+                self.img_preview_label.setText(f"画像表示エラー:\n{os.path.basename(absolute_image_path)}")
+                self.img_path_label.setText(f"画像パス(表示エラー): {relative_image_path}")
+        elif relative_image_path: # パスはあるがファイルが見つからない
+            self.img_preview_label.setText(f"画像ファイル未発見:\n{relative_image_path}")
+            self.img_path_label.setText(f"画像パス(未発見): {relative_image_path}")
+        else: # relative_image_path が None
             self.img_preview_label.setText("画像プレビューなし")
             self.img_path_label.setText("画像パス: (選択されていません)")
 
