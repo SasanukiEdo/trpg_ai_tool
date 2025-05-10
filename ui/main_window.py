@@ -8,7 +8,7 @@
 
 プロジェクト単位でのデータ管理の基盤となり、アクティブなプロジェクトの
 設定やデータを読み込み、UIに反映する役割も担います。
-プロジェクトの選択機能、新規作成機能も提供します。
+プロジェクトの選択、新規作成、削除機能も提供します。
 """
 
 import sys
@@ -31,9 +31,10 @@ if project_root not in sys.path:
 from core.config_manager import (
     load_global_config, save_global_config,
     load_project_settings, save_project_settings,
-    list_project_dir_names, # プロジェクト一覧取得用 (将来的に使用)
-    DEFAULT_PROJECT_SETTINGS, # プロジェクト初期化用
-    get_project_dir_path # ディレクトリ名重複チェック用
+    list_project_dir_names,
+    DEFAULT_PROJECT_SETTINGS,
+    get_project_dir_path,
+    delete_project_directory
 )
 from core.subprompt_manager import load_subprompts, save_subprompts, DEFAULT_SUBPROMPTS_DATA # 新規作成時用
 from core.data_manager import get_project_gamedata_path, create_category, get_item  # 新規作成時用
@@ -157,6 +158,7 @@ class MainWindow(QWidget):
         subprompt_tab_widget (QTabWidget): サブプロンプトカテゴリ表示用タブ。
         data_management_widget (DataManagementWidget): データ管理エリア用ウィジェット。
         new_project_button (QPushButton): 新規プロジェクト作成ダイアログを開くボタン。
+        delete_project_button (QPushButton): 現在アクティブなプロジェクトを削除するボタン。
     """
 
     def __init__(self):
@@ -236,8 +238,8 @@ class MainWindow(QWidget):
 
     def init_ui(self):
         """メインウィンドウのユーザーインターフェースを構築します。"""
-        self.setWindowTitle(f"TRPG AI Tool - 初期化中...") # _load_current_project_dataで更新される
-        self.setGeometry(200, 200, 1300, 850) # ウィンドウサイズを少し調整
+        self.setWindowTitle(f"TRPG AI Tool - 初期化中...")
+        self.setGeometry(200, 200, 1300, 850)
 
         main_layout = QHBoxLayout(self)
 
@@ -273,78 +275,126 @@ class MainWindow(QWidget):
 
         # --- 右側エリア (設定ボタン、サブプロンプト、データ管理) ---
         right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
+        right_layout = QVBoxLayout(right_widget) # 右側全体の縦レイアウト
 
-        # --- ★★★ 右上: プロジェクト関連コントロールのレイアウト ★★★ ---
-        project_controls_layout = QHBoxLayout()
-        project_controls_layout.addWidget(QLabel("プロジェクト:"))
+        # --- 1. プロジェクト管理セクション ---
+        project_management_header_layout = QHBoxLayout()
+        project_management_header_layout.addWidget(QLabel("<b>プロジェクト管理:</b>"))
+        project_management_header_layout.addStretch() # ラベルとボタンの間を広げる
+        self.new_project_button = QPushButton("新規作成")
+        self.new_project_button.setToolTip("新しいプロジェクトを作成します。")
+        self.new_project_button.clicked.connect(self._on_new_project_button_clicked)
+        project_management_header_layout.addWidget(self.new_project_button)
+        self.delete_project_button = QPushButton("削除")
+        self.delete_project_button.setToolTip("現在選択されているプロジェクトを削除します。")
+        self.delete_project_button.clicked.connect(self._on_delete_project_button_clicked)
+        project_management_header_layout.addWidget(self.delete_project_button)
+        self.settings_button = QPushButton("設定")
+        self.settings_button.setToolTip("アプリケーション全体と現在のプロジェクトの設定を行います。")
+        self.settings_button.clicked.connect(self.open_settings_dialog)
+        project_management_header_layout.addWidget(self.settings_button)
+        right_layout.addLayout(project_management_header_layout)
+
+        project_combo_layout = QHBoxLayout()
+        project_combo_layout.addWidget(QLabel("  選択中のプロジェクト:")) # 少しインデント
         self.project_selector_combo = QComboBox()
         self.project_selector_combo.setToolTip("アクティブなプロジェクトを切り替えます。")
         self.project_selector_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.project_selector_combo.activated[str].connect(self._on_project_selected_by_display_name)
-        project_controls_layout.addWidget(self.project_selector_combo, 1)
+        project_combo_layout.addWidget(self.project_selector_combo, 1)
+        right_layout.addLayout(project_combo_layout)
 
-        # --- ★★★ 新規プロジェクトボタンを追加 ★★★ ---
-        self.new_project_button = QPushButton("新規作成")
-        self.new_project_button.setToolTip("新しいプロジェクトを作成します。")
-        self.new_project_button.clicked.connect(self._on_new_project_button_clicked)
-        project_controls_layout.addWidget(self.new_project_button)
-        # --------------------------------------------
+        # --- 区切り線1 ---
+        right_layout.addWidget(self._create_separator_line())
 
-        self.settings_button = QPushButton("設定")
-        self.settings_button.setToolTip("アプリケーション全体と現在のプロジェクトの設定を行います。")
-        self.settings_button.clicked.connect(self.open_settings_dialog)
-        project_controls_layout.addWidget(self.settings_button)
-        right_layout.addLayout(project_controls_layout)
-        # -------------------------------------------------------------
-
-        # 右側を上下に分割するスプリッター
-        right_splitter = QSplitter(Qt.Vertical)
-
-        # 上部: サブシステムプロンプトエリア
-        subprompt_area_widget = QWidget()
-        subprompt_area_layout = QVBoxLayout(subprompt_area_widget)
-        subprompt_controls_layout = QHBoxLayout()
-        subprompt_controls_layout.addWidget(QLabel("サブシステムプロンプト:"))
-        subprompt_controls_layout.addStretch()
+        # --- 2. サブシステムプロンプト管理セクション ---
+        subprompt_header_layout = QHBoxLayout()
+        subprompt_header_layout.addWidget(QLabel("<b>サブシステムプロンプト管理:</b>"))
+        subprompt_header_layout.addStretch()
         self.add_subprompt_category_button = QPushButton("カテゴリ追加")
         self.add_subprompt_category_button.setToolTip("サブプロンプトの新しいカテゴリを作成します。")
         self.add_subprompt_category_button.clicked.connect(self.add_subprompt_category)
-        subprompt_controls_layout.addWidget(self.add_subprompt_category_button)
+        subprompt_header_layout.addWidget(self.add_subprompt_category_button)
         self.add_subprompt_button = QPushButton("プロンプト追加")
         self.add_subprompt_button.setToolTip("現在のカテゴリに新しいサブプロンプトを追加します。")
-        self.add_subprompt_button.clicked.connect(lambda: self.add_or_edit_subprompt()) # 引数なしで呼び出し
-        subprompt_controls_layout.addWidget(self.add_subprompt_button)
-        subprompt_area_layout.addLayout(subprompt_controls_layout)
+        self.add_subprompt_button.clicked.connect(lambda: self.add_or_edit_subprompt())
+        subprompt_header_layout.addWidget(self.add_subprompt_button)
+        right_layout.addLayout(subprompt_header_layout)
 
         self.subprompt_tab_widget = QTabWidget()
         self.subprompt_tab_widget.currentChanged.connect(self._on_subprompt_tab_changed)
-        # self.subprompt_lists は refresh_subprompt_tabs で管理される
-        subprompt_area_layout.addWidget(self.subprompt_tab_widget)
-        right_splitter.addWidget(subprompt_area_widget)
+        right_layout.addWidget(self.subprompt_tab_widget) # サブプロンプトタブを直接追加
 
-        # 下部: データ管理エリア
-        self.data_management_widget = DataManagementWidget(project_dir_name=self.current_project_dir_name, parent=self)
-        # DataManagementWidgetからのシグナルを接続
+        # --- 区切り線2 ---
+        right_layout.addWidget(self._create_separator_line())
+
+        # --- 3. アイテム管理セクション ---
+        item_management_header_layout = QHBoxLayout()
+        item_management_header_layout.addWidget(QLabel("<b>アイテム管理:</b>"))
+        item_management_header_layout.addStretch()
+        # DataManagementWidget 内部のボタンをこちらに移動（ただし、シグナル処理は DataManagementWidget に委譲する形を維持）
+        self.data_category_add_button = QPushButton("カテゴリ追加")
+        self.data_category_add_button.setToolTip("新しいデータカテゴリを作成します。")
+        self.data_category_add_button.clicked.connect(
+            lambda: self.data_management_widget.addCategoryRequested.emit() # DataWidgetのシグナルを発行
+        )
+        item_management_header_layout.addWidget(self.data_category_add_button)
+
+        self.data_item_add_button = QPushButton("アイテム追加")
+        self.data_item_add_button.setToolTip("現在のカテゴリに新しいアイテムを追加します。")
+        self.data_item_add_button.clicked.connect(
+            lambda: self.data_management_widget._request_add_item() # DataWidgetのメソッドを直接呼ぶかシグナル
+        )
+        item_management_header_layout.addWidget(self.data_item_add_button)
+
+        self.data_item_delete_checked_button = QPushButton("チェック削除") # 名前を短縮
+        self.data_item_delete_checked_button.setToolTip("現在のカテゴリでチェックされているアイテムを全て削除します。")
+        self.data_item_delete_checked_button.clicked.connect(
+            lambda: self.data_management_widget.delete_checked_items() # DataWidgetのメソッドを直接呼ぶ
+        )
+        item_management_header_layout.addWidget(self.data_item_delete_checked_button)
+        right_layout.addLayout(item_management_header_layout)
+
+        self.data_management_widget = DataManagementWidget(
+            project_dir_name=self.current_project_dir_name,
+            parent=self
+        )
+        # DataManagementWidget 内部のボタンレイアウトは非表示にする必要がある
+        self.data_management_widget.add_category_button.setVisible(False) # DataWidget内のボタンを非表示
+        self.data_management_widget.add_item_button.setVisible(False)
+        self.data_management_widget.delete_checked_items_button.setVisible(False)
+        
         self.data_management_widget.addCategoryRequested.connect(self._handle_add_data_category_request)
         self.data_management_widget.addItemRequested.connect(self._handle_add_data_item_request)
-        right_splitter.addWidget(self.data_management_widget)
-        right_splitter.setSizes([int(self.height() * 0.4), int(self.height() * 0.6)]) # 分割比率を調整
+        right_layout.addWidget(self.data_management_widget) # アイテム管理ウィジェット本体を追加
 
-        right_layout.addWidget(right_splitter)
+        # スプリッターは使わない構成に変更
+        # right_splitter = QSplitter(Qt.Vertical)
+        # ...
+        # right_layout.addWidget(right_splitter)
 
+        # ウィジェット間の伸縮性を調整
+        right_layout.setStretchFactor(self.subprompt_tab_widget, 1) # サブプロンプトタブがある程度広がる
+        right_layout.setStretchFactor(self.data_management_widget, 2) # データ管理エリアがより広がる
+        # ----------------------------------------------------
 
         main_layout.addWidget(left_widget, 7)
         main_layout.addWidget(right_widget, 3)
 
-        # --- ★★★ UI初期化後にプロジェクトコンボボックスを初期化・設定 ★★★ ---
+        # UI初期化後にプロジェクトコンボボックスを初期化・設定
         self._populate_project_selector()
-        # -----------------------------------------------------------------
+        self._load_current_project_data()
 
-        self._load_current_project_data() # UI部品構築後に再度呼び出し、データ連携
-        # refresh_subprompt_tabs は _load_current_project_data 内で呼ばれるように変更
+    def _create_separator_line(self) -> QFrame:
+        """設定セクション間の区切り線を作成して返します。"""
+        # このメソッドは SettingsDialog から MainWindow に移動しても良い
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        return line
 
-    # --- ★★★ プロジェクト選択関連メソッド ★★★ ---
+
+    # --- プロジェクト選択関連メソッド ---
     def _populate_project_selector(self):
         """プロジェクト選択用コンボボックスに、利用可能なプロジェクトの一覧を設定します。
 
@@ -383,11 +433,8 @@ class MainWindow(QWidget):
                 # ここで実際にプロジェクトを切り替える処理を呼ぶ（_on_project_selected_by_display_name を直接呼ぶか、共通処理を切り出す）
                 self._switch_project(first_proj_dir_name) # プロジェクト切り替え実行
 
-        elif not project_dir_names: # プロジェクトが一つもない場合
-             print("  No projects found to populate selector.")
-             # ここで「プロジェクトなし」のような項目を追加したり、新規作成を促すUIを出すことも可能
-             self.project_selector_combo.addItem("(プロジェクトがありません)")
-             self.project_selector_combo.setEnabled(False) # 選択不可に
+        elif not project_dir_names: self.project_selector_combo.addItem("(プロジェクトがありません)"); self.project_selector_combo.setEnabled(False); self.delete_project_button.setEnabled(False) # ★ 削除ボタンも無効化
+        else: self.delete_project_button.setEnabled(True) # プロジェクトがあれば削除ボタン有効化
 
         self.project_selector_combo.blockSignals(False) # シグナル発行を再開
 
@@ -449,7 +496,8 @@ class MainWindow(QWidget):
 
         print(f"--- MainWindow: Project switched successfully to '{new_project_dir_name}' ---")
 
-    # --- ★★★ 新規プロジェクト作成関連メソッド ★★★ ---
+
+    # --- プロジェクト作成・削除関連メソッド ---
     def _on_new_project_button_clicked(self):
         """「新規プロジェクト作成」ボタンがクリックされたときの処理。
         プロジェクト名入力ダイアログを表示し、プロジェクトを作成します。
@@ -558,12 +606,64 @@ class MainWindow(QWidget):
             # これも致命的ではないとして続行
 
         QMessageBox.information(None, "作成完了", f"プロジェクト「{display_name}」({dir_name}) を作成しました。")
-
-        # 新しいプロジェクトをアクティブにする
-        self._populate_project_selector() # まずコンボボックスを更新
-        self._switch_project(dir_name)    # 新しいプロジェクトに切り替え
-
+        self.project_selector_combo.setEnabled(True) # ★ プロジェクトが作成されたらコンボボックスを有効化
+        self.delete_project_button.setEnabled(True) # ★ 削除ボタンも有効化
+        self._populate_project_selector(); self._switch_project(dir_name)
         return True
+        
+
+    def _on_delete_project_button_clicked(self):
+        """「プロジェクト削除」ボタンがクリックされたときの処理。
+        現在アクティブなプロジェクトを削除します。
+        """
+        if not self.current_project_dir_name or self.current_project_dir_name == "(プロジェクトがありません)": # 特殊なケース
+            QMessageBox.information(self, "削除不可", "削除するプロジェクトが選択されていません。")
+            return
+
+        project_display_name = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
+        reply = QMessageBox.question(self, "プロジェクト削除確認",
+                                   f"本当にプロジェクト「{project_display_name}」({self.current_project_dir_name}) を削除しますか？\n"
+                                   "この操作は元に戻せません。プロジェクト内の全てのデータが完全に削除されます。",
+                                   QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if reply == QMessageBox.Yes:
+            print(f"--- MainWindow: Deleting project '{self.current_project_dir_name}' ---")
+            dir_name_to_delete = self.current_project_dir_name
+            
+            # 次にアクティブにするプロジェクトを決定 (削除するプロジェクト以外で最初に見つかったもの)
+            next_active_project_dir_name = None
+            for _, dir_name_iter in self._projects_list_for_combo:
+                if dir_name_iter != dir_name_to_delete:
+                    next_active_project_dir_name = dir_name_iter
+                    break
+            
+            if delete_project_directory(dir_name_to_delete):
+                QMessageBox.information(self, "削除完了", f"プロジェクト「{project_display_name}」を削除しました。")
+                
+                # プロジェクトリストとUIを更新
+                self._populate_project_selector() # コンボボックス再描画
+                
+                if next_active_project_dir_name:
+                    print(f"  Switching to next available project: '{next_active_project_dir_name}'")
+                    self._switch_project(next_active_project_dir_name)
+                elif not self._projects_list_for_combo: # プロジェクトが一つもなくなった場合
+                    print("  No projects remaining. Clearing UI.")
+                    self.current_project_dir_name = "" # アクティブプロジェクト名をクリア
+                    self.current_project_settings = {}
+                    self.subprompts = {}
+                    self.checked_subprompts = {}
+                    self.setWindowTitle("TRPG AI Tool - プロジェクトなし")
+                    self.system_prompt_input_main.clear()
+                    self.refresh_subprompt_tabs() # 空になるはず
+                    if self.data_management_widget: self.data_management_widget.set_project("") # データウィジェットもクリア
+                    self.project_selector_combo.addItem("(プロジェクトがありません)") # 再度表示
+                    self.project_selector_combo.setEnabled(False)
+                    self.delete_project_button.setEnabled(False) # 削除ボタンも無効化
+                # else: next_active_project_dir_name が None で _projects_list_for_combo が空でないケースは
+                # _populate_project_selector 内で処理されるはず
+
+            else:
+                QMessageBox.critical(self, "削除エラー", f"プロジェクト「{project_display_name}」の削除に失敗しました。")
     # ---------------------------------------------
 
     # (configure_gemini, open_settings_dialog, on_send_button_clicked,
@@ -620,6 +720,7 @@ class MainWindow(QWidget):
             display_name = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
             self.setWindowTitle(f"TRPG AI Tool - {display_name}")
             self.configure_gemini()
+            self._populate_project_selector()
             print("設定ダイアログの変更が適用されました。")
 
     def on_send_button_clicked(self):

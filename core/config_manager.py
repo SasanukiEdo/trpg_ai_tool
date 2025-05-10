@@ -13,6 +13,7 @@
 
 import json
 import os
+import shutil
 
 # --- 定数 ---
 CONFIG_FILE_PATH = os.path.join("data", "config.json")
@@ -222,6 +223,40 @@ def list_project_dir_names() -> list[str]:
     except Exception as e:
         print(f"プロジェクトディレクトリのリスト取得に失敗しました ({PROJECTS_BASE_DIR}): {e}")
         return []
+
+
+# --- プロジェクトディレクトリ削除 ---
+def delete_project_directory(project_dir_name: str) -> bool:
+    """指定されたプロジェクトのディレクトリ全体を削除します。
+
+    これには、プロジェクト設定ファイル、サブプロンプトファイル、
+    gamedataディレクトリなど、プロジェクトに関連する全てのファイルと
+    フォルダが含まれます。操作は元に戻せません。
+
+    Args:
+        project_dir_name (str): 削除するプロジェクトのディレクトリ名。
+
+    Returns:
+        bool: ディレクトリの削除に成功した場合は True、
+              ディレクトリが存在しない場合や削除に失敗した場合は False。
+    """
+    if not project_dir_name:
+        print("Error: Project directory name cannot be empty for deletion.")
+        return False
+
+    project_path_to_delete = get_project_dir_path(project_dir_name)
+
+    if not os.path.exists(project_path_to_delete) or not os.path.isdir(project_path_to_delete):
+        print(f"Info: Project directory to delete not found or not a directory: {project_path_to_delete}")
+        return False # 削除対象がない
+
+    try:
+        shutil.rmtree(project_path_to_delete)
+        print(f"Project directory '{project_path_to_delete}' and all its contents have been deleted.")
+        return True
+    except Exception as e:
+        print(f"Error deleting project directory '{project_path_to_delete}': {e}")
+        return False
 
 
 if __name__ == '__main__':
