@@ -105,6 +105,7 @@ class DetailWindow(QWidget):
     def init_ui(self):
         """UI要素を初期化し、レイアウトを設定します。"""
         main_layout = QVBoxLayout(self)
+        main_layout.setSizeConstraint(QVBoxLayout.SetMinimumSize) # または QLayout.SetMinimumSize
 
         # スクロールエリアのセットアップ
         scroll_area = QScrollArea(self)
@@ -115,6 +116,7 @@ class DetailWindow(QWidget):
         self.scroll_content_widget = QWidget() # スクロールされる中身のウィジェット
         self.content_layout = QVBoxLayout(self.scroll_content_widget)
         self.content_layout.setAlignment(Qt.AlignTop) # ウィジェットを上寄せ
+        self.content_layout.setSizeConstraint(QVBoxLayout.SetMinimumSize) # または QLayout.SetMinimumSize
         scroll_area.setWidget(self.scroll_content_widget)
 
         # --- 各詳細フィールドのプレースホルダー ---
@@ -400,10 +402,20 @@ class DetailWindow(QWidget):
         """
         if 'image_preview' not in self.detail_widgets or 'image_path_display' not in self.detail_widgets:
             return
-        if not self.current_project_dir_name and relative_image_path: # プロジェクト名がないと絶対パス解決不可
-            self.img_preview_label.setText("画像プレビュー (プロジェクト未指定)")
+
+        preview_label = self.detail_widgets.get('image_preview')
+        if not isinstance(preview_label, QLabel): # 念のため型チェック
+            return
+
+        # --- ★★★ ラベルの setScaledContents は True のままにしておく ★★★ ---
+        # preview_label.setScaledContents(True) # _build_detail_view で設定済みのはず
+
+        if not self.current_project_dir_name and relative_image_path:
+            preview_label.clear(); preview_label.setText("画像プレビュー (プロジェクト未指定)")
             self.img_path_label.setText(f"画像パス: {relative_image_path} (プロジェクト未指定)")
-            self._original_image_pixmap = None # オリジナルもクリア
+            self._original_image_pixmap = None
+            preview_label.setMinimumHeight(150) # デフォルトの最小高さに戻す
+            preview_label.setMaximumHeight(16777215) # 最大高さ制限を解除
             return
 
         absolute_image_path = None
@@ -426,44 +438,97 @@ class DetailWindow(QWidget):
                 if not original_pixmap.isNull():
                     self._original_image_pixmap = original_pixmap
                     
-                    # --- ★★★ 初回表示時のスケーリング (resizeEventでも行う) ★★★ ---
-                    # QTimer.singleShot(0, ...) で呼ばれることを期待し、
-                    # この時点である程度正しいラベルサイズが取得できると仮定する。
-                    # それでもダメなら、resizeEvent の初回呼び出しに完全に任せる。
-                    label_to_scale_for_initial_display = self.detail_widgets.get('image_preview')
-                    if isinstance(label_to_scale_for_initial_display, QLabel):
-                        current_label_size = label_to_scale_for_initial_display.size()
-                        # 非常に小さい場合は、ラベルの minimumSize を使う
-                        if current_label_size.width() < self.img_preview_label.minimumWidth() or \
-                           current_label_size.height() < self.img_preview_label.minimumHeight():
-                            current_label_size.setWidth(max(current_label_size.width(), self.img_preview_label.minimumWidth()))
-                            current_label_size.setHeight(max(current_label_size.height(), self.img_preview_label.minimumHeight()))
+                    # --- ★★★ 画像のアスペクト比に基づいてラベルの高さを設定 ★★★ ---
+                    img_width = original_pixmap.width()
+                    img_height = original_pixmap.height()
 
+                    if img_width > 0 and img_height > 0:
+                        # ラベルの現在の幅を取得（これが基準になる）
+                        # 初回表示時はまだ幅が小さい可能性があるので、親ウィジェットの幅も考慮
+                        available_width = preview_label.width()
+                        if available_width <= preview_label.minimumWidth(): # 初期値や最小サイズより小さい場合
+                            if self.scroll_content_widget and self.scroll_content_widget.width() > 20 :
+                                available_width = self.scroll_content_widget.width() - 20 # スクロールエリアの幅から
+                            elif self.width() > 40:
+                                available_width = self.width() - 40 # DetailWindowの幅から
+                            else:
+                                available_width = preview_label.minimumWidth() # 最低でもラベルの最小幅
+
+                        # アスペクト比を維持した高さを計算
+                        expected_height = int((img_height / img_width) * available_width)
+                        
+                        # 上限は設けないか、非常に大きな値にする
+                        # max_preview_height = 16777215 # Qtの最大ウィジェット高さ
+                        # expected_height = min(expected_height, max_preview_height)
+                        
+                        min_height_for_label = 100 # どんな画像でも最低これくらいは確保 (任意)
+                        expected_height = max(expected_height, min_height_for_label)
+
+                        print(f"  _update_image_preview: Image original: {img_width}x{img_height}, Label available_width: {available_width}, Calculated expected_height for minimum: {expected_height}")
+                        
+                        # ラベルの高さを明示的に設定
+                        # setFixedHeight を使うとリサイズ時に追従しなくなるので setMinimumHeight と setMaximumHeight を使う
+                        preview_label.setMinimumHeight(expected_height)
+                        preview_label.setMaximumHeight(16777215) # 最大高さ制限を解除！
+
+                        # ピクスマップをラベルにセット (resizeEvent で適切なスケーリングが行われる)
+                        # ここでは、一度アスペクト比を保ってスケーリングしたものをセットしておく
                         scaled_pixmap = self._original_image_pixmap.scaled(
-                            current_label_size,
-                            Qt.KeepAspectRatio,
-                            Qt.SmoothTransformation
+                            available_width, expected_height, # 計算した幅と高さ
+                            Qt.KeepAspectRatio, Qt.SmoothTransformation
                         )
-                        label_to_scale_for_initial_display.setPixmap(scaled_pixmap)
+                        preview_label.setPixmap(scaled_pixmap)
+                        # --------------------------------------------------------------
+                    else:
+                        preview_label.clear(); preview_label.setText("画像サイズ不正")
                     # --------------------------------------------------------
                     self.img_path_label.setText(f"画像パス: {relative_image_path}")
                 else:
-                    self.img_preview_label.clear(); self.img_preview_label.setText(f"画像読込失敗:\n{os.path.basename(absolute_image_path)}"); self.img_path_label.setText(f"画像パス(読込エラー): {relative_image_path}")
+                    preview_label.clear(); preview_label.setText(f"画像読込失敗:\n{os.path.basename(absolute_image_path)}"); self.img_path_label.setText(f"画像パス(読込エラー): {relative_image_path}")
             except Exception as e:
-                self._original_image_pixmap = None
-                self.img_preview_label.clear()
-                self.img_preview_label.setText(f"画像表示エラー:\n{os.path.basename(absolute_image_path)}")
-                self.img_path_label.setText(f"画像パス(表示エラー): {relative_image_path}")
-        elif relative_image_path: # パスはあるがファイルが見つからない
-            self._original_image_pixmap = None
-            self.img_preview_label.clear()
-            self.img_preview_label.setText(f"画像ファイル未発見:\n{relative_image_path}")
-            self.img_path_label.setText(f"画像パス(未発見): {relative_image_path}")
-        else: # relative_image_path が None
-            self._original_image_pixmap = None
-            self.img_preview_label.clear()
-            self.img_preview_label.setText("画像プレビューなし")
-            self.img_path_label.setText("画像パス: (選択されていません)")
+                self._original_image_pixmap = None; preview_label.clear(); preview_label.setText(f"画像表示エラー:\n{os.path.basename(absolute_image_path)}"); self.img_path_label.setText(f"画像パス(表示エラー): {relative_image_path}")
+        elif relative_image_path:
+            self._original_image_pixmap = None; preview_label.clear(); preview_label.setText(f"画像ファイル未発見:\n{relative_image_path}"); self.img_path_label.setText(f"画像パス(未発見): {relative_image_path}")
+        else:
+            self._original_image_pixmap = None; preview_label.clear(); preview_label.setText("画像プレビューなし"); self.img_path_label.setText("画像パス: (選択されていません)")
+            preview_label.setMinimumHeight(150) # デフォルトの最小高さ
+            preview_label.setMaximumHeight(16777215) # 最大高さ制限を解除
+        
+        # --- ★★★ レイアウト更新を促す (試行) ★★★ ---
+        # preview_label.updateGeometry() # これでQLabelのサイズヒントが更新される
+        # if self.content_layout: self.content_layout.activate() # 親レイアウトに再計算を促す
+        # if self.scroll_content_widget: self.scroll_content_widget.adjustSize()
+        # ------------------------------------------
+
+    def resizeEvent(self, event: 'QResizeEvent'):
+        """ウィンドウがリサイズされたときに呼び出されるイベントハンドラ。
+        画像プレビューを新しいウィンドウサイズに合わせて再スケーリングします。
+        ラベルの高さもアスペクト比に合わせて調整します。
+        """
+        super().resizeEvent(event)
+        
+        if self._original_image_pixmap and 'image_preview' in self.detail_widgets:
+            preview_label = self.detail_widgets['image_preview']
+            if isinstance(preview_label, QLabel) and not self._original_image_pixmap.isNull():
+                
+                # --- ★★★ ラベルの現在のサイズに合わせてオリジナルをスケーリング ★★★ ---
+                # setScaledContents(True) と組み合わせることで、ラベルのサイズ変更に追従する
+                # ここでラベルの minimumHeight や maximumHeight を変更する必要はない
+                # （_update_image_previewで設定したminimumHeightが効いているはず）
+                
+                # 非常に小さいサイズへのスケーリングを防ぐ（任意）
+                if preview_label.width() <= 10 or preview_label.height() <= 10:
+                    # print("Resize skipped due to too small label size.")
+                    return
+
+                scaled_pixmap = self._original_image_pixmap.scaled(
+                    preview_label.size(), # QLabelの現在の描画領域サイズ
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
+                preview_label.setPixmap(scaled_pixmap)
+                # print(f"Resized: Label size: {preview_label.size()}, Pixmap set.")
+                # ------------------------------------------------------------------
 
 
     def add_history_entry_with_ai_ui(self):
@@ -682,29 +747,6 @@ class DetailWindow(QWidget):
         # 必要なら未保存の変更があるか確認して警告を出す処理を追加
         super().closeEvent(event)
 
-
-    def resizeEvent(self, event: 'QResizeEvent'): # QResizeEventの型ヒントは文字列で
-        """ウィンドウがリサイズされたときに呼び出されるイベントハンドラ。
-        画像プレビューを新しいウィンドウサイズに合わせて再スケーリングします。
-
-        Args:
-            event (QResizeEvent): リサイズイベントオブジェクト。
-        """
-        super().resizeEvent(event) # 親クラスのresizeEventを呼び出す
-        
-        # オリジナル画像があり、プレビューラベルも存在する場合のみ処理
-        if self._original_image_pixmap and 'image_preview' in self.detail_widgets:
-            label_to_scale = self.detail_widgets['image_preview']
-            if isinstance(label_to_scale, QLabel) and not self._original_image_pixmap.isNull():
-                # ラベルの現在のサイズに合わせてオリジナルピクスマップをスケーリング
-                # (setScaledContents(True) があれば、これだけでも良い場合があるが、
-                #  より細かく制御したい場合や、アスペクト比を確実に保ちたい場合に有効)
-                scaled_pixmap = self._original_image_pixmap.scaled(
-                    label_to_scale.size(), # QLabelの現在のサイズ
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation
-                )
-                label_to_scale.setPixmap(scaled_pixmap)
 
 if __name__ == '__main__':
     """DetailWindow の基本的な表示・インタラクションテスト。"""
