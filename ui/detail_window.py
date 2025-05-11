@@ -14,8 +14,10 @@ from PyQt5.QtWidgets import (
     QPushButton, QScrollArea, QFrame, QFileDialog, QMessageBox, QDialog,
     QSizePolicy, QSpacerItem, QInputDialog, QApplication
 )
-from PyQt5.QtGui import QPixmap, QImageReader, QResizeEvent, QBrush, QPalette, QPainter, QPaintEvent
+from PyQt5.QtGui import QPixmap, QImageReader
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QResizeEvent
+from PyQt5.QtGui import QBrush, QPalette
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -98,7 +100,6 @@ class DetailWindow(QWidget):
         """str: 現在の画像表示モード ("normal" または "background")。"""
 
         self.setObjectName("DetailWindow") # スタイルシートで特定できるように
-        self.setAutoFillBackground(False) # QPaletteではなくpaintEventで描画するため
 
         self.setWindowFlags(Qt.Window) # 独立したウィンドウとして表示
         self.setWindowTitle("詳細情報 (アイテム未選択)")
@@ -119,7 +120,6 @@ class DetailWindow(QWidget):
         main_layout.addWidget(scroll_area)
 
         self.scroll_content_widget = QWidget() # スクロールされる中身のウィジェット
-        self.scroll_content_widget.setAutoFillBackground(False)
         self.content_layout = QVBoxLayout(self.scroll_content_widget)
         self.content_layout.setAlignment(Qt.AlignTop) # ウィジェットを上寄せ
         self.content_layout.setSizeConstraint(QVBoxLayout.SetMinimumSize) # または QLayout.SetMinimumSize
@@ -481,7 +481,6 @@ class DetailWindow(QWidget):
         """
         print(f"Updating image display mode to: {self._image_display_mode}")
         
-<<<<<<< HEAD
         # --- スタイルシートの準備 ---
         # 共通の半透明白背景
         input_widget_bg_rgba = "rgba(255, 255, 255, 0.85)" 
@@ -490,17 +489,6 @@ class DetailWindow(QWidget):
         # QTextEdit用の特別なスタイル (viewportの背景も制御)
         # QTextEdit 自体の背景は半透明白、viewport は完全に透明にして下の背景画像を見せる
         qtextedit_base_style = f"background-color: {input_widget_bg_rgba}; border: 1px solid lightgray;"
-=======
-        # スタイルシート文字列の準備
-        input_widget_bg_normal = "background-color: white; border: 1px solid lightgray;"
-        input_widget_bg_transparent = "background-color: rgba(220, 220, 220, 0.75); border: 1px solid gray;" # 少し濃いめの半透明
-        
-        # QLabel 用の半透明背景 (任意)
-        label_bg_transparent = "background-color: rgba(200, 200, 200, 0.6); padding: 2px; border-radius: 3px;"
-
-        # QTextEditのviewportは常に透明にしておく (paintEventで描画するため)
-        # ただし、QTextEdit自体には半透明背景を設定する
->>>>>>> b10fb74db1d331c2215e973a77d623848a4d0836
         qtextedit_viewport_style = "background-color: transparent;"
 
 
@@ -509,7 +497,6 @@ class DetailWindow(QWidget):
             self.img_path_label.setVisible(False)
             self.img_preview_label.setVisible(False)
             
-<<<<<<< HEAD
             # DetailWindow の背景は QPalette で設定
             self.setAutoFillBackground(True) # QPaletteで背景を描画するために必要
             palette = self.palette()
@@ -548,66 +535,17 @@ class DetailWindow(QWidget):
                 self.detail_widgets['tags'].setStyleSheet(f"QLineEdit#DetailTagsEdit {{ {input_widget_style} }}")
 
             print(f"  Set background image using QPalette for DetailWindow, and individual styles for children.")
-=======
-            # DetailWindow 自体の背景は paintEvent で描画するため、
-            # ここでは autoFillBackground を False にしておくのが適切かもしれない。
-            # ただし、paintEvent が呼ばれる前に一瞬デフォルト背景が見えるのを避けるため、
-            # 完全に透明なパレットを設定しておく手もある。
-            self.setAutoFillBackground(False) # paintEventで描画
-            # palette = self.palette(); palette.setColor(QPalette.Window, Qt.transparent); self.setPalette(palette)
-
-
-            # ScrollContentWidget の背景を透明に
-            if self.scroll_content_widget:
-                self.scroll_content_widget.setStyleSheet("QWidget#ScrollContentWidget { background-color: transparent; }")
-
-            # 各編集ウィジェットとラベルに半透明背景を個別に設定
-            # (オブジェクト名が _build_detail_view で設定されている前提)
-            for widget_name, widget_instance in self.detail_widgets.items():
-                if isinstance(widget_instance, (QLineEdit, QTextEdit)):
-                    style = f"#{widget_instance.objectName()} {{ {input_widget_bg_transparent} }}"
-                    if isinstance(widget_instance, QTextEdit):
-                        # QTextEdit の viewport は常に透明
-                        style += (f" #{widget_instance.objectName()} QAbstractScrollArea,"
-                                  f" #{widget_instance.objectName()} QWidget {{ {qtextedit_viewport_style} }}")
-                    widget_instance.setStyleSheet(style)
-                elif isinstance(widget_instance, QLabel) and widget_name not in ['image_path_display', 'image_preview']:
-                    # 画像パスとプレビューラベル以外に適用 (任意)
-                    widget_instance.setStyleSheet(f"QLabel#{widget_instance.objectName()} {{ {label_bg_transparent} }}")
-            
-            # history_view_container など、他のコンテナウィジェットも必要なら透明化
-            # (今回は ScrollContentWidget が透明なら、その中のコンテナも背景は描かれないはず)
-
-            print(f"  Background mode: DetailWindow background by paintEvent, children styled.")
->>>>>>> b10fb74db1d331c2215e973a77d623848a4d0836
 
         else: # "normal" モード
             self.setAutoFillBackground(False) # QPaletteによる背景描画を解除
             self.setPalette(self.style().standardPalette()) # システムデフォルトパレットに戻す
             
-<<<<<<< HEAD
             # 個別に設定したスタイルシートをクリア
             if self.scroll_content_widget: self.scroll_content_widget.setStyleSheet("")
             if 'name' in self.detail_widgets: self.detail_widgets['name'].setStyleSheet("")
             if 'description' in self.detail_widgets: self.detail_widgets['description'].setStyleSheet("")
             if 'history_view' in self.detail_widgets: self.detail_widgets['history_view'].setStyleSheet("")
             if 'tags' in self.detail_widgets: self.detail_widgets['tags'].setStyleSheet("")
-=======
-            # 個別に設定したスタイルシートをクリア、またはデフォルトスタイルに戻す
-            if self.scroll_content_widget: self.scroll_content_widget.setStyleSheet("")
-            
-            for widget_name, widget_instance in self.detail_widgets.items():
-                if isinstance(widget_instance, (QLineEdit, QTextEdit)):
-                    style = f"#{widget_instance.objectName()} {{ {input_widget_bg_normal} }}" # ノーマル時は白背景
-                    if isinstance(widget_instance, QTextEdit):
-                         # QTextEdit の viewport はデフォルトに戻す (autoFillBackgroundがFalseなら透明のままのはず)
-                         # あるいは、明示的に白背景にする
-                         style += (f" #{widget_instance.objectName()} QAbstractScrollArea,"
-                                   f" #{widget_instance.objectName()} QWidget {{ background-color: white; }}") # viewportも白
-                    widget_instance.setStyleSheet(style)
-                elif isinstance(widget_instance, QLabel):
-                    widget_instance.setStyleSheet("") # ラベルのスタイルもクリア
->>>>>>> b10fb74db1d331c2215e973a77d623848a4d0836
 
             self.img_path_label.setVisible(True)
             self.img_preview_label.setVisible(True)
@@ -618,15 +556,11 @@ class DetailWindow(QWidget):
         if not can_show_background and self._image_display_mode == "background":
             self.toggle_image_mode_button.setChecked(False)
 
-<<<<<<< HEAD
         self.update()
-=======
-        self.update() # ウィジェット全体の再描画を促す
->>>>>>> b10fb74db1d331c2215e973a77d623848a4d0836
 
     def _update_image_preview(self, relative_image_path: str | None):
         """指定された相対画像パスに基づいて画像プレビューを更新します。
-        画像のアスペクト比を基にラベルの最小高さを調整し、リサイズに対応します。
+        オリジナルのピクスマップを保持し、表示時にラベルサイズに合わせてスケーリングします。
         相対パスはプロジェクトルートからのパス (例: 'images/キャラ絵.png') とします。
 
         Args:
@@ -636,17 +570,25 @@ class DetailWindow(QWidget):
             return
 
         preview_label = self.detail_widgets.get('image_preview')
-        if not isinstance(preview_label, QLabel): return
+        if not isinstance(preview_label, QLabel): # 念のため型チェック
+            return
+
+        # --- ★★★ ラベルの setScaledContents は True のままにしておく ★★★ ---
+        # preview_label.setScaledContents(True) # _build_detail_view で設定済みのはず
 
         if not self.current_project_dir_name and relative_image_path:
             # ... (変更なし)
             preview_label.clear(); preview_label.setText("画像プレビュー (プロジェクト未指定)"); self.img_path_label.setText(f"画像パス: {relative_image_path} (プロジェクト未指定)"); self._original_image_pixmap = None; preview_label.setMinimumHeight(150); preview_label.setMaximumHeight(16777215)
-            if hasattr(self, 'toggle_image_mode_button'): self.toggle_image_mode_button.setEnabled(False)
+            if hasattr(self, 'toggle_image_mode_button'): self.toggle_image_mode_button.setEnabled(False) # ★ ボタン無効化
             return
 
         absolute_image_path = None
         if relative_image_path:
-            from core.data_manager import PROJECTS_BASE_DIR
+            # プロジェクトルートからの相対パスなので、プロジェクトベースディレクトリと結合
+            # core.data_manager から PROJECTS_BASE_DIR をインポートするか、
+            # または MainWindow 経由でプロジェクトの絶対パスを取得する。
+            # ここでは get_project_images_path のように組み立てる。
+            from core.data_manager import PROJECTS_BASE_DIR # data_managerからインポート
             project_root_abs_path = os.path.join(PROJECTS_BASE_DIR, self.current_project_dir_name)
             absolute_image_path = os.path.join(project_root_abs_path, relative_image_path)
             print(f"  Attempting to load image from absolute path: {absolute_image_path} (relative: {relative_image_path})")
@@ -666,32 +608,50 @@ class DetailWindow(QWidget):
                     img_height = original_pixmap.height()
 
                     if img_width > 0 and img_height > 0:
-                        # --- ★★★ ノーマルモード時のアスペクト比と高さ設定 ★★★ ---
-                        # preview_label.width() がまだ小さい場合を考慮し、
-                        # 期待される幅 (例: scroll_content_widget.width()) から高さを計算
-                        parent_width = preview_label.parentWidget().width() if preview_label.parentWidget() else preview_label.width()
-                        if parent_width <= 10 : parent_width = preview_label.minimumWidth() # フォールバック
+                        # ラベルの現在の幅を取得（これが基準になる）
+                        # 初回表示時はまだ幅が小さい可能性があるので、親ウィジェットの幅も考慮
+                        available_width = preview_label.width()
+                        if available_width <= preview_label.minimumWidth(): # 初期値や最小サイズより小さい場合
+                            if self.scroll_content_widget and self.scroll_content_widget.width() > 20 :
+                                available_width = self.scroll_content_widget.width() - 20 # スクロールエリアの幅から
+                            elif self.width() > 40:
+                                available_width = self.width() - 40 # DetailWindowの幅から
+                            else:
+                                available_width = preview_label.minimumWidth() # 最低でもラベルの最小幅
 
-                        expected_height = int((img_height / img_width) * parent_width)
-                        min_height_for_label = 100
+                        # アスペクト比を維持した高さを計算
+                        expected_height = int((img_height / img_width) * available_width)
+                        
+                        # 上限は設けないか、非常に大きな値にする
+                        # max_preview_height = 16777215 # Qtの最大ウィジェット高さ
+                        # expected_height = min(expected_height, max_preview_height)
+                        
+                        min_height_for_label = 100 # どんな画像でも最低これくらいは確保 (任意)
                         expected_height = max(expected_height, min_height_for_label)
 
-                        preview_label.setMinimumHeight(expected_height) # レイアウトに高さを要求
-                        preview_label.setMaximumHeight(16777215)     # 最大高さは制限しない
+                        print(f"  _update_image_preview: Image original: {img_width}x{img_height}, Label available_width: {available_width}, Calculated expected_height for minimum: {expected_height}")
+                        
+                        # ラベルの高さを明示的に設定
+                        # setFixedHeight を使うとリサイズ時に追従しなくなるので setMinimumHeight と setMaximumHeight を使う
+                        preview_label.setMinimumHeight(expected_height)
+                        preview_label.setMaximumHeight(16777215) # 最大高さ制限を解除！
 
-                        # スケーリングは resizeEvent と setScaledContents(True) に任せる
-                        # ここではオリジナルをセットするだけでも良いが、初回表示のために一度スケーリング
+                        # ピクスマップをラベルにセット (resizeEvent で適切なスケーリングが行われる)
+                        # ここでは、一度アスペクト比を保ってスケーリングしたものをセットしておく
                         scaled_pixmap = self._original_image_pixmap.scaled(
-                            parent_width, expected_height, # 期待する幅と高さで
+                            available_width, expected_height, # 計算した幅と高さ
                             Qt.KeepAspectRatio, Qt.SmoothTransformation
                         )
-                        preview_label.setPixmap(scaled_pixmap)
-                        image_loaded_successfully = True
-                        # --------------------------------------------------------
-                    else: preview_label.clear(); preview_label.setText("画像サイズ不正")
+                        preview_label.setPixmap(scaled_pixmap); image_loaded_successfully = True # ★ ロード成功
+                        # --------------------------------------------------------------
+                    else:
+                        preview_label.clear(); preview_label.setText("画像サイズ不正")
+                    # --------------------------------------------------------
                     self.img_path_label.setText(f"画像パス: {relative_image_path}")
-                else: preview_label.clear(); preview_label.setText(f"画像読込失敗:\n{os.path.basename(absolute_image_path)}"); self.img_path_label.setText(f"画像パス(読込エラー): {relative_image_path}")
-            except Exception as e: self._original_image_pixmap = None; preview_label.clear(); preview_label.setText(f"画像表示エラー:\n{os.path.basename(absolute_image_path)}"); self.img_path_label.setText(f"画像パス(表示エラー): {relative_image_path}")
+                else:
+                    preview_label.clear(); preview_label.setText(f"画像読込失敗:\n{os.path.basename(absolute_image_path)}"); self.img_path_label.setText(f"画像パス(読込エラー): {relative_image_path}")
+            except Exception as e:
+                self._original_image_pixmap = None; preview_label.clear(); preview_label.setText(f"画像表示エラー:\n{os.path.basename(absolute_image_path)}"); self.img_path_label.setText(f"画像パス(表示エラー): {relative_image_path}")
         elif relative_image_path:
             self._original_image_pixmap = None; preview_label.clear(); preview_label.setText(f"画像ファイル未発見:\n{relative_image_path}"); self.img_path_label.setText(f"画像パス(未発見): {relative_image_path}")
         else:
@@ -704,110 +664,51 @@ class DetailWindow(QWidget):
             self.toggle_image_mode_button.setEnabled(image_loaded_successfully)
             # もし画像がないのに背景モードだったら通常モードに戻す
             if not image_loaded_successfully and self._image_display_mode == "background":
-                self.toggle_image_mode_button.setChecked(False)
-        
-        # preview_label.updateGeometry() # これと
-        # self.layout().activate()       # これを呼ぶと初回表示がうまくいくかも
-        # self.adjustSize()
+                self.toggle_image_mode_button.setChecked(False) # これで _on_toggle_image_mode が呼ばれる
 
     def resizeEvent(self, event: 'QResizeEvent'):
         """ウィンドウがリサイズされたときに呼び出されるイベントハンドラ。
-        画像プレビューと、背景表示モードの場合は背景画像を再スケーリングします。
+        画像プレビューを新しいウィンドウサイズに合わせて再スケーリングします。
         ラベルの高さもアスペクト比に合わせて調整します。
         """
-        super().resizeEvent(event) # まず親のイベントを処理
+        super().resizeEvent(event)
         
-        # --- ノーマルモード時の画像プレビューの再スケーリング ---
-        if self._image_display_mode == "normal" and \
-           self._original_image_pixmap and \
-           'image_preview' in self.detail_widgets:
-            
+        if self._original_image_pixmap and 'image_preview' in self.detail_widgets:
             preview_label = self.detail_widgets['image_preview']
             if isinstance(preview_label, QLabel) and not self._original_image_pixmap.isNull():
                 
-                # ラベルの現在の幅を基準に、アスペクト比を保った高さを計算
-                img_width = self._original_image_pixmap.width()
-                img_height = self._original_image_pixmap.height()
+                # --- ★★★ ラベルの現在のサイズに合わせてオリジナルをスケーリング ★★★ ---
+                # setScaledContents(True) と組み合わせることで、ラベルのサイズ変更に追従する
+                # ここでラベルの minimumHeight や maximumHeight を変更する必要はない
+                # （_update_image_previewで設定したminimumHeightが効いているはず）
+                
+                # 非常に小さいサイズへのスケーリングを防ぐ（任意）
+                if preview_label.width() <= 10 or preview_label.height() <= 10:
+                    # print("Resize skipped due to too small label size.")
+                    return
 
-                if img_width > 0 and img_height > 0:
-                    label_width = preview_label.width()
-                    if label_width <= 0: # まだ幅が確定していない場合などはスキップ
-                        # print("Resize normal: label_width is 0, skipping pixmap update.")
-                        return 
-                        
-                    # アスペクト比を保った高さを計算
-                    scaled_height = int((img_height / img_width) * label_width)
-                    
-                    # QLabel の高さを、計算した高さに合わせる (最小高さとして設定)
-                    # これにより、レイアウトがこの高さを確保しようとする
-                    # preview_label.setMinimumHeight(scaled_height) # これを resizeEvent でやるとループする可能性
-                    # preview_label.setMaximumHeight(16777215)   # 最大高さ制限は解除
+                scaled_pixmap = self._original_image_pixmap.scaled(
+                    preview_label.size(), # QLabelの現在の描画領域サイズ
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
+                preview_label.setPixmap(scaled_pixmap)
+                # print(f"Resized: Label size: {preview_label.size()}, Pixmap set.")
 
-                    # スケーリングは setScaledContents(True) と QLabel.size() に任せる
-                    # ただし、より正確なアスペクト比のためには、ここで明示的に計算したサイズでscaledする
-                    scaled_pixmap = self._original_image_pixmap.scaled(
-                        label_width,      # ラベルの現在の幅
-                        scaled_height,    # 計算した高さ
-                        Qt.KeepAspectRatio,
-                        Qt.SmoothTransformation
-                    )
-                    preview_label.setPixmap(scaled_pixmap)
-                    # print(f"Resized Normal: Label W{label_width}, H{preview_label.height()} -> Expected H{scaled_height}, Pixmap set.")
-        
-        # --- 背景表示モードの場合、paintEvent が再描画を処理するので、ここでは何もしないか、
-        #     あるいは self.update() を呼んで paintEvent をトリガーする ---
-        elif self._image_display_mode == "background":
-            self.update() # paintEvent を呼び出す
-
-    # --- ★★★ paintEvent をオーバーライドして背景画像を描画 ★★★ ---
-    def paintEvent(self, event: 'QPaintEvent'):
-        """ウィジェットの描画イベントを処理します。
-        背景表示モードの場合、背景画像を指定された方法で描画します。
-        通常モードの場合は、親クラスの描画処理に委ねます。
-
-        Args:
-            event (QPaintEvent): 描画イベントオブジェクト。
-        """
-        if self._image_display_mode == "background" and \
-           self._original_image_pixmap and not self._original_image_pixmap.isNull():
+        # --- ★★★ 背景表示モードの場合、背景画像を再スケーリング ★★★ ---
+        elif self._image_display_mode == "background" and \
+             self._original_image_pixmap and \
+             not self._original_image_pixmap.isNull():
             
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-
-            # ウィンドウサイズ
-            window_rect = self.rect()
-            
-            # オリジナル画像のサイズ
-            img_original_width = self._original_image_pixmap.width()
-            img_original_height = self._original_image_pixmap.height()
-
-            if img_original_width <= 0 or img_original_height <= 0:
-                super().paintEvent(event) # 画像が無効ならデフォルト描画
-                return
-
-            # スケーリング: ウィンドウの幅に合わせ、アスペクト比を維持
-            scaled_pixmap = self._original_image_pixmap.scaledToWidth(
-                window_rect.width(), 
+            palette = self.palette()
+            scaled_pixmap = self._original_image_pixmap.scaled(
+                self.size(), # DetailWindowの新しいサイズ
+                Qt.KeepAspectRatio,
                 Qt.SmoothTransformation
             )
-            
-            # 描画位置: ウィンドウ下揃え
-            draw_x = (window_rect.width() - scaled_pixmap.width()) / 2 # 水平中央
-            draw_y = window_rect.height() - scaled_pixmap.height()   # 垂直下揃え
-            
-            # ウィンドウ全体をデフォルト背景色（または透明）でクリア (任意)
-            # painter.fillRect(window_rect, self.palette().color(QPalette.Window))
-
-            painter.drawPixmap(int(draw_x), int(draw_y), scaled_pixmap)
-            painter.end()
-            # ここで super().paintEvent(event) を呼ぶと、スタイルシートの背景などが上書きされる可能性
-            # 背景画像モードでは、このpaintEventで背景描画を完結させる想定
-        else:
-            # 通常モード、または背景画像がない場合は、親クラスのpaintEventを呼び出す
-            # これにより、スタイルシートやパレットによる通常の背景描画が行われる
-            super().paintEvent(event)
-    # --- ★★★ --------------------------------------------------- ★★★ ---
+            palette.setBrush(QPalette.Window, QBrush(scaled_pixmap))
+            self.setPalette(palette)
+            # self.update() # setPalette後、必要なら
 
 
     def add_history_entry_with_ai_ui(self):
