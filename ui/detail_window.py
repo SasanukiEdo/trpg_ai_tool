@@ -496,10 +496,9 @@ class DetailWindow(QWidget):
                         f"QWidget#DetailWindow {{"
                         f"  background-image: url('{safe_path_for_stylesheet}');"
                         f"  background-repeat: no-repeat;"
-                        f"  background-position: center center;" # 中央揃え
-                        f"  background-attachment: fixed;"      # スクロールしても固定
-                        # f"  background-size: contain;"        # アスペクト比を保って全体表示 (Qt5.14以降)
-                        # f"  background-clip: padding-box;"    # パディングの内側に描画
+                        f"  background-position: center center;"
+                        # f"  background-attachment: fixed;"  # <<<--- 一旦コメントアウトして確認
+                        f"  background-size: contain;"       # <<<--- これを追加 (アスペクト比を保って全体表示)
                         f"}}"
                         f"QWidget#ScrollContentWidget {{" # スクロールエリアの中身は完全に透明に
                         f"  background-color: transparent;"
@@ -513,17 +512,21 @@ class DetailWindow(QWidget):
                         # f"QTextEdit#DetailDescriptionEdit {{ background-color: rgba(230,240,255,0.9); }}"
                     )
                     self.setStyleSheet(stylesheet)
+                    self.update() # <<< ★★★ 再描画を促す ★★★
+
                     print(f"  Set background image: {safe_path_for_stylesheet}")
                 else:
-                    self.setStyleSheet("QWidget#DetailWindow {}") # 画像がない場合は背景クリア
+                    self.setStyleSheet("QWidget#DetailWindow {}") 
+                    self.update() # 再描画
                     print("  No valid image to set as background.")
-            else: # 画像データがない
-                self.setStyleSheet("QWidget#DetailWindow {}") # 背景クリア
+            else:
+                self.setStyleSheet("QWidget#DetailWindow {}")
+                self.update() # 再描画
                 print("  No original image pixmap for background mode.")
         else: # "normal" モード
-            self.setStyleSheet("QWidget#DetailWindow {}") # DetailWindowの背景スタイルをクリア
-            # 必要なら ScrollContentWidget のスタイルもデフォルトに戻す
-            if self.scroll_content_widget: self.scroll_content_widget.setStyleSheet("")
+            self.setStyleSheet("QWidget#DetailWindow {}")
+            if self.scroll_content_widget: self.scroll_content_widget.setStyleSheet("") # ScrollContentWidgetのスタイルもクリア
+            self.update() # 再描画
 
             self.img_path_label.setVisible(True)
             self.img_preview_label.setVisible(True)
