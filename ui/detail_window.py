@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap, QImageReader
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QResizeEvent
+from PyQt5.QtGui import QBrush, QPalette
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -470,75 +471,86 @@ class DetailWindow(QWidget):
         """現在の `_image_display_mode` に基づいて、画像表示関連のUIを更新します。
         """
         print(f"Updating image display mode to: {self._image_display_mode}")
+        
+        # まず、ウィジェットの autoFillBackground を True に設定しておく
+        # これにより、paletteで設定した背景が描画されるようになる
+        self.setAutoFillBackground(True)
+        # ScrollContentWidgetも同様
+        if self.scroll_content_widget:
+            self.scroll_content_widget.setAutoFillBackground(True)
+
         if self._image_display_mode == "background":
             # 背景表示モード
             self.img_path_label.setVisible(False)
             self.img_preview_label.setVisible(False)
             
             if self._original_image_pixmap and not self._original_image_pixmap.isNull():
-                # 画像の絶対パスを取得 (前回と同様のロジック)
-                absolute_image_path = None
-                relative_image_path = self.item_data.get('image_path') if self.item_data else None
-                if relative_image_path and self.current_project_dir_name:
-                    from core.data_manager import PROJECTS_BASE_DIR
-                    project_root_abs_path = os.path.join(PROJECTS_BASE_DIR, self.current_project_dir_name)
-                    absolute_image_path = os.path.join(project_root_abs_path, relative_image_path)
+                # --- ★★★ QPalette を使って背景画像を設定 ★★★ ---
+                palette = self.palette() # 現在のパレットを取得
                 
-                if absolute_image_path and os.path.exists(absolute_image_path):
-                    # スタイルシートで DetailWindow の背景に画像を設定
-                    # パス内のバックスラッシュをスラッシュに置換し、URLエンコードは通常不要だが、
-                    # 特殊文字が含まれる場合は考慮が必要。ここでは単純な置換のみ。
-                    safe_path_for_stylesheet = absolute_image_path.replace("\\", "/")
-                    
-                    # 他のウィジェットの背景を透明または半透明にするスタイルも追加
-                    # QLabelはデフォルトで背景が親に追従するはずだが、QTextEditなどは明示的に設定
-                    stylesheet = (
-                        f"QWidget#DetailWindow {{"
-                        f"  background-image: url('{safe_path_for_stylesheet}');"
-                        f"  background-repeat: no-repeat;"
-                        f"  background-position: center center;"
-                        # f"  background-attachment: fixed;"  # <<<--- 一旦コメントアウトして確認
-                        f"  background-size: contain;"       # <<<--- これを追加 (アスペクト比を保って全体表示)
-                        f"}}"
-                        f"QWidget#ScrollContentWidget {{" # スクロールエリアの中身は完全に透明に
-                        f"  background-color: transparent;"
-                        f"}}"
-                        # テキスト入力系ウィジェットの背景は不透明に (読みやすさのため)
-                        f"QLineEdit, QTextEdit, QPlainTextEdit {{"
-                        f"  background-color: rgba(255, 255, 255, 0.85);" # 少しだけ透明な白
-                        f"  border: 1px solid gray;" # 境界線も任意で
-                        f"}}"
-                        # 特定のウィジェットに個別のスタイルを適用も可能
-                        # f"QTextEdit#DetailDescriptionEdit {{ background-color: rgba(230,240,255,0.9); }}"
-                    )
-                    self.setStyleSheet(stylesheet)
-                    self.update() # <<< ★★★ 再描画を促す ★★★
+                # DetailWindow の背景画像
+                # オリジナル画像を DetailWindow の現在のサイズに合わせてスケーリング
+                # (アスペクト比を保ち、ウィンドウ内に収まるように)
+                bg_pixmap_scaled = self._original_image_pixmap.scaled(
+                    self.size(), # DetailWindowの現在のサイズ
+                    Qt.KeepAspectRatio, 
+                    Qt.SmoothTransformation
+                )
+                palette.setBrush(QPalette.Window, QBrush(bg_pixmap_scaled))
+                self.setPalette(palette)
+                
+                # ScrollContentWidget の背景を透明にする
+                if self.scroll_content_widget:
+                    scroll_palette = self.scroll_content_widget.palette()
+                    scroll_palette.setColor(QPalette.Window, Qt.transparent) # Qt.transparent を使う
+                    self.scroll_content_widget.setPalette(scroll_palette)
+                
+                # テキスト入力系ウィジェットの背景は不透明に (スタイルシートで制御)
+                # こちらは引き続きスタイルシートの方が設定しやすい
+                text_widget_stylesheet = (
+                    f"QWidget#DetailWindow QLineEdit, QWidget#DetailWindow QTextEdit, QWidget#DetailWindow QPlainTextEdit {{" # セレクタをより具体的に
+                    f"  background-color: rgba(255, 255, 255, 0.85);"
+                    f"  border: 1px solid gray;"
+                    f"}}"
+                )
+                # DetailWindow に直接スタイルシートを設定すると QPalette の設定が上書きされる可能性があるので注意
+                # 個々のウィジェットに設定するか、DetailWindowのスタイルシートから背景画像の部分を削除する
+                # ここでは、DetailWindowのスタイルシートはクリアし、テキストウィジェットにのみ適用
+                self.setStyleSheet(text_widget_stylesheet)
 
-                    print(f"  Set background image: {safe_path_for_stylesheet}")
-                else:
-                    self.setStyleSheet("QWidget#DetailWindow {}") 
-                    self.update() # 再描画
-                    print("  No valid image to set as background.")
-            else:
-                self.setStyleSheet("QWidget#DetailWindow {}")
-                self.update() # 再描画
-                print("  No original image pixmap for background mode.")
+                print(f"  Set background image using QPalette.")
+                # --- ★★★ ------------------------------------ ★★★ ---
+            else: # 画像データがない
+                # 背景をデフォルトに戻す
+                self.setAutoFillBackground(False) # autoFillを解除するか、デフォルトパレットに戻す
+                palette = QPalette() # デフォルトパレット
+                self.setPalette(palette)
+                if self.scroll_content_widget:
+                    self.scroll_content_widget.setAutoFillBackground(False)
+                    self.scroll_content_widget.setPalette(palette)
+                self.setStyleSheet("") # スタイルシートもクリア
+                print("  No original image pixmap for background mode (QPalette).")
         else: # "normal" モード
-            self.setStyleSheet("QWidget#DetailWindow {}")
-            if self.scroll_content_widget: self.scroll_content_widget.setStyleSheet("") # ScrollContentWidgetのスタイルもクリア
-            self.update() # 再描画
+            # 背景をデフォルトに戻す
+            self.setAutoFillBackground(False)
+            palette = QPalette()
+            self.setPalette(palette)
+            if self.scroll_content_widget:
+                self.scroll_content_widget.setAutoFillBackground(False)
+                self.scroll_content_widget.setPalette(palette)
+            self.setStyleSheet("") # スタイルシートもクリア
 
             self.img_path_label.setVisible(True)
             self.img_preview_label.setVisible(True)
-            # 通常モードに戻ったら、プレビューを再表示 (resizeEventがよしなにしてくれるはず)
             self._update_image_preview(self.item_data.get('image_path') if self.item_data else None)
         
-        # ボタンの有効/無効状態を更新 (画像がない場合は背景モードにできないなど)
+        # ボタンの有効/無効状態 (変更なし)
         can_show_background = bool(self._original_image_pixmap and not self._original_image_pixmap.isNull())
         self.toggle_image_mode_button.setEnabled(can_show_background)
         if not can_show_background and self._image_display_mode == "background":
-            # 画像がないのに背景モードになっていたら通常モードに戻す
-            self.toggle_image_mode_button.setChecked(False) # これで _on_toggle_image_mode が呼ばれる
+            self.toggle_image_mode_button.setChecked(False)
+
+        self.update() # 念のため再描画
 
     def _update_image_preview(self, relative_image_path: str | None):
         """指定された相対画像パスに基づいて画像プレビューを更新します。
@@ -676,7 +688,21 @@ class DetailWindow(QWidget):
                 )
                 preview_label.setPixmap(scaled_pixmap)
                 # print(f"Resized: Label size: {preview_label.size()}, Pixmap set.")
-                # ------------------------------------------------------------------
+
+        # --- ★★★ 背景表示モードの場合、背景画像を再スケーリング ★★★ ---
+        elif self._image_display_mode == "background" and \
+             self._original_image_pixmap and \
+             not self._original_image_pixmap.isNull():
+            
+            palette = self.palette()
+            scaled_pixmap = self._original_image_pixmap.scaled(
+                self.size(), # DetailWindowの新しいサイズ
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            palette.setBrush(QPalette.Window, QBrush(scaled_pixmap))
+            self.setPalette(palette)
+            # self.update() # setPalette後、必要なら
 
 
     def add_history_entry_with_ai_ui(self):
