@@ -310,46 +310,60 @@ def add_item(project_dir_name: str, category_name: str, item_data: dict) -> str 
     カテゴリデータの読み込み/作成に失敗した場合もNoneを返します。
 
     Args:
-        project_dir_name (str): アイテムを追加するプロジェクトのディレクトリ名。
+        project_dir_name (str): 対象プロジェクトのディレクトリ名。
         category_name (str): アイテムを追加するカテゴリ名。
-        item_data (dict): 追加するアイテムのデータ。少なくとも 'name' キーが必要。
+        item_data (dict | None): 追加するアイテムのデータ（id, name, description, history, tags, image_path, reference_tags などを含む辞書）。None の場合、または辞書でない場合はエラー。
 
     Returns:
-        str | None: 正常に追加された場合は新しいアイテムのID。失敗した場合はNone。
+        str | None: アイテムの追加と保存が成功した場合は新しいアイテムのID、失敗した場合は None。
     """
-    if not project_dir_name or not category_name:
-        print("Error: Project name and category name must be provided to add an item.")
+    # --- ★★★ 引数のバリデーション ★★★ ---
+    if item_data is None:
+        print("Error: item_data cannot be None.")
         return None
-    if not isinstance(item_data, dict) or 'name' not in item_data:
-        print("Error: item_data must be a dictionary and contain a 'name' key.")
-        return None
-
-    data = load_data_category(project_dir_name, category_name)
-    if data is None: # カテゴリファイルの読み込み/作成に失敗
-        print(f"Failed to load or create data for category '{category_name}', project '{project_dir_name}'. Cannot add item.")
+    if not isinstance(item_data, dict):
+        print("Error: item_data must be a dictionary.")
         return None
 
-    item_id = item_data.get('id')
-    if not item_id: # IDが提供されていなければ生成
-        # カテゴリ名の最初の3-4文字 (英数字のみ) + UUID短縮形など、より分かりやすいID生成も検討可
-        prefix = "".join(filter(str.isalnum, category_name))[:4].lower()
-        if not prefix: prefix = "item"
-        item_id = f"{prefix}-{uuid.uuid4()}"
-    item_data['id'] = item_id # 生成または提供されたIDをデータに確実にセット
-    item_data['category'] = category_name # カテゴリ情報もアイテムデータ内に保持
+    # --- ★★★ 新しいアイテムIDを生成 (存在しない場合のみ) ★★★ ---
+    new_id = item_data.get('id', str(uuid.uuid4()))
 
-    # 必須ではないが、よく使われるフィールドを初期化 (任意)
-    if 'description' not in item_data: item_data['description'] = ""
-    if 'history' not in item_data: item_data['history'] = []
-    if 'tags' not in item_data: item_data['tags'] = []
-    if 'image_path' not in item_data: item_data['image_path'] = None
+    # --- ★★★ 必須フィールドとデフォルト値を設定 (reference_tags を含む) ★★★ ---
+    # item_data に 'name' がない場合も、適切なデフォルト値を設定
+    item_to_save = {
+        "id": new_id,
+        "name": item_data.get("name", "名称未設定アイテム"), # item_dataにnameがなかった場合のデフォルト
+        "description": item_data.get("description", ""),
+        "history": item_data.get("history", []),
+        "tags": item_data.get("tags", []),
+        "image_path": item_data.get("image_path", None),
+        "reference_tags": item_data.get("reference_tags", []) # ★★★ reference_tags のデフォルト追加 ★★★
+    }
+    # 他にもアイテムが持つべきデフォルトフィールドがあればここに追加
 
-    data[item_id] = item_data # 新しいアイテムをカテゴリデータに追加
-    if save_data_category(project_dir_name, category_name, data):
-        print(f"Item '{item_data.get('name')}' (ID: {item_id}) added to category '{category_name}', project '{project_dir_name}'.")
-        return item_id
+    # --- ★★★ 既存の item_data のキーで上書き (必須フィールド以外も保持するため) ★★★ ---
+    for key, value in item_data.items():
+        if key not in item_to_save:
+            item_to_save[key] = value  # 必須フィールド以外もコピー
+
+    # --- ★★★ ファイルへの保存処理 ★★★ ---
+    # (ここから先は変更ありません。ただし、ファイル操作のエラーハンドリングは重要)
+    category_data = load_data_category(project_dir_name, category_name)
+    if category_data is None:
+        print(f"Error: Could not load category data for '{category_name}' in project '{project_dir_name}'.")
+        return None
+
+    if new_id in category_data:
+        print(f"Error: Item with ID '{new_id}' already exists in category '{category_name}'.")
+        return None
+
+    category_data[new_id] = item_to_save # 新しいアイテムを辞書に追加
+
+    if save_data_category(project_dir_name, category_name, category_data):
+        print(f"Added new item with ID '{new_id}' to category '{category_name}'.")
+        return new_id
     else:
-        print(f"Failed to save data after attempting to add item '{item_data.get('name')}' to category '{category_name}'.")
+        print(f"Error: Could not save category data after adding item '{new_id}'.")
         return None
 
 def update_item(project_dir_name: str, category_name: str, item_id: str, update_data: dict) -> bool:

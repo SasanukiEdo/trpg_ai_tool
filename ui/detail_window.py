@@ -179,6 +179,7 @@ class DetailWindow(QWidget):
         """`self.item_data` に基づいて詳細表示UIを動的に構築します。
         履歴表示に通し番号と区切り線を追加し、タイムスタンプを非表示にします。
         履歴削除ボタン、履歴編集ボタンを追加します。
+        参照先タグ入力フィールドも追加します。
         """
         if not self.item_data: return
 
@@ -235,13 +236,27 @@ class DetailWindow(QWidget):
         history_view_layout.addLayout(history_buttons_layout)
         self.content_layout.addWidget(history_view_container)
 
-        # タグ
-        tags_label = QLabel("タグ (カンマ区切り):"); tags_edit = QLineEdit(", ".join(self.item_data.get("tags", []))); self.detail_widgets['tags'] = tags_edit; self.content_layout.addWidget(tags_label); self.content_layout.addWidget(tags_edit)
+        # タグ (既存のアイテム自身のタグ)
+        tags_label = QLabel("タグ (カンマ区切り):")
+        tags_edit = QLineEdit(", ".join(self.item_data.get("tags", [])))
+        self.detail_widgets['tags'] = tags_edit
+        self.content_layout.addWidget(tags_label)
+        self.content_layout.addWidget(tags_edit)
+
+        # --- ★★★ 参照先タグ入力フィールドを追加 (アイテム用) ★★★ ---
+        ref_tags_label = QLabel("参照先タグ (カンマ区切り、プロンプト連携用):")
+        ref_tags_edit = QLineEdit(", ".join(self.item_data.get("reference_tags", []))) # 新しいキー
+        ref_tags_edit.setPlaceholderText("例: ギルド職員, 魔法武器")
+        self.detail_widgets['reference_tags'] = ref_tags_edit # detail_widgets に登録
+        self.content_layout.addWidget(ref_tags_label)
+        self.content_layout.addWidget(ref_tags_edit)
+        # --- ★★★ ------------------------------------------ ★★★ ---
 
         # 画像
         img_section_layout = QHBoxLayout(); img_label = QLabel("画像:"); img_section_layout.addWidget(img_label); img_section_layout.addStretch(); select_img_button = QPushButton("画像を選択"); select_img_button.clicked.connect(self.select_image_file); clear_img_button = QPushButton("画像をクリア"); clear_img_button.clicked.connect(self.clear_image_file); img_section_layout.addWidget(select_img_button); img_section_layout.addWidget(clear_img_button); self.content_layout.addLayout(img_section_layout)
         self.img_path_label = QLabel("画像パス: (選択されていません)"); self.img_path_label.setWordWrap(True); self.detail_widgets['image_path_display'] = self.img_path_label; self.content_layout.addWidget(self.img_path_label)
-        self.img_preview_label = QLabel(); self.img_preview_label.setAlignment(Qt.AlignCenter); self.img_preview_label.setMinimumSize(200, 150); self.img_preview_label.setFrameShape(QFrame.StyledPanel); self.detail_widgets['image_preview'] = self.img_preview_label; self._update_image_preview(self.item_data.get("image_path")); self.content_layout.addWidget(self.img_preview_label)
+        # self.img_preview_label = QLabel(); self.img_preview_label.setAlignment(Qt.AlignCenter); self.img_preview_label.setMinimumSize(200, 150); self.img_preview_label.setFrameShape(QFrame.StyledPanel); self.detail_widgets['image_preview'] = self.img_preview_label; self._update_image_preview(self.item_data.get("image_path")); self.content_layout.addWidget(self.img_preview_label)
+        self.img_preview_label = QLabel(); self.img_preview_label.setAlignment(Qt.AlignCenter); self.img_preview_label.setMinimumSize(200, 150); self.img_preview_label.setFrameShape(QFrame.StyledPanel); self.img_preview_label.setScaledContents(True); self.img_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding); self.detail_widgets['image_preview'] = self.img_preview_label; self._update_image_preview(self.item_data.get("image_path")); self.content_layout.addWidget(self.img_preview_label)
         spacer = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding); self.content_layout.addSpacerItem(spacer)
 
     def _on_ai_update_description_clicked(self):
@@ -705,23 +720,35 @@ class DetailWindow(QWidget):
             if new_desc != self.item_data.get('description'):
                 updated_data_payload['description'] = new_desc
                 changed_fields_count += 1
-
-        # タグ
+                
+        # タグ (アイテム自身のタグ)
         if 'tags' in self.detail_widgets:
             tags_str = self.detail_widgets['tags'].text()
             new_tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
-            if set(new_tags_list) != set(self.item_data.get('tags', [])): # 順序無視で比較
+            # 保存されているリストと比較 (順序無視)
+            # self.item_data.get('tags', []) がNoneの場合も考慮
+            current_tags = self.item_data.get('tags', [])
+            if current_tags is None: current_tags = [] # Noneなら空リストとして扱う
+            if set(new_tags_list) != set(current_tags):
                 updated_data_payload['tags'] = new_tags_list
                 changed_fields_count += 1
 
-        # 画像パス (self.item_data['image_path'] は select_image_file/clear_image_file で直接更新済みのはず)
-        # なので、ここでは保存前のローカルデータとの比較で変更を検知
+        # --- ★★★ 参照先タグの変更を収集 ★★★ ---
+        if 'reference_tags' in self.detail_widgets:
+            ref_tags_str = self.detail_widgets['reference_tags'].text()
+            new_ref_tags_list = [tag.strip() for tag in ref_tags_str.split(',') if tag.strip()]
+            current_ref_tags = self.item_data.get('reference_tags', [])
+            if current_ref_tags is None: current_ref_tags = []
+            if set(new_ref_tags_list) != set(current_ref_tags):
+                updated_data_payload['reference_tags'] = new_ref_tags_list
+                changed_fields_count += 1
+        # --- ★★★ ------------------------- ★★★ ---
+
+        # 画像パス
         original_item_for_image_check = get_item(self.current_project_dir_name, self.current_category, self.current_item_id)
-        if original_item_for_image_check and self.item_data.get('image_path') != original_item_for_image_check.get('image_path'): updated_data_payload['image_path'] = self.item_data.get('image_path'); changed_fields_count += 1
-
-
-
-        # 履歴は add_history_entry_ui で個別に保存されるため、ここでは対象外
+        if original_item_for_image_check and self.item_data.get('image_path') != original_item_for_image_check.get('image_path'):
+             updated_data_payload['image_path'] = self.item_data.get('image_path')
+             changed_fields_count += 1
 
         if changed_fields_count == 0:
             QMessageBox.information(self, "変更なし", "保存する変更点がありません。")

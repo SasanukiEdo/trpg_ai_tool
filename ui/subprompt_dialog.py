@@ -35,7 +35,7 @@ class SubPromptEditDialog(QDialog):
         prompt_input (QTextEdit): サブプロンプトの本文を入力するテキストエリア。
         model_combo (QComboBox): 使用するAIモデルを選択するコンボボックス。
     """
-
+    
     def __init__(self,
                  initial_data: dict | None = None,
                  parent: QWidget | None = None, # QWidgetをインポートしていないので型ヒント修正
@@ -55,6 +55,7 @@ class SubPromptEditDialog(QDialog):
             current_category (str | None, optional):
                 現在操作対象となっているサブプロンプトのカテゴリ名。
                 ウィンドウタイトルに表示するために使用。デフォルトは None。
+            reference_tags_input (QLineEdit): 参照先タグを入力するフィールド。
         """
         super().__init__(parent)
         self.is_editing = is_editing
@@ -70,7 +71,7 @@ class SubPromptEditDialog(QDialog):
         """list[str]: 利用可能なAIモデル名のリスト。"""
 
         if initial_data is None:
-            initial_data = {"name": "", "prompt": "", "model": ""} # 新規作成時のデフォルト
+            initial_data = {"name": "", "prompt": "", "model": "", "reference_tags": []} # 新規作成時のデフォルト
         self.initial_name = initial_data.get("name", "") if is_editing else ""
         """str: 編集モードの場合の、編集開始前のサブプロンプト名。名前変更時の重複チェックなどに使用可能。"""
 
@@ -103,13 +104,19 @@ class SubPromptEditDialog(QDialog):
             self.model_combo.setCurrentText(self.model_placeholder_text)
         layout.addRow("使用モデル:", self.model_combo)
 
+        # --- ★★★ 参照先タグ入力フィールドを追加 ★★★ ---
+        self.reference_tags_input = QLineEdit(", ".join(initial_data.get("reference_tags", [])))
+        self.reference_tags_input.setPlaceholderText("例: ギルド, 魔法アイテム")
+        layout.addRow("参照先タグ (カンマ区切り):", self.reference_tags_input)
+        # --- ★★★ --------------------------------- ★★★ ---
+
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addRow(button_box)
         self.setMinimumWidth(450)
 
-    def get_data(self) -> dict[str, str]:
+    def get_data(self) -> dict[str, str | list[str]]:
         """ダイアログで編集されたサブプロンプトのデータを取得します。
 
         このメソッドは、ダイアログが `Accepted` で閉じられた後に呼び出されることを想定しています。
@@ -117,8 +124,8 @@ class SubPromptEditDialog(QDialog):
         'model' の値は空文字列になります。
 
         Returns:
-            dict[str, str]: キー 'name', 'prompt', 'model' を持つ辞書。
-                            'model' は空文字列または選択されたモデル名。
+            dict[str, str | list[str]]: キー 'name', 'prompt', 'model', 'reference_tags' を持つ辞書。
+                                       'reference_tags' は文字列のリスト。
         """
         name = self.name_input.text().strip()
         prompt = self.prompt_input.toPlainText().strip()
@@ -127,11 +134,17 @@ class SubPromptEditDialog(QDialog):
         model_to_save = "" # デフォルトは空文字列（プロジェクト設定モデル使用）
         if selected_model_text != self.model_placeholder_text:
             model_to_save = selected_model_text
+        
+        # --- ★★★ 参照先タグデータを取得 ★★★ ---
+        reference_tags_str = self.reference_tags_input.text().strip()
+        reference_tags_list = [tag.strip() for tag in reference_tags_str.split(',') if tag.strip()]
+        # --- ★★★ -------------------------- ★★★ ---
 
         return {
             "name": name,
             "prompt": prompt,
-            "model": model_to_save
+            "model": model_to_save,
+            "reference_tags": reference_tags_list # ★ 追加
         }
 
     def accept(self):

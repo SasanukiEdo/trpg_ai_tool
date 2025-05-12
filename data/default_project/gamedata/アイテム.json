@@ -9,5 +9,14 @@
         "category": "アイテム",
         "history": [],
         "description": ""
+    },
+    "19012aca-2647-4e25-a646-f1ccde96b297": {
+        "id": "19012aca-2647-4e25-a646-f1ccde96b297",
+        "name": "ロングソード",
+        "description": "",
+        "history": [],
+        "tags": [],
+        "image_path": null,
+        "reference_tags": []
     }
 }

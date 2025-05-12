@@ -25,9 +25,13 @@
         "tags": [
             "主人公",
             "戦士",
-            "レベル5"
+            "レベル5",
+            "パーティーメンバー"
         ],
-        "image_path": null
+        "image_path": null,
+        "reference_tags": [
+            "ロングソード"
+        ]
     },
     "キャラク-7037b970-5c5e-4ee4-aa1b-37b4d1a915e7": {
         "name": "リナ",
@@ -35,7 +39,9 @@
         "id": "キャラク-7037b970-5c5e-4ee4-aa1b-37b4d1a915e7",
         "category": "キャラクター",
         "history": [],
-        "tags": [],
+        "tags": [
+            "パーティーメンバー"
+        ],
         "image_path": "images/hai_to_gensou_no_grimgar_37-724x1024.jpg"
     }
 }
