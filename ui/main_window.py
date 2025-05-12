@@ -724,7 +724,9 @@ class MainWindow(QWidget):
             print("設定ダイアログの変更が適用されました。")
 
     def on_send_button_clicked(self):
-        """「送信」ボタンがクリックされたときの処理。AIに応答を要求します。"""
+        """「送信」ボタンがクリックされたときの処理。AIに応答を要求します。"
+        チェックされたサブプロンプト、データアイテム、およびタグ検索に基づいた情報をプロンプトに組み込みます。
+        """
         if not self.gemini_configured:
             QMessageBox.warning(self, "API未設定", "Gemini APIが設定されていません。「設定」からAPIキーを入力してください。")
             return
@@ -772,24 +774,92 @@ class MainWindow(QWidget):
             for item_id in item_ids:
                 item_detail = get_item(self.current_project_dir_name, category, item_id)
                 if item_detail:
-                    info_str = f"### データ参照: {category} - {item_detail.get('name', 'N/A')}\n"
-                    info_str += f"  - 名前: {item_detail.get('name', 'N/A')}\n"
-                    info_str += f"  - 説明/メモ: {item_detail.get('description', '')}\n"
-                    tags = item_detail.get('tags', [])
-                    if tags: info_str += f"  - タグ: {', '.join(tags)}\n"
-                    # 履歴も追加するかは検討 (長くなる可能性)
-                    # history = item_detail.get('history', [])
-                    # if history: info_str += f"  - 履歴 (抜粋): {history[-1]['entry'] if history else ''}\n" # 最新の履歴など
-                    checked_data_for_prompt.append(info_str)
-        if checked_data_for_prompt:
-            final_prompt_parts.append("\n## 参照データ\n" + "\n".join(checked_data_for_prompt))
+                    # info_str = f"### データ参照: {category} - {item_detail.get('name', 'N/A')}\n"
+                    # info_str += f"  - 名前: {item_detail.get('name', 'N/A')}\n"
+                    # info_str += f"  - 説明/メモ: {item_detail.get('description', '')}\n"; tags = item_detail.get('tags', []);
+                    # if tags: info_str += f"  - タグ: {', '.join(tags)}\n"; checked_data_for_prompt.append(info_str) # ★★★ 修正前: 文字列を追加
+
+                    # --- ★★★ 修正後: 辞書形式で必要な情報を抽出して追加 ★★★ ---
+                    checked_data_for_prompt.append({ # 辞書形式で追加
+                        "id": item_id,
+                        "name": item_detail.get('name', 'N/A'),
+                        "category": category,
+                        "description": item_detail.get('description', ''),
+                        "tags": item_detail.get('tags', [])
+                    })
+                    # --- ★★★ 修正ここまで ★★★ ---
+        if checked_data_for_prompt: final_prompt_parts.append("\n## 参照データ (直接選択)\n" + "\n".join(checked_data_for_prompt))
+
+        # --- ★★★ 3. タグによる関連情報 (サブプロンプト + データアイテム) ★★★ ---
+        from core.data_manager import find_items_by_tags # ここでインポート
+        
+        # (1) サブプロンプトから参照先タグを収集
+        reference_tags_from_subprompts = []
+        for category, checked_names in self.checked_subprompts.items():
+            if category in self.subprompts:
+                for name in checked_names:
+                    if name in self.subprompts[category]:
+                        sub_data = self.subprompts[category][name]
+                        ref_tags = sub_data.get("reference_tags", []) # 参照先タグリスト
+                        if ref_tags and isinstance(ref_tags, list):
+                            reference_tags_from_subprompts.extend(ref_tags) # タグリストをextendで追加
+
+        # (2) データアイテムからタグを収集
+        reference_tags_from_data_items = []
+        for category, item_ids in self.data_management_widget.get_checked_items().items():
+            for item_id in item_ids:
+                item_detail = get_item(self.current_project_dir_name, category, item_id)
+                if item_detail:
+                    ref_tags = item_detail.get("reference_tags", []) # 新しい参照先タグリスト
+                    if ref_tags and isinstance(ref_tags, list):
+                         reference_tags_from_data_items.extend(ref_tags) # タグリストを追加
+
+        # (3) タグをまとめて検索 (重複を削除)
+        all_reference_tags = list(set(reference_tags_from_subprompts + reference_tags_from_data_items))
+        
+        # (4) 検索を実行
+        tagged_items_for_prompt = []
+        if all_reference_tags:
+            tagged_items_for_prompt = find_items_by_tags(
+                self.current_project_dir_name,
+                all_reference_tags, # 検索するタグのリスト
+                case_insensitive=True,  # 大文字・小文字を区別しない
+                search_logic="OR" # OR 検索
+            )
+
+        # (5) プロンプトに追加 (重複を避ける)
+        if tagged_items_for_prompt:
+            # 既に直接選択されているアイテムのIDのセット (重複排除用)
+            already_included_item_ids = set(item.get("id") for item in checked_data_for_prompt)
+
+            # タグ検索で見つかったアイテムの情報を整形
+            tagged_info_str = ""
+            for item in tagged_items_for_prompt:
+                if item.get("id") not in already_included_item_ids: # 重複をチェック
+                    item_name = item.get("name", "N/A")
+                    item_category = item.get("category", "不明")
+                    item_description = item.get("description", "(説明なし)")
+                    # 最新の履歴2件を取得
+                    recent_history = item.get("recent_history", [])
+                    recent_history_text = ""
+                    if recent_history:
+                        recent_history_text = "\n  - " + "\n  - ".join(recent_history) # 各履歴を改行と - で区切る
+                    
+                    tagged_info_str += f"### タグ関連情報: {item_category} - {item_name}\n"
+                    tagged_info_str += f"  - 説明/メモ: {item_description}\n"
+                    if recent_history_text:
+                        tagged_info_str += f"  - 最新履歴:\n{recent_history_text}\n"
+            
+            if tagged_info_str: # 何か情報があればプロンプトに追加
+                final_prompt_parts.append("\n## タグ関連情報\n" + tagged_info_str)
+        # --- ★★★ ----------------------------------------------------- ★★★ ---
 
         # 4. ユーザーの入力
         final_prompt_parts.append(f"\n## ユーザーの現在の入力\n{user_text}")
         final_prompt_to_ai = "\n\n".join(final_prompt_parts).strip()
 
         print("--- Final Prompt to AI ---")
-        print(final_prompt_to_ai) # デバッグ用にコンソールへ出力
+        print(final_prompt_to_ai)
         print("--------------------------")
 
         # AIに送信するモデルの決定

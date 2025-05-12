@@ -683,4 +683,17 @@ if __name__ == '__main__':
 
     print("\n--- 全テスト完了 ---")
 
+class TestFindByTags(unittest.TestCase):
+    def test_find_items_by_tags(self):
+        # テスト用のプロジェクト、カテゴリ、アイテムをdataディレクトリに作成
+        # ... （create_category や add_item を使ってデータを作成するコード）...
 
+        # テスト実行
+        found_items = find_items_by_tags("default_project", ["パーティーメンバー"])
+        
+        # 検証
+        self.assertEqual(len(found_items), 2) # 魔法タグを持つアイテムが1つのはず
+        self.assertEqual(found_items[0]["name"], "アルド") # アイテム名も確認
+
+if __name__ == '__main__':
+    unittest.main()

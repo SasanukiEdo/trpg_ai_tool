@@ -15,8 +15,11 @@
         "name": "ロングソード",
         "description": "",
         "history": [],
-        "tags": [],
+        "tags": [
+            "武器"
+        ],
         "image_path": null,
-        "reference_tags": []
+        "reference_tags": [],
+        "category": "アイテム"
     }
 }
