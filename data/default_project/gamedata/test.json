@@ -1,1 +1,14 @@
-{}
+{
+    "3c8e1bc5-54b9-4df8-b28d-d16afe945385": {
+        "id": "3c8e1bc5-54b9-4df8-b28d-d16afe945385",
+        "name": "ファイアボール",
+        "description": "火の魔法",
+        "history": [],
+        "tags": [
+            "魔法"
+        ],
+        "image_path": null,
+        "reference_tags": [],
+        "category": "test"
+    }
+}

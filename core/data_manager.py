@@ -16,6 +16,7 @@ import json
 import os
 import uuid
 import datetime
+import unittest
 
 # --- 定数 ---
 PROJECTS_BASE_DIR = "data"
@@ -496,6 +497,87 @@ def update_tags(project_dir_name: str, category_name: str, item_id: str, tags_li
     return update_item(project_dir_name, category_name, item_id, {"tags": tags_list})
 
 
+# --- ★★★ 新規: タグによるアイテム検索 ★★★ ---
+ITEM_SUMMARY_KEYS = ["name", "category", "description"]
+"""list[str]: タグ検索結果として抽出するアイテム情報のキー。"""
+MAX_HISTORY_ENTRIES_IN_SUMMARY = 2
+"""int: タグ検索結果として抽出する履歴エントリの最大数。"""
+
+def find_items_by_tags(project_dir_name: str, tags_to_find: list[str], case_insensitive: bool = True, search_logic: str = "OR") -> list[dict]:
+    """指定されたタグ（複数可）を持つアイテムを全カテゴリから検索し、要約情報を返します。
+    大文字・小文字は区別せず、OR検索を行います。
+
+    Args:
+        project_dir_name (str): 対象プロジェクトのディレクトリ名。
+        tags_to_find (list[str]): 検索するタグのリスト。
+        case_insensitive (bool): 大文字・小文字を区別しない検索を行うかどうか。
+        search_logic (str): "OR" (いずれかのタグに一致) または "AND" (全てのタグに一致)
+
+    Returns:
+        list[dict]: タグに一致するアイテムの要約情報のリスト。
+                    各アイテムの情報は、{"name": ..., "category": ..., "description": ..., "recent_history": [...]} の形式。
+    """
+    print(f"Searching for items with tags: {tags_to_find} (case_insensitive={case_insensitive}, search_logic={search_logic})")
+
+    if not project_dir_name:
+        print("Warning: project_dir_name is empty in find_items_by_tags.")
+        return []
+    if not tags_to_find or not isinstance(tags_to_find, list):
+        print("Warning: tags_to_find is empty or not a list.")
+        return []
+
+    # タグを小文字に変換 (比較のため)
+    if case_insensitive:
+        tags_to_find = [tag.lower() for tag in tags_to_find if isinstance(tag, str)] # 文字列以外を除外
+
+    all_items_found = []
+    # 全カテゴリをリスト
+    from core.config_manager import list_project_dir_names
+    project_dirs = list_project_dir_names()
+    from core.data_manager import list_categories
+    categories = list_categories(project_dir_name)
+
+    if categories:
+        for category_name in categories:
+            # カテゴリのアイテムデータをロード
+            items_in_category = load_data_category(project_dir_name, category_name)
+            if items_in_category:
+                for item_id, item_data in items_in_category.items():
+                    item_tags = item_data.get("tags", []) # タグリストを取得
+                    if case_insensitive: # 比較のため小文字に
+                        item_tags = [tag.lower() for tag in item_tags if isinstance(tag, str)]
+
+                    # 検索ロジックの適用 (OR または AND)
+                    matches = False
+                    if search_logic == "AND":
+                        # AND 検索: 全てのタグが含まれているか
+                        matches = all(tag in item_tags for tag in tags_to_find)
+                    else: # OR (デフォルト)
+                        # OR 検索: いずれかのタグが含まれているか
+                        matches = any(tag in item_tags for tag in tags_to_find)
+
+                    if matches: # タグが一致する場合
+                        # 要約情報を作成
+                        item_summary = {"id": item_id, "category": category_name}
+                        for key in ITEM_SUMMARY_KEYS: # 定義されたキーを抽出
+                            item_summary[key] = item_data.get(key, "")
+                        
+                        # 最新の履歴エントリを抽出
+                        recent_history = item_data.get("history", [])
+                        if isinstance(recent_history, list): # 念のためリストであることを確認
+                            item_summary["recent_history"] = [
+                                h.get("entry", "") for h in recent_history[-MAX_HISTORY_ENTRIES_IN_SUMMARY:]
+                            ] # 最大2件
+                        else:
+                            item_summary["recent_history"] = [] # リストでなければ空リスト
+
+                        all_items_found.append(item_summary)
+
+    print(f"  Found {len(all_items_found)} items matching tags {tags_to_find} in project '{project_dir_name}'.")
+    return all_items_found
+# --- ★★★ -------------------------------------------- ★★★ ---
+
+
 if __name__ == '__main__':
     """モジュールの基本的な動作をテストするためのコード。"""
     print("--- Data Manager テスト ---")
@@ -600,3 +682,5 @@ if __name__ == '__main__':
         shutil.rmtree(os.path.dirname(test_project_path), ignore_errors=True)
 
     print("\n--- 全テスト完了 ---")
+
+
