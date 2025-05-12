@@ -14,9 +14,10 @@ from PyQt5.QtWidgets import (
     QPushButton, QScrollArea, QFrame, QFileDialog, QMessageBox, QDialog,
     QSizePolicy, QSpacerItem, QInputDialog, QApplication
 )
+from PyQt5.QtGui import QPixmap, QImageReader
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QPixmap, QImageReader, QResizeEvent, QBrush, QPalette, QPainter, QPaintEvent
-from PyQt5.QtWidgets import QStyleOption, QStyle
+from PyQt5.QtGui import QResizeEvent
+from PyQt5.QtGui import QBrush, QPalette
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -110,32 +111,18 @@ class DetailWindow(QWidget):
     def init_ui(self):
         """UI要素を初期化し、レイアウトを設定します。"""
         main_layout = QVBoxLayout(self)
-        # main_layout.setSizeConstraint(QVBoxLayout.SetMinimumSize) # これは一旦コメントアウトしても良い
+        main_layout.setSizeConstraint(QVBoxLayout.SetMinimumSize) # または QLayout.SetMinimumSize
 
         # スクロールエリアのセットアップ
         scroll_area = QScrollArea(self)
-        scroll_area.setObjectName("DetailScrollArea") # オブジェクト名
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        # --- ★★★ QScrollAreaのviewportの背景を透明に ★★★ ---
-        scroll_area.viewport().setAutoFillBackground(False)
-        # スタイルシートで viewport の背景も設定 (より確実に)
-        # scroll_area.setStyleSheet("QScrollArea#DetailScrollArea { background: transparent; border: none; }"
-        #                           "QScrollArea#DetailScrollArea QWidget { background: transparent; }") # viewportは直接QWidget
-        # 上記よりも、viewportに直接スタイルを当てる方が効果的かもしれない
-        scroll_area.viewport().setStyleSheet("background: transparent;")
-        # ----------------------------------------------------
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff) # 横スクロールバーは常にオフ
         main_layout.addWidget(scroll_area)
 
-        self.scroll_content_widget = QWidget()
-        self.scroll_content_widget.setObjectName("ScrollContentWidget")
-        self.scroll_content_widget.setAttribute(Qt.WA_TranslucentBackground, True) # これも重要
-        self.scroll_content_widget.setAutoFillBackground(False)
-
+        self.scroll_content_widget = QWidget() # スクロールされる中身のウィジェット
         self.content_layout = QVBoxLayout(self.scroll_content_widget)
-        self.content_layout.setAlignment(Qt.AlignTop)
-        # self.content_layout.setSizeConstraint(QVBoxLayout.SetMinimumSize) # 一旦コメントアウト
-
+        self.content_layout.setAlignment(Qt.AlignTop) # ウィジェットを上寄せ
+        self.content_layout.setSizeConstraint(QVBoxLayout.SetMinimumSize) # または QLayout.SetMinimumSize
         scroll_area.setWidget(self.scroll_content_widget)
 
         # --- 各詳細フィールドのプレースホルダー ---
@@ -196,97 +183,60 @@ class DetailWindow(QWidget):
 
     def _build_detail_view(self):
         """`self.item_data` に基づいて詳細表示UIを動的に構築します。
-        各ウィジェットに透過設定（WA_TranslucentBackground, setAutoFillBackground(False)）と
-        オブジェクト名を設定し、背景表示モードに対応できるようにします。
         履歴表示に通し番号と区切り線を追加し、タイムスタンプを非表示にします。
         履歴削除ボタン、履歴編集ボタンを追加します。
         """
-        if not self.item_data:
-            # アイテムデータがない場合は、コンテンツレイアウトをクリアするだけ
-            while self.content_layout.count():
-                child = self.content_layout.takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
-            self.content_layout.addWidget(QLabel("アイテムデータがありません。")) # 何か表示
-            return
-
-        # 既存のウィジェットをクリア（load_data で既に呼ばれているが念のため）
-        self.clear_view() # clear_viewはdetail_widgetsもクリアする
-
-        # --- ScrollContentWidget の設定 (init_ui でオブジェクト名は設定済み) ---
-        # WA_TranslucentBackground と setAutoFillBackground(False) も init_ui で設定済みなのでここでは不要
-
-        # --- 名前 ---
+        if not self.item_data: return
+        
+        # --- オブジェクト名設定と、QTextEditのviewport設定 ---
+        # 名前
         name_label = QLabel("名前:")
-        name_label.setObjectName("DetailNameLabel")
-        name_label.setAttribute(Qt.WA_TranslucentBackground, True)
-        name_label.setAutoFillBackground(False)
-        self.content_layout.addWidget(name_label)
-
         name_edit = QLineEdit(self.item_data.get("name", ""))
-        name_edit.setObjectName("DetailNameEdit")
-        name_edit.setAttribute(Qt.WA_TranslucentBackground, True)
-        name_edit.setAutoFillBackground(False)
+        name_edit.setObjectName("DetailNameEdit") # オブジェクト名
         self.detail_widgets['name'] = name_edit
+        self.content_layout.addWidget(name_label)
         self.content_layout.addWidget(name_edit)
 
-        # --- 説明/メモ ---
+        # 説明/メモ
         desc_label = QLabel("説明/メモ:")
-        desc_label.setObjectName("DetailDescriptionLabel")
-        desc_label.setAttribute(Qt.WA_TranslucentBackground, True)
-        desc_label.setAutoFillBackground(False)
-        self.content_layout.addWidget(desc_label)
-
         desc_edit = QTextEdit(self.item_data.get("description", ""))
-        desc_edit.setObjectName("DetailDescriptionEdit")
+        desc_edit.setObjectName("DetailDescriptionEdit") # オブジェクト名
         desc_edit.setMinimumHeight(150)
         desc_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        desc_edit.viewport().setAutoFillBackground(False) # viewport が重要
-        desc_edit.setAttribute(Qt.WA_TranslucentBackground, True)
-        desc_edit.setAutoFillBackground(False)
+        desc_edit.viewport().setAutoFillBackground(False) # ★★★ viewportの背景自動塗りつぶしを無効化 ★★★
         self.detail_widgets['description'] = desc_edit
+        self.content_layout.addWidget(desc_label)
         self.content_layout.addWidget(desc_edit)
 
         ai_update_button = QPushButton("AIで「説明/メモ」を編集支援")
-        # ai_update_button.setObjectName("DetailAIEditDescButton") # 必要ならボタンにも
         ai_update_button.clicked.connect(self._on_ai_update_description_clicked)
         self.content_layout.addWidget(ai_update_button)
 
-        # --- 履歴 ---
+        # 履歴
         history_label = QLabel("履歴:")
-        history_label.setObjectName("DetailHistoryLabel")
-        history_label.setAttribute(Qt.WA_TranslucentBackground, True)
-        history_label.setAutoFillBackground(False)
-        self.content_layout.addWidget(history_label)
+        self.content_layout.addWidget(history_label) # ラベルを先に追加
 
-        history_view_container = QWidget() # 履歴表示とボタンをまとめる
-        history_view_container.setAttribute(Qt.WA_TranslucentBackground, True) # コンテナも透過
-        history_view_container.setAutoFillBackground(False)
+        history_view_container = QWidget() # 履歴表示とボタンをまとめるコンテナ
         history_view_layout = QVBoxLayout(history_view_container)
         history_view_layout.setContentsMargins(0,0,0,0)
-
-        self.history_view_text_edit = QTextEdit() # QTextEditはメンバ変数に
-        self.history_view_text_edit.setObjectName("DetailHistoryView")
+        self.history_view_text_edit = QTextEdit()
+        self.history_view_text_edit.setObjectName("DetailHistoryView") # オブジェクト名
         self.history_view_text_edit.setReadOnly(True)
-        self.history_view_text_edit.viewport().setAutoFillBackground(False) # viewport
-        self.history_view_text_edit.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.history_view_text_edit.setAutoFillBackground(False)
-        
-        history_entries = self.item_data.get("history", [])
-        history_display_html = ""
-        if not history_entries:
-            history_display_html = "履歴はありません。"
+        self.history_view_text_edit.viewport().setAutoFillBackground(False) # ★★★ viewportの背景自動塗りつぶしを無効化 ★★★
+        # ... (履歴表示HTML生成ロジックは変更なし)
+        history_entries = self.item_data.get("history", []); history_display_html = ""
+        if not history_entries: history_display_html = "履歴はありません。"
         else:
             for i, h_entry_dict in enumerate(history_entries):
                 entry_text_for_display = h_entry_dict.get('entry', '(内容なし)')
                 # タイムスタンプは表示しない、代わりに通し番号を表示
                 formatted_entry_text = entry_text_for_display.replace("\n", "<br>")
                 history_display_html += f"<b>({i + 1})</b> {formatted_entry_text}"
-                if i < len(history_entries) - 1:
-                    history_display_html += "<hr>"
-        self.history_view_text_edit.setHtml(history_display_html)
-        self.history_view_text_edit.setMinimumHeight(100)
-        self.detail_widgets['history_view'] = self.history_view_text_edit # 保存対象外だが参照用に
+                if i < len(history_entries) - 1: # 最後の要素以外には区切り線
+                    history_display_html += "<hr>" # 区切り線
+        self.history_view_text_edit.setHtml(history_display_html) # HTMLとしてセット
+        self.history_view_text_edit.setMinimumHeight(100) # 高さを調整
+        self.detail_widgets['history_view'] = self.history_view_text_edit # 保存対象外
         history_view_layout.addWidget(self.history_view_text_edit)
 
         history_buttons_layout = QHBoxLayout()
@@ -310,23 +260,15 @@ class DetailWindow(QWidget):
 
         # タグ
         tags_label = QLabel("タグ (カンマ区切り):")
-        tags_label.setObjectName("DetailTagsLabel")
-        tags_label.setAttribute(Qt.WA_TranslucentBackground, True)
-        tags_label.setAutoFillBackground(False)
-        self.content_layout.addWidget(tags_label)
         tags_edit = QLineEdit(", ".join(self.item_data.get("tags", [])))
         tags_edit.setObjectName("DetailTagsEdit") # オブジェクト名
-        tags_edit.setAttribute(Qt.WA_TranslucentBackground, True)
-        tags_edit.setAutoFillBackground(False)
         self.detail_widgets['tags'] = tags_edit
+        self.content_layout.addWidget(tags_label)
         self.content_layout.addWidget(tags_edit)
 
-        # --- 画像セクション ---
+        # 画像
         img_section_layout = QHBoxLayout()
-        img_label = QLabel("画像:") # このラベルも対象
-        img_label.setObjectName("DetailImageSectionLabel")
-        img_label.setAttribute(Qt.WA_TranslucentBackground, True)
-        img_label.setAutoFillBackground(False)
+        img_label = QLabel("画像:")
         img_section_layout.addWidget(img_label)
         img_section_layout.addStretch()
         
@@ -339,45 +281,33 @@ class DetailWindow(QWidget):
         select_img_button = QPushButton("画像を選択")
         select_img_button.clicked.connect(self.select_image_file)
         img_section_layout.addWidget(select_img_button)
-        
         clear_img_button = QPushButton("画像をクリア")
         clear_img_button.clicked.connect(self.clear_image_file)
         img_section_layout.addWidget(clear_img_button)
         self.content_layout.addLayout(img_section_layout)
 
-        self.img_path_label = QLabel("画像パス: (選択されていません)") # このラベルは通常表示時のみなので透過は不要かも
-        self.img_path_label.setObjectName("DetailImagePathLabel")
+        self.img_path_label = QLabel("画像パス: (選択されていません)")
         self.img_path_label.setWordWrap(True)
         self.detail_widgets['image_path_display'] = self.img_path_label
         self.content_layout.addWidget(self.img_path_label)
 
-        self.img_preview_label = QLabel() # 通常プレビュー用ラベル
-        self.img_preview_label.setObjectName("DetailImagePreviewLabel")
+        self.img_preview_label = QLabel()
         self.img_preview_label.setAlignment(Qt.AlignCenter)
         self.img_preview_label.setMinimumSize(200, 150)
         self.img_preview_label.setFrameShape(QFrame.StyledPanel)
         self.img_preview_label.setScaledContents(True)
         self.img_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.img_preview_label.setAttribute(Qt.WA_TranslucentBackground, True) # 通常時も親を透かす
-        self.img_preview_label.setAutoFillBackground(False)
         self.detail_widgets['image_preview'] = self.img_preview_label
         self.content_layout.addWidget(self.img_preview_label)
-        
-        # --- self.scroll_content_widget のオブジェクト名設定は init_ui に移動済み ---
 
-        # 初回表示モード適用とプレビュー更新は load_data の最後や、
-        # このメソッドの最後に _update_image_display_mode を呼ぶことで行う
-        # ここでは直接呼ばず、load_dataから呼ばれる_update_image_display_modeに任せる
-        # ただし、_update_image_preview は画像パスが変わったときに呼ばれるべきなので、
-        # load_data の最後に _update_image_preview を呼び、その中で表示モードも考慮する形が良い。
-        # 現状は _update_image_display_mode の中で _update_image_preview が呼ばれるので、
-        # ここでの明示的な呼び出しは不要。
-        # _update_image_display_mode() # _build_detail_view の最後には不要 (load_dataの最後に呼ぶ)
-        # _update_image_preview(self.item_data.get("image_path")) # 同上
+        # --- ★★★ スクロールコンテンツウィジェットにオブジェクト名を設定 ★★★ ---
+        if self.scroll_content_widget:
+            self.scroll_content_widget.setObjectName("ScrollContentWidget")
+            # ScrollContentWidget の setAutoFillBackground は、スタイルシートで制御するのでここでは不要かも
 
-        spacer = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        self.content_layout.addSpacerItem(spacer)
-
+        self._update_image_display_mode()
+        self._update_image_preview(self.item_data.get("image_path"))
+        spacer = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding); self.content_layout.addSpacerItem(spacer)
 
 
     def _on_ai_update_description_clicked(self):
@@ -554,88 +484,79 @@ class DetailWindow(QWidget):
         # --- スタイルシートの準備 ---
         # 共通の半透明白背景
         input_widget_bg_rgba = "rgba(255, 255, 255, 0.85)" 
-        input_widget_style_str = f"background-color: {input_widget_bg_rgba}; border: 1px solid lightgray; padding: 2px;"
-        qtextedit_base_style_str = f"background-color: {input_widget_bg_rgba}; border: 1px solid lightgray; padding: 2px;"
-        label_bg_rgba = "rgba(50, 50, 50, 0.65)"
-        label_text_color = "white"
-        label_style_str = f"background-color: {label_bg_rgba}; color: {label_text_color}; padding: 3px; border-radius: 3px;"
+        input_widget_style = f"background-color: {input_widget_bg_rgba}; border: 1px solid lightgray;"
+
+        # QTextEdit用の特別なスタイル (viewportの背景も制御)
+        # QTextEdit 自体の背景は半透明白、viewport は完全に透明にして下の背景画像を見せる
+        qtextedit_base_style = f"background-color: {input_widget_bg_rgba}; border: 1px solid lightgray;"
+        qtextedit_viewport_style = "background-color: transparent;"
 
 
         if self._image_display_mode == "background":
-            self.img_path_label.setVisible(False) # img_path_label は通常表示専用
+            # 背景表示モード
+            self.img_path_label.setVisible(False)
             self.img_preview_label.setVisible(False)
             
-            current_stylesheet = "" # DetailWindow に適用するスタイルシート
+            # DetailWindow の背景は QPalette で設定
+            self.setAutoFillBackground(True) # QPaletteで背景を描画するために必要
+            palette = self.palette()
             if self._original_image_pixmap and not self._original_image_pixmap.isNull():
-                absolute_image_path = None
-                relative_image_path = self.item_data.get('image_path') if self.item_data else None
-                if relative_image_path and self.current_project_dir_name:
-                    from core.data_manager import PROJECTS_BASE_DIR # 修正: data_managerからインポート
-                    project_root_abs_path = os.path.join(PROJECTS_BASE_DIR, self.current_project_dir_name)
-                    absolute_image_path = os.path.join(project_root_abs_path, relative_image_path)
-                
-                if absolute_image_path and os.path.exists(absolute_image_path):
-                    # スタイルシートのurl()には、OSネイティブなパス区切り文字(\)ではなく、
-                    # フォワードスラッシュ(/)を使用するのが一般的。
-                    # また、パスにスペース等が含まれる場合はクォートで囲む。
-                    # os.path.normpath と os.path.abspath で正規化された絶対パスを取得し、
-                    # さらにスラッシュに置換する。
-                    safe_abs_path_for_stylesheet = os.path.abspath(absolute_image_path).replace("\\", "/")
-                    current_stylesheet += ( # += で追記していく
-                        "QWidget#DetailWindow {"
-                        f"  background-image: url('{safe_abs_path_for_stylesheet}');"
-                        "  background-repeat: no-repeat;"
-                        "  background-position: center bottom;"
-                        "  background-size: contain;"
-                        "}"
-                    )
-            else: # 画像がない場合
-                current_stylesheet += "QWidget#DetailWindow { background-image: none; }"
+                bg_pixmap_scaled = self._original_image_pixmap.scaled(
+                    self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+                palette.setBrush(QPalette.Window, QBrush(bg_pixmap_scaled))
+            else: # 画像がない場合はデフォルトのウィンドウ背景に戻す
+                palette.setBrush(QPalette.Window, self.style().standardPalette().brush(QPalette.Window)) # システムデフォルト
+            self.setPalette(palette)
 
-            # --- ScrollContentWidget は init_ui と _build_detail_view で WA_TranslucentBackground と
-            # --- setAutoFillBackground(False) が設定され、viewportも透明になっているはずなので、
-            # --- ここではスタイルシートでの明示的な background: transparent は不要かもしれない。
-            # --- もし ScrollContentWidget がまだ不透明なら、以下のスタイルを追加。
-            # current_stylesheet += "\nQWidget#ScrollContentWidget { background-color: transparent !important; border: none !important; }"
-            
-            # 各編集ウィジェットとラベルのスタイルを DetailWindow のスタイルシートに追加
-            # (WA_TranslucentBackground が設定されているので、rgbaのアルファが効くはず)
-            current_stylesheet += f"\nQLineEdit#DetailNameEdit {{ {input_widget_style_str} }}"
-            current_stylesheet += f"\nQTextEdit#DetailDescriptionEdit {{ {qtextedit_base_style_str} }}"
-            # QTextEditのviewportはsetAutoFillBackground(False)したので、これだけで良いはず
-            current_stylesheet += f"\nQTextEdit#DetailHistoryView {{ {qtextedit_base_style_str} }}"
-            current_stylesheet += f"\nQLineEdit#DetailTagsEdit {{ {input_widget_style_str} }}"
-            
-            current_stylesheet += f"\nQLabel#DetailNameLabel {{ {label_style_str} }}"
-            # ... (他のラベルも同様に)
-            current_stylesheet += f"\nQLabel#DetailDescriptionLabel {{ {label_style_str} }}"
-            current_stylesheet += f"\nQLabel#DetailHistoryLabel {{ {label_style_str} }}"
-            current_stylesheet += f"\nQLabel#DetailTagsLabel {{ {label_style_str} }}"
-            current_stylesheet += f"\nQLabel#DetailImageSectionLabel {{ {label_style_str} }}"
+            # ScrollContentWidget の背景を透明に (個別にスタイルシート設定)
+            if self.scroll_content_widget:
+                self.scroll_content_widget.setStyleSheet("QWidget#ScrollContentWidget { background-color: transparent; }")
+                # self.scroll_content_widget.viewport().setAutoFillBackground(False) # QScrollArea の viewport は通常不要
 
-            self.setStyleSheet(current_stylesheet)
-            print(f"  Applied background mode stylesheet:\n{current_stylesheet}")
+            # 各編集ウィジェットに個別にスタイルシートを設定
+            if 'name' in self.detail_widgets:
+                self.detail_widgets['name'].setStyleSheet(f"QLineEdit#DetailNameEdit {{ {input_widget_style} }}")
+            if 'description' in self.detail_widgets and isinstance(self.detail_widgets['description'], QTextEdit):
+                desc_edit_widget = self.detail_widgets['description']
+                desc_edit_widget.setStyleSheet(
+                    f"QTextEdit#DetailDescriptionEdit {{ {qtextedit_base_style} }}"
+                    # f"QTextEdit#DetailDescriptionEdit QAbstractScrollArea {{ {qtextedit_viewport_style} }}" # これだと枠線も消える可能性
+                    # f"QTextEdit#DetailDescriptionEdit QWidget {{ {qtextedit_viewport_style} }}" # viewport内のウィジェット
+                )
+                # desc_edit_widget.viewport().setStyleSheet(qtextedit_viewport_style) # プログラムでviewportに直接も可
+            if 'history_view' in self.detail_widgets and isinstance(self.detail_widgets['history_view'], QTextEdit):
+                hist_view_widget = self.detail_widgets['history_view']
+                hist_view_widget.setStyleSheet(
+                    f"QTextEdit#DetailHistoryView {{ {qtextedit_base_style} }}"
+                )
+                # hist_view_widget.viewport().setStyleSheet(qtextedit_viewport_style)
+            if 'tags' in self.detail_widgets:
+                self.detail_widgets['tags'].setStyleSheet(f"QLineEdit#DetailTagsEdit {{ {input_widget_style} }}")
+
+            print(f"  Set background image using QPalette for DetailWindow, and individual styles for children.")
 
         else: # "normal" モード
-            self.setStyleSheet("") # 全てのウィジェット固有スタイルシートをクリア
-            # 通常モードに戻るときは、各ウィジェットのWA_TranslucentBackgroundやsetAutoFillBackgroundも
-            # デフォルトに戻す必要があるかもしれないが、通常はスタイルシートクリアで十分なはず。
+            self.setAutoFillBackground(False) # QPaletteによる背景描画を解除
+            self.setPalette(self.style().standardPalette()) # システムデフォルトパレットに戻す
+            
+            # 個別に設定したスタイルシートをクリア
+            if self.scroll_content_widget: self.scroll_content_widget.setStyleSheet("")
+            if 'name' in self.detail_widgets: self.detail_widgets['name'].setStyleSheet("")
+            if 'description' in self.detail_widgets: self.detail_widgets['description'].setStyleSheet("")
+            if 'history_view' in self.detail_widgets: self.detail_widgets['history_view'].setStyleSheet("")
+            if 'tags' in self.detail_widgets: self.detail_widgets['tags'].setStyleSheet("")
+
             self.img_path_label.setVisible(True)
             self.img_preview_label.setVisible(True)
             self._update_image_preview(self.item_data.get('image_path') if self.item_data else None)
         
-        # autoFillBackground は DetailWindow に対しては paintEvent で描画するため False
-        self.setAutoFillBackground(False) 
-        # ScrollContentWidget も init_ui で False に設定済み
-
-        # ... (ボタン有効/無効とupdate()は変更なし)
-
         can_show_background = bool(self._original_image_pixmap and not self._original_image_pixmap.isNull())
         self.toggle_image_mode_button.setEnabled(can_show_background)
         if not can_show_background and self._image_display_mode == "background":
             self.toggle_image_mode_button.setChecked(False)
 
-        self.update() # スタイル変更後に再描画を促す
+        self.update()
 
     def _update_image_preview(self, relative_image_path: str | None):
         """指定された相対画像パスに基づいて画像プレビューを更新します。
@@ -744,26 +665,6 @@ class DetailWindow(QWidget):
             # もし画像がないのに背景モードだったら通常モードに戻す
             if not image_loaded_successfully and self._image_display_mode == "background":
                 self.toggle_image_mode_button.setChecked(False) # これで _on_toggle_image_mode が呼ばれる
-
-    # --- ★★★ paintEventをオーバーライドしてスタイルシート描画を有効化 ★★★ ---
-    def paintEvent(self, event: 'QPaintEvent'):
-        """ウィジェットの描画イベントを処理します。
-        スタイルシートによる描画（特に背景画像など）を正しく行うためにオーバーライドします。
-        子ウィジェットの透過性を確保するため、super().paintEventを最後に呼び出します。
-        """
-        opt = QStyleOption()
-        opt.initFrom(self)
-        painter = QPainter(self)
-        
-        # まずスタイルシートに従ってこのウィジェット(DetailWindow)の背景などを描画
-        self.style().drawPrimitive(QStyle.PE_Widget, opt, painter, self)
-        
-        # --- ★★★ super().paintEvent(event) を最後に呼び出す ★★★ ---
-        # これにより、子ウィジェットの描画が、このウィジェットの背景描画の後に行われる。
-        # 子ウィジェットが WA_TranslucentBackground を持っていれば、
-        # 親の背景(ここで描画されたもの)を透かす形で描画されるはず。
-        super().paintEvent(event) 
-    # --- ★★★ ----------------------------------------------------- ★★★ ---
 
     def resizeEvent(self, event: 'QResizeEvent'):
         """ウィンドウがリサイズされたときに呼び出されるイベントハンドラ。
