@@ -17,7 +17,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap, QImageReader
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QResizeEvent
-from PyQt5.QtGui import QBrush, QPalette
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -95,11 +94,6 @@ class DetailWindow(QWidget):
 
         self._original_image_pixmap: QPixmap | None = None
         """QPixmap | None: 読み込んだ画像のスケーリングされていないオリジナルピクスマップ。"""
-    
-        self._image_display_mode: str = "normal" # "normal" または "background"
-        """str: 現在の画像表示モード ("normal" または "background")。"""
-
-        self.setObjectName("DetailWindow") # スタイルシートで特定できるように
 
         self.setWindowFlags(Qt.Window) # 独立したウィンドウとして表示
         self.setWindowTitle("詳細情報 (アイテム未選択)")
@@ -187,30 +181,13 @@ class DetailWindow(QWidget):
         履歴削除ボタン、履歴編集ボタンを追加します。
         """
         if not self.item_data: return
-        
-        # --- オブジェクト名設定と、QTextEditのviewport設定 ---
+
         # 名前
-        name_label = QLabel("名前:")
-        name_edit = QLineEdit(self.item_data.get("name", ""))
-        name_edit.setObjectName("DetailNameEdit") # オブジェクト名
-        self.detail_widgets['name'] = name_edit
-        self.content_layout.addWidget(name_label)
-        self.content_layout.addWidget(name_edit)
+        name_label = QLabel("名前:"); name_edit = QLineEdit(self.item_data.get("name", "")); self.detail_widgets['name'] = name_edit; self.content_layout.addWidget(name_label); self.content_layout.addWidget(name_edit)
 
         # 説明/メモ
-        desc_label = QLabel("説明/メモ:")
-        desc_edit = QTextEdit(self.item_data.get("description", ""))
-        desc_edit.setObjectName("DetailDescriptionEdit") # オブジェクト名
-        desc_edit.setMinimumHeight(150)
-        desc_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        desc_edit.viewport().setAutoFillBackground(False) # ★★★ viewportの背景自動塗りつぶしを無効化 ★★★
-        self.detail_widgets['description'] = desc_edit
-        self.content_layout.addWidget(desc_label)
-        self.content_layout.addWidget(desc_edit)
-
-        ai_update_button = QPushButton("AIで「説明/メモ」を編集支援")
-        ai_update_button.clicked.connect(self._on_ai_update_description_clicked)
-        self.content_layout.addWidget(ai_update_button)
+        desc_label = QLabel("説明/メモ:"); desc_edit = QTextEdit(self.item_data.get("description", "")); desc_edit.setMinimumHeight(150); desc_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding); self.detail_widgets['description'] = desc_edit; self.content_layout.addWidget(desc_label); self.content_layout.addWidget(desc_edit)
+        ai_update_button = QPushButton("AIで「説明/メモ」を編集支援"); ai_update_button.clicked.connect(self._on_ai_update_description_clicked); self.content_layout.addWidget(ai_update_button)
 
         # 履歴
         history_label = QLabel("履歴:")
@@ -219,13 +196,13 @@ class DetailWindow(QWidget):
         history_view_container = QWidget() # 履歴表示とボタンをまとめるコンテナ
         history_view_layout = QVBoxLayout(history_view_container)
         history_view_layout.setContentsMargins(0,0,0,0)
-        self.history_view_text_edit = QTextEdit()
-        self.history_view_text_edit.setObjectName("DetailHistoryView") # オブジェクト名
+
+        self.history_view_text_edit = QTextEdit() # QTextEditはメンバ変数に
         self.history_view_text_edit.setReadOnly(True)
-        self.history_view_text_edit.viewport().setAutoFillBackground(False) # ★★★ viewportの背景自動塗りつぶしを無効化 ★★★
-        # ... (履歴表示HTML生成ロジックは変更なし)
-        history_entries = self.item_data.get("history", []); history_display_html = ""
-        if not history_entries: history_display_html = "履歴はありません。"
+        history_entries = self.item_data.get("history", [])
+        history_display_html = ""
+        if not history_entries:
+            history_display_html = "履歴はありません。"
         else:
             for i, h_entry_dict in enumerate(history_entries):
                 entry_text_for_display = h_entry_dict.get('entry', '(内容なし)')
@@ -259,56 +236,13 @@ class DetailWindow(QWidget):
         self.content_layout.addWidget(history_view_container)
 
         # タグ
-        tags_label = QLabel("タグ (カンマ区切り):")
-        tags_edit = QLineEdit(", ".join(self.item_data.get("tags", [])))
-        tags_edit.setObjectName("DetailTagsEdit") # オブジェクト名
-        self.detail_widgets['tags'] = tags_edit
-        self.content_layout.addWidget(tags_label)
-        self.content_layout.addWidget(tags_edit)
+        tags_label = QLabel("タグ (カンマ区切り):"); tags_edit = QLineEdit(", ".join(self.item_data.get("tags", []))); self.detail_widgets['tags'] = tags_edit; self.content_layout.addWidget(tags_label); self.content_layout.addWidget(tags_edit)
 
         # 画像
-        img_section_layout = QHBoxLayout()
-        img_label = QLabel("画像:")
-        img_section_layout.addWidget(img_label)
-        img_section_layout.addStretch()
-        
-        self.toggle_image_mode_button = QPushButton("背景表示に切替") # ボタンテキストはモードによって変更
-        self.toggle_image_mode_button.setToolTip("画像表示を通常モードと背景モードで切り替えます。")
-        self.toggle_image_mode_button.setCheckable(True) # チェック状態を持つボタンに
-        self.toggle_image_mode_button.toggled.connect(self._on_toggle_image_mode)
-        img_section_layout.addWidget(self.toggle_image_mode_button)
-        
-        select_img_button = QPushButton("画像を選択")
-        select_img_button.clicked.connect(self.select_image_file)
-        img_section_layout.addWidget(select_img_button)
-        clear_img_button = QPushButton("画像をクリア")
-        clear_img_button.clicked.connect(self.clear_image_file)
-        img_section_layout.addWidget(clear_img_button)
-        self.content_layout.addLayout(img_section_layout)
-
-        self.img_path_label = QLabel("画像パス: (選択されていません)")
-        self.img_path_label.setWordWrap(True)
-        self.detail_widgets['image_path_display'] = self.img_path_label
-        self.content_layout.addWidget(self.img_path_label)
-
-        self.img_preview_label = QLabel()
-        self.img_preview_label.setAlignment(Qt.AlignCenter)
-        self.img_preview_label.setMinimumSize(200, 150)
-        self.img_preview_label.setFrameShape(QFrame.StyledPanel)
-        self.img_preview_label.setScaledContents(True)
-        self.img_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.detail_widgets['image_preview'] = self.img_preview_label
-        self.content_layout.addWidget(self.img_preview_label)
-
-        # --- ★★★ スクロールコンテンツウィジェットにオブジェクト名を設定 ★★★ ---
-        if self.scroll_content_widget:
-            self.scroll_content_widget.setObjectName("ScrollContentWidget")
-            # ScrollContentWidget の setAutoFillBackground は、スタイルシートで制御するのでここでは不要かも
-
-        self._update_image_display_mode()
-        self._update_image_preview(self.item_data.get("image_path"))
+        img_section_layout = QHBoxLayout(); img_label = QLabel("画像:"); img_section_layout.addWidget(img_label); img_section_layout.addStretch(); select_img_button = QPushButton("画像を選択"); select_img_button.clicked.connect(self.select_image_file); clear_img_button = QPushButton("画像をクリア"); clear_img_button.clicked.connect(self.clear_image_file); img_section_layout.addWidget(select_img_button); img_section_layout.addWidget(clear_img_button); self.content_layout.addLayout(img_section_layout)
+        self.img_path_label = QLabel("画像パス: (選択されていません)"); self.img_path_label.setWordWrap(True); self.detail_widgets['image_path_display'] = self.img_path_label; self.content_layout.addWidget(self.img_path_label)
+        self.img_preview_label = QLabel(); self.img_preview_label.setAlignment(Qt.AlignCenter); self.img_preview_label.setMinimumSize(200, 150); self.img_preview_label.setFrameShape(QFrame.StyledPanel); self.detail_widgets['image_preview'] = self.img_preview_label; self._update_image_preview(self.item_data.get("image_path")); self.content_layout.addWidget(self.img_preview_label)
         spacer = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding); self.content_layout.addSpacerItem(spacer)
-
 
     def _on_ai_update_description_clicked(self):
         """「AIで「説明/メモ」を編集支援」ボタンがクリックされたときの処理。
@@ -458,106 +392,6 @@ class DetailWindow(QWidget):
         self.item_data['image_path'] = None
         self._update_image_preview(None)
 
-    def _on_toggle_image_mode(self, checked: bool):
-        """「背景表示切替」ボタンの状態が変更されたときに呼び出されるスロット。
-        画像表示モードを切り替えます。
-
-        Args:
-            checked (bool): ボタンがチェックされた状態なら True。
-        """
-        if checked:
-            self._image_display_mode = "background"
-            self.toggle_image_mode_button.setText("通常表示に切替")
-            self.toggle_image_mode_button.setToolTip("画像表示を通常プレビューモードに戻します。")
-        else:
-            self._image_display_mode = "normal"
-            self.toggle_image_mode_button.setText("背景表示に切替")
-            self.toggle_image_mode_button.setToolTip("画像をウィンドウの背景として表示します。")
-        
-        self._update_image_display_mode()
-
-    def _update_image_display_mode(self):
-        """現在の `_image_display_mode` に基づいて、画像表示関連のUIを更新します。
-        """
-        print(f"Updating image display mode to: {self._image_display_mode}")
-        
-        # --- スタイルシートの準備 ---
-        # 共通の半透明白背景
-        input_widget_bg_rgba = "rgba(255, 255, 255, 0.85)" 
-        input_widget_style = f"background-color: {input_widget_bg_rgba}; border: 1px solid lightgray;"
-
-        # QTextEdit用の特別なスタイル (viewportの背景も制御)
-        # QTextEdit 自体の背景は半透明白、viewport は完全に透明にして下の背景画像を見せる
-        qtextedit_base_style = f"background-color: {input_widget_bg_rgba}; border: 1px solid lightgray;"
-        qtextedit_viewport_style = "background-color: transparent;"
-
-
-        if self._image_display_mode == "background":
-            # 背景表示モード
-            self.img_path_label.setVisible(False)
-            self.img_preview_label.setVisible(False)
-            
-            # DetailWindow の背景は QPalette で設定
-            self.setAutoFillBackground(True) # QPaletteで背景を描画するために必要
-            palette = self.palette()
-            if self._original_image_pixmap and not self._original_image_pixmap.isNull():
-                bg_pixmap_scaled = self._original_image_pixmap.scaled(
-                    self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-                )
-                palette.setBrush(QPalette.Window, QBrush(bg_pixmap_scaled))
-            else: # 画像がない場合はデフォルトのウィンドウ背景に戻す
-                palette.setBrush(QPalette.Window, self.style().standardPalette().brush(QPalette.Window)) # システムデフォルト
-            self.setPalette(palette)
-
-            # ScrollContentWidget の背景を透明に (個別にスタイルシート設定)
-            if self.scroll_content_widget:
-                self.scroll_content_widget.setStyleSheet("QWidget#ScrollContentWidget { background-color: transparent; }")
-                # self.scroll_content_widget.viewport().setAutoFillBackground(False) # QScrollArea の viewport は通常不要
-
-            # 各編集ウィジェットに個別にスタイルシートを設定
-            if 'name' in self.detail_widgets:
-                self.detail_widgets['name'].setStyleSheet(f"QLineEdit#DetailNameEdit {{ {input_widget_style} }}")
-            if 'description' in self.detail_widgets and isinstance(self.detail_widgets['description'], QTextEdit):
-                desc_edit_widget = self.detail_widgets['description']
-                desc_edit_widget.setStyleSheet(
-                    f"QTextEdit#DetailDescriptionEdit {{ {qtextedit_base_style} }}"
-                    # f"QTextEdit#DetailDescriptionEdit QAbstractScrollArea {{ {qtextedit_viewport_style} }}" # これだと枠線も消える可能性
-                    # f"QTextEdit#DetailDescriptionEdit QWidget {{ {qtextedit_viewport_style} }}" # viewport内のウィジェット
-                )
-                # desc_edit_widget.viewport().setStyleSheet(qtextedit_viewport_style) # プログラムでviewportに直接も可
-            if 'history_view' in self.detail_widgets and isinstance(self.detail_widgets['history_view'], QTextEdit):
-                hist_view_widget = self.detail_widgets['history_view']
-                hist_view_widget.setStyleSheet(
-                    f"QTextEdit#DetailHistoryView {{ {qtextedit_base_style} }}"
-                )
-                # hist_view_widget.viewport().setStyleSheet(qtextedit_viewport_style)
-            if 'tags' in self.detail_widgets:
-                self.detail_widgets['tags'].setStyleSheet(f"QLineEdit#DetailTagsEdit {{ {input_widget_style} }}")
-
-            print(f"  Set background image using QPalette for DetailWindow, and individual styles for children.")
-
-        else: # "normal" モード
-            self.setAutoFillBackground(False) # QPaletteによる背景描画を解除
-            self.setPalette(self.style().standardPalette()) # システムデフォルトパレットに戻す
-            
-            # 個別に設定したスタイルシートをクリア
-            if self.scroll_content_widget: self.scroll_content_widget.setStyleSheet("")
-            if 'name' in self.detail_widgets: self.detail_widgets['name'].setStyleSheet("")
-            if 'description' in self.detail_widgets: self.detail_widgets['description'].setStyleSheet("")
-            if 'history_view' in self.detail_widgets: self.detail_widgets['history_view'].setStyleSheet("")
-            if 'tags' in self.detail_widgets: self.detail_widgets['tags'].setStyleSheet("")
-
-            self.img_path_label.setVisible(True)
-            self.img_preview_label.setVisible(True)
-            self._update_image_preview(self.item_data.get('image_path') if self.item_data else None)
-        
-        can_show_background = bool(self._original_image_pixmap and not self._original_image_pixmap.isNull())
-        self.toggle_image_mode_button.setEnabled(can_show_background)
-        if not can_show_background and self._image_display_mode == "background":
-            self.toggle_image_mode_button.setChecked(False)
-
-        self.update()
-
     def _update_image_preview(self, relative_image_path: str | None):
         """指定された相対画像パスに基づいて画像プレビューを更新します。
         オリジナルのピクスマップを保持し、表示時にラベルサイズに合わせてスケーリングします。
@@ -577,9 +411,11 @@ class DetailWindow(QWidget):
         # preview_label.setScaledContents(True) # _build_detail_view で設定済みのはず
 
         if not self.current_project_dir_name and relative_image_path:
-            # ... (変更なし)
-            preview_label.clear(); preview_label.setText("画像プレビュー (プロジェクト未指定)"); self.img_path_label.setText(f"画像パス: {relative_image_path} (プロジェクト未指定)"); self._original_image_pixmap = None; preview_label.setMinimumHeight(150); preview_label.setMaximumHeight(16777215)
-            if hasattr(self, 'toggle_image_mode_button'): self.toggle_image_mode_button.setEnabled(False) # ★ ボタン無効化
+            preview_label.clear(); preview_label.setText("画像プレビュー (プロジェクト未指定)")
+            self.img_path_label.setText(f"画像パス: {relative_image_path} (プロジェクト未指定)")
+            self._original_image_pixmap = None
+            preview_label.setMinimumHeight(150) # デフォルトの最小高さに戻す
+            preview_label.setMaximumHeight(16777215) # 最大高さ制限を解除
             return
 
         absolute_image_path = None
@@ -594,7 +430,6 @@ class DetailWindow(QWidget):
             print(f"  Attempting to load image from absolute path: {absolute_image_path} (relative: {relative_image_path})")
 
         self._original_image_pixmap = None # まずクリア
-        image_loaded_successfully = False # ★ 画像ロード成功フラグ
 
         if absolute_image_path and os.path.exists(absolute_image_path):
             try:
@@ -642,7 +477,7 @@ class DetailWindow(QWidget):
                             available_width, expected_height, # 計算した幅と高さ
                             Qt.KeepAspectRatio, Qt.SmoothTransformation
                         )
-                        preview_label.setPixmap(scaled_pixmap); image_loaded_successfully = True # ★ ロード成功
+                        preview_label.setPixmap(scaled_pixmap)
                         # --------------------------------------------------------------
                     else:
                         preview_label.clear(); preview_label.setText("画像サイズ不正")
@@ -659,12 +494,11 @@ class DetailWindow(QWidget):
             preview_label.setMinimumHeight(150) # デフォルトの最小高さ
             preview_label.setMaximumHeight(16777215) # 最大高さ制限を解除
         
-        # --- ★★★ 表示モード切替ボタンの有効/無効を設定 ★★★ ---
-        if hasattr(self, 'toggle_image_mode_button'):
-            self.toggle_image_mode_button.setEnabled(image_loaded_successfully)
-            # もし画像がないのに背景モードだったら通常モードに戻す
-            if not image_loaded_successfully and self._image_display_mode == "background":
-                self.toggle_image_mode_button.setChecked(False) # これで _on_toggle_image_mode が呼ばれる
+        # --- ★★★ レイアウト更新を促す (試行) ★★★ ---
+        # preview_label.updateGeometry() # これでQLabelのサイズヒントが更新される
+        # if self.content_layout: self.content_layout.activate() # 親レイアウトに再計算を促す
+        # if self.scroll_content_widget: self.scroll_content_widget.adjustSize()
+        # ------------------------------------------
 
     def resizeEvent(self, event: 'QResizeEvent'):
         """ウィンドウがリサイズされたときに呼び出されるイベントハンドラ。
@@ -694,21 +528,7 @@ class DetailWindow(QWidget):
                 )
                 preview_label.setPixmap(scaled_pixmap)
                 # print(f"Resized: Label size: {preview_label.size()}, Pixmap set.")
-
-        # --- ★★★ 背景表示モードの場合、背景画像を再スケーリング ★★★ ---
-        elif self._image_display_mode == "background" and \
-             self._original_image_pixmap and \
-             not self._original_image_pixmap.isNull():
-            
-            palette = self.palette()
-            scaled_pixmap = self._original_image_pixmap.scaled(
-                self.size(), # DetailWindowの新しいサイズ
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
-            )
-            palette.setBrush(QPalette.Window, QBrush(scaled_pixmap))
-            self.setPalette(palette)
-            # self.update() # setPalette後、必要なら
+                # ------------------------------------------------------------------
 
 
     def add_history_entry_with_ai_ui(self):
