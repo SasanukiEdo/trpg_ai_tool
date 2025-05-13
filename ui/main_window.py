@@ -199,17 +199,6 @@ class MainWindow(QWidget):
         # --- ★★★ ---------------------------------------------------------------- ★★★ ---
 
         self._initialize_configs_and_project() # この中で current_project_settings がロードされる
-        
-        # --- ★★★ chat_handler の本格的な初期化をここで行う ★★★ ---
-        # プロジェクト設定がロードされた後なので、正しいシステム指示を使える
-        final_initial_model = self.current_project_settings.get("model", initial_model_name)
-        initial_system_prompt = self.current_project_settings.get("main_system_prompt", "")
-        self._initialize_chat_handler(
-            model_name=final_initial_model,
-            project_dir_name=self.current_project_dir_name, # ★ プロジェクト名を渡す
-            system_instruction=initial_system_prompt
-        )
-        # --- ★★★ ------------------------------------------------ ★★★ ---
 
         self.init_ui()
         self.configure_gemini_and_chat_handler() # APIキー設定、必要ならハンドラ再設定
@@ -755,7 +744,7 @@ class MainWindow(QWidget):
                 QMessageBox.critical(self, "削除エラー", f"プロジェクト「{project_display_name}」の削除に失敗しました。")
 
     def configure_gemini_and_chat_handler(self):
-        """Gemini APIクライアントを設定し、Chat Handlerも現在のプロジェクト設定で適切に更新します。
+        """Gemini APIクライアントを設定し、Chat Handlerも現在のプロジェクト設定で初期化または更新します。
         APIキー設定時、またはモデル名・システム指示が変更された場合にハンドラを更新（履歴は維持）。
         """
         api_key_from_os = get_os_api_key()
@@ -773,33 +762,39 @@ class MainWindow(QWidget):
                                     "「設定」メニューからAPIキーを保存してください。")
         
         if config_success:
-            # API設定が成功したら、現在のプロジェクト設定に基づいてチャットハンドラを再初期化
-            model_to_use = self.current_project_settings.get("model", self.global_config.get("default_model"))
+            # --- ★★★ API設定が成功した場合にハンドラを初期化または更新 ★★★ ---
+            model_to_use = self.current_project_settings.get("model", self.global_config.get("default_model", "gemini-1.5-flash"))
             system_prompt = self.current_project_settings.get("main_system_prompt", "")
 
             if self.chat_handler is None:
-                # _initialize_configs_and_project の後、__init__内で呼ばれるので、ここは通らないはずだが念のため
-                self._initialize_chat_handler(
+                # 初めての初期化 (アプリケーション起動時など)
+                print("MainWindow: API configured. Initializing chat handler for the first time.")
+                self._initialize_chat_handler( # ★ ここで初期化
                     model_name=model_to_use,
                     project_dir_name=self.current_project_dir_name, # ★ プロジェクト名
                     system_instruction=system_prompt
                 )
             else:
-                # --- ★★★ APIキー設定成功後、または設定変更時にハンドラを更新 ★★★ ---
-                # プロジェクト名は変わらないので、update_settings_and_restart_chat には渡さない
-                if self.chat_handler.model_name != model_to_use or \
-                   self.chat_handler._system_instruction_text != system_prompt:
-                    print("MainWindow: Settings (model or system prompt) changed. Updating chat handler (keeping history).")
+                # 既にハンドラが存在する場合 (設定ダイアログからの呼び出しなど)
+                current_handler_model = self.chat_handler.model_name
+                current_handler_system_instruction = self.chat_handler._system_instruction_text
+                current_handler_project = self.chat_handler.project_dir_name
+
+                if current_handler_model != model_to_use or \
+                   current_handler_system_instruction != system_prompt or \
+                   current_handler_project != self.current_project_dir_name: # プロジェクトも比較対象に加える
+                    print("MainWindow: Settings (model, system prompt, or project) changed. Updating chat handler.")
                     self.chat_handler.update_settings_and_restart_chat(
                         new_model_name=model_to_use,
-                        new_system_instruction=system_prompt
-                        # new_project_dir_name はここでは変更しない
+                        new_system_instruction=system_prompt,
+                        new_project_dir_name=self.current_project_dir_name # プロジェクト名も渡す
                     )
-                # else: モデルもシステム指示も同じなら何もしない
-                # --- ★★★ ---------------------------------------------------- ★★★ ---
-        elif self.chat_handler: # API設定失敗
-             self.chat_handler._model = None
+                # else: 何も変更がなければ何もしない
+            # --- ★★★ ---------------------------------------------------- ★★★ ---
+        elif self.chat_handler: # API設定失敗したがハンドラは存在する場合
+             self.chat_handler._model = None # モデルを無効化
              self.chat_handler._chat_session = None
+             print("MainWindow: API configuration failed. Chat handler model invalidated.")
 
     def open_settings_dialog(self):
         """設定ダイアログを開き、結果を適用します。
@@ -839,6 +834,10 @@ class MainWindow(QWidget):
         GeminiChatHandler を使用してAIに応答を要求します。
         チェックされたサブプロンプト、データアイテム、およびタグ検索に基づいた情報をプロンプトに組み込みます。
         """
+        print(f"is_configured(): {is_configured()}")
+        print(f"self.chat_handler: {self.chat_handler}")
+        print(f"self.chat_handler._model: {self.chat_handler._model}")
+
         if not is_configured() or not self.chat_handler or not self.chat_handler._model: # API未設定またはハンドラ未初期化
             QMessageBox.warning(self, "API/モデル未設定", "Gemini APIが設定されていないか、AIモデルの準備ができていません。「設定」を確認してください。")
             return
