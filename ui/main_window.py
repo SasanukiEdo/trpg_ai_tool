@@ -707,7 +707,9 @@ class MainWindow(QWidget):
                 QMessageBox.critical(self, "削除エラー", f"プロジェクト「{project_display_name}」の削除に失敗しました。")
 
     def configure_gemini_and_chat_handler(self):
-        """Gemini APIクライアントを設定し、Chat Handlerも適切に再初期化します。"""
+        """Gemini APIクライアントを設定し、Chat Handlerも適切に再初期化または設定更新します。
+        プロジェクト設定（モデル名、システム指示）が変更された場合、履歴を維持しつつハンドラを更新します。
+        """
         api_key_from_os = get_os_api_key()
         config_success = False
         if api_key_from_os:
@@ -726,13 +728,24 @@ class MainWindow(QWidget):
             # API設定が成功したら、現在のプロジェクト設定に基づいてチャットハンドラを再初期化
             model_to_use = self.current_project_settings.get("model", self.global_config.get("default_model"))
             system_prompt = self.current_project_settings.get("main_system_prompt", "")
-            if self.chat_handler is None or self.chat_handler.model_name != model_to_use or \
-               (self.chat_handler._system_instruction_text != system_prompt and system_prompt): # モデル名かシステム指示が変わったら再初期化
+
+            if self.chat_handler is None:
+                # 初めての初期化 (APIキーが設定された直後など)
                 self._initialize_chat_handler(model_name=model_to_use, system_instruction=system_prompt)
-            elif self.chat_handler: # モデルもシステム指示も同じなら、セッションだけ開始 (履歴は維持)
-                 self.chat_handler.start_new_chat_session(keep_history=True)
-        elif self.chat_handler: # API設定失敗したがハンドラは存在する場合 (APIキー削除時など)
-             self.chat_handler._model = None # モデルを無効化
+            else:
+                # モデル名かシステム指示が変わった場合、履歴を維持して設定更新
+                current_handler_model = self.chat_handler.model_name
+                current_handler_system_instruction = self.chat_handler._system_instruction_text # 内部変数にアクセス
+
+                if current_handler_model != model_to_use or current_handler_system_instruction != system_prompt:
+                    print("MainWindow: Project settings (model or system prompt) changed. Updating chat handler while keeping history.")
+                    self.chat_handler.update_settings_and_restart_chat(
+                        new_model_name=model_to_use,
+                        new_system_instruction=system_prompt
+                    )
+                # else: モデルもシステム指示も同じなら何もしない
+        elif self.chat_handler:
+             self.chat_handler._model = None
              self.chat_handler._chat_session = None
 
     def open_settings_dialog(self):

@@ -202,6 +202,57 @@ class GeminiChatHandler:
         if self._model: # モデルが初期化されていれば、チャットセッションもリセット
             self.start_new_chat_session(keep_history=False) # 履歴はクリア済みで開始
 
+    def update_settings_and_restart_chat(self, new_model_name: Optional[str] = None, new_system_instruction: Optional[str] = None):
+        """モデル名またはシステム指示を更新し、現在の純粋な会話履歴を維持したまま
+        チャットセッションを再開（再初期化）します。
+
+        Args:
+            new_model_name (str, optional): 新しいモデル名。Noneの場合は現在のモデル名を維持。
+            new_system_instruction (str, optional): 新しいシステム指示。Noneの場合は現在の指示を維持。
+        """
+        if not is_configured():
+            print("Warning: Gemini API not configured. Cannot update settings.")
+            return
+
+        model_changed = False
+        if new_model_name and self.model_name != new_model_name:
+            self.model_name = new_model_name
+            model_changed = True
+            print(f"Chat handler: Model name updated to '{self.model_name}'.")
+
+        system_instruction_changed = False
+        if new_system_instruction is not None and self._system_instruction_text != new_system_instruction:
+            # Noneを渡された場合はシステム指示をクリアする意図かもしれないが、
+            # ここではNoneなら「変更なし」として扱う。明示的に空文字列""を渡せばクリアできる。
+            self._system_instruction_text = new_system_instruction
+            system_instruction_changed = True
+            print(f"Chat handler: System instruction updated (length: {len(self._system_instruction_text or '')}).")
+
+        if model_changed or system_instruction_changed:
+            # モデル自体かシステム指示が変わった場合は、モデルを再初期化する必要がある
+            try:
+                print(f"Re-initializing Gemini model: {self.model_name} (due to settings change).")
+                self._model = genai.GenerativeModel(
+                    model_name=self.model_name,
+                    system_instruction=self._system_instruction_text
+                )
+            except Exception as e:
+                print(f"Error re-initializing Gemini model '{self.model_name}': {e}")
+                self._model = None
+                self._chat_session = None
+                return # モデル初期化失敗ならチャット再開も不可
+        
+        # モデルが（再）初期化されていれば、現在の純粋な履歴でチャットセッションを開始
+        if self._model:
+            try:
+                print(f"Restarting chat session with updated settings and existing history (length: {len(self._pure_chat_history)}).")
+                self._chat_session = self._model.start_chat(history=self._pure_chat_history)
+            except Exception as e:
+                print(f"Error restarting chat session with updated settings: {e}")
+                self._chat_session = None
+        else:
+            print("Cannot restart chat session: Model not properly initialized after settings update.")
+
     # --- 以前の generate_response 関数は、このクラスのメソッドに置き換えられるか、
     #     あるいは単発プロンプト用として残す場合は名前を変更するなどする ---
     # def generate_response(model_name: str, prompt: str) -> Tuple[Optional[str], Optional[str]]:
