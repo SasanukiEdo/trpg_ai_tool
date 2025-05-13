@@ -164,12 +164,12 @@ class MainWindow(QWidget):
 
     def __init__(self):
         """MainWindowのコンストラクタ。UIの初期化とプロジェクトデータの読み込みを行います。
-        GeminiChatHandler のインスタンスも保持します。
+        GeminiChatHandler のインスタンスも保持し、プロジェクト名を渡します。
         """
         super().__init__()
         self.global_config: dict = {}
         """dict: `data/config.json` から読み込まれたグローバル設定。"""
-        self.current_project_dir_name: str = "default_project" # フォールバック値
+        self.current_project_dir_name: str = "default_project" # 初期プロジェクト名を設定
         """str: 現在アクティブなプロジェクトのディレクトリ名。"""
         self.current_project_settings: dict = {}
         """dict: 現在アクティブなプロジェクトの `project_settings.json` の内容。"""
@@ -181,36 +181,66 @@ class MainWindow(QWidget):
         # self.gemini_configured: bool = False # is_configured() で確認するので不要かも
         self._projects_list_for_combo: list[tuple[str, str]] = []
         
-        # --- ★★★ GeminiChatHandler のインスタンスを初期化 ★★★ ---
-        # モデル名はグローバル設定から取得することを想定。最初はダミーでも良い。
-        temp_global_config_for_model = load_global_config() # モデル名取得のため一時ロード
-        initial_model_name = temp_global_config_for_model.get(
+        # --- ★★★ GeminiChatHandler のインスタンスを初期化 (プロジェクト名も渡す) ★★★ ---
+        # current_project_dir_name は _initialize_configs_and_project の前に必要
+        # まずグローバル設定からアクティブプロジェクト名を取得
+        temp_global_config_for_init = load_global_config()
+        self.current_project_dir_name = temp_global_config_for_init.get("active_project", "default_project")
+        
+        initial_model_name = temp_global_config_for_init.get(
             "default_model", 
             DEFAULT_PROJECT_SETTINGS.get("model", "gemini-1.5-flash") # フォールバック
         )
-        self.chat_handler: Optional[GeminiChatHandler] = None # configure_gemini で初期化
-        self._initialize_chat_handler(initial_model_name) # chat_handlerを初期化するメソッドを呼ぶ
-        # --- ★★★ ------------------------------------------- ★★★ ---
+        self.chat_handler: Optional[GeminiChatHandler] = None
+        # _initialize_chat_handler は _initialize_configs_and_project の後、
+        # プロジェクト設定がロードされてから呼ぶのが適切
+        # ここでは一旦 None にしておくか、仮のプロジェクト名で初期化
+        # self._initialize_chat_handler(initial_model_name, self.current_project_dir_name) # ここで呼ぶとシステム指示がまだ
+        # --- ★★★ ---------------------------------------------------------------- ★★★ ---
 
-        self._initialize_configs_and_project() # この中でプロジェクト設定がロードされる
-        self.init_ui() # UI初期化
-        self.configure_gemini_and_chat_handler() # APIキー設定とチャットハンドラ再設定
-
-    def _initialize_chat_handler(self, model_name: str, system_instruction: Optional[str] = None):
-        """GeminiChatHandlerを初期化または再初期化します。
-        システム指示もここで設定します。
-        """
-        print(f"MainWindow: Initializing chat handler with model '{model_name}'.")
-        self.chat_handler = GeminiChatHandler(model_name=model_name)
-        # 初回またはシステム指示が変わる場合、チャットセッションをリセットしてシステム指示を適用
-        # (GeminiChatHandler内で model.start_chat が呼ばれる際にシステム指示が適用される)
-        current_system_prompt = system_instruction
-        if current_system_prompt is None and self.current_project_settings: # プロジェクト設定から取得
-            current_system_prompt = self.current_project_settings.get("main_system_prompt", "")
+        self._initialize_configs_and_project() # この中で current_project_settings がロードされる
         
+        # --- ★★★ chat_handler の本格的な初期化をここで行う ★★★ ---
+        # プロジェクト設定がロードされた後なので、正しいシステム指示を使える
+        final_initial_model = self.current_project_settings.get("model", initial_model_name)
+        initial_system_prompt = self.current_project_settings.get("main_system_prompt", "")
+        self._initialize_chat_handler(
+            model_name=final_initial_model,
+            project_dir_name=self.current_project_dir_name, # ★ プロジェクト名を渡す
+            system_instruction=initial_system_prompt
+        )
+        # --- ★★★ ------------------------------------------------ ★★★ ---
+
+        self.init_ui()
+        self.configure_gemini_and_chat_handler() # APIキー設定、必要ならハンドラ再設定
+
+    def _initialize_chat_handler(self, model_name: str, project_dir_name: str, system_instruction: Optional[str] = None): # ★ project_dir_name を必須引数に
+        """GeminiChatHandlerを初期化または再初期化します。
+        指定されたプロジェクトの履歴をロードし、システム指示も設定します。
+
+        Args:
+            model_name (str): 使用するモデル名。
+            project_dir_name (str): 対象のプロジェクトディレクトリ名。
+            system_instruction (str, optional): システム指示。Noneの場合は空文字列。
+        """
+        if not project_dir_name:
+            print("MainWindow Error: Cannot initialize chat handler without project_dir_name.")
+            self.chat_handler = None
+            return
+
+        print(f"MainWindow: Initializing chat handler for project '{project_dir_name}' with model '{model_name}'.")
+        self.chat_handler = GeminiChatHandler(
+            model_name=model_name,
+            project_dir_name=project_dir_name # ★ プロジェクト名を渡す
+        )
+        # GeminiChatHandlerのコンストラクタ内で履歴ロードが試みられる。
+        # システム指示を設定し、チャットセッションを開始。
+        # keep_history=True لأن コンストラクタでファイルからロード済み、または空で初期化済み。
+        # load_from_file_if_empty=False لأن コンストラクタで既に試みている。
         self.chat_handler.start_new_chat_session(
-            keep_history=False, # 新しいモデルやシステム指示なら履歴はクリア
-            system_instruction_text=current_system_prompt
+            keep_history=True, 
+            system_instruction_text=system_instruction if system_instruction is not None else "",
+            load_from_file_if_empty=False 
         )
 
     def _initialize_configs_and_project(self):
@@ -492,13 +522,22 @@ class MainWindow(QWidget):
         """指定されたディレクトリ名のプロジェクトに実際に切り替える内部メソッド。
 
         関連する設定の更新、データの再読み込み、UIの更新を行います。
-        Chat Handler も新しいプロジェクト設定で再初期化します。
+        Chat Handler も新しいプロジェクト設定で再初期化し、新しいプロジェクトの履歴をロードします。
 
         Args:
             new_project_dir_name (str): 切り替え先のプロジェクトのディレクトリ名。
         """
         print(f"--- MainWindow: Switching project to '{new_project_dir_name}' ---")
-        old_project_dir_name = self.current_project_dir_name
+        if self.current_project_dir_name == new_project_dir_name: # 同じプロジェクトなら何もしない
+            print(f"  Already in project '{new_project_dir_name}'. No switch needed.")
+            return
+
+        # --- ★★★ 現在のプロジェクトの履歴を念のため保存 (GeminiChatHandler側でも行うが) ★★★ ---
+        if self.chat_handler and self.chat_handler.project_dir_name == self.current_project_dir_name:
+            self.chat_handler.save_current_history_on_exit() # 明示的に保存
+        # --- ★★★ ----------------------------------------------------------------- ★★★ ---
+            
+        old_project_dir_name = self.current_project_dir_name # 保存後に更新
         self.current_project_dir_name = new_project_dir_name
         
         # グローバル設定のアクティブプロジェクトを更新・保存
@@ -506,25 +545,34 @@ class MainWindow(QWidget):
         if not save_global_config(self.global_config):
             QMessageBox.warning(self, "保存エラー", "アクティブプロジェクトの変更の保存に失敗しました。")
             self.current_project_dir_name = old_project_dir_name # 元に戻す
+            # Chat Handler も元に戻す必要があるか？現状はロード処理に任せる
             return
 
-        self._load_current_project_data() # 新しいプロジェクトのデータをロード (self.current_project_settings が更新される)
+        self._load_current_project_data() 
         
-        # --- ★★★ Chat Handler を新しいプロジェクト設定で再初期化 ★★★ ---
+        # --- ★★★ Chat Handler を新しいプロジェクトで再初期化 (新しい履歴がロードされる) ★★★ ---
         new_model = self.current_project_settings.get("model", self.global_config.get("default_model"))
         new_system_prompt = self.current_project_settings.get("main_system_prompt", "")
+        
+        # GeminiChatHandler の update_settings_and_restart_chat を使うか、
+        # _initialize_chat_handler を直接呼び出す。
+        # プロジェクトが変わるので、履歴は完全に新しいものになるべき。
         if self.chat_handler:
-            # モデル名かシステム指示が変わった場合、またはプロジェクトが変わった場合は履歴もクリアして再初期化
-            if self.chat_handler.model_name != new_model or self.chat_handler._system_instruction_text != new_system_prompt or old_project_dir_name != new_project_dir_name:
-                 self._initialize_chat_handler(model_name=new_model, system_instruction=new_system_prompt)
-                 print(f"  Chat handler re-initialized for new project '{new_project_dir_name}'. History cleared.")
-            # else: モデルもシステム指示も同じでプロジェクトも同じなら何もしない (ありえないケースだが)
-        else: # まだハンドラがなければ初期化
-            self._initialize_chat_handler(model_name=new_model, system_instruction=new_system_prompt)
-        # --- ★★★ ------------------------------------------------ ★★★ ---
-
-        # コンボボックスの選択状態も（もし必要なら）再確認・設定
-        # 通常は_on_project_selected_by_display_nameから呼ばれるので不要だが、直接呼ばれた場合のため
+            self.chat_handler.update_settings_and_restart_chat(
+                new_model_name=new_model,
+                new_system_instruction=new_system_prompt,
+                new_project_dir_name=new_project_dir_name # ★ 新しいプロジェクト名を渡す
+            )
+            print(f"  Chat handler re-initialized for new project '{new_project_dir_name}'. History loaded/cleared.")
+        else: # 通常ここには来ないはず (アプリケーション起動時に初期化されるため)
+            self._initialize_chat_handler(
+                model_name=new_model,
+                project_dir_name=new_project_dir_name,
+                system_instruction=new_system_prompt
+            )
+        # --- ★★★ ------------------------------------------------------------------- ★★★ ---
+            
+        # コンボボックスの表示更新など
         current_display_name_in_combo = ""
         for disp_name, dir_name_map in self._projects_list_for_combo:
             if dir_name_map == self.current_project_dir_name:
@@ -707,8 +755,8 @@ class MainWindow(QWidget):
                 QMessageBox.critical(self, "削除エラー", f"プロジェクト「{project_display_name}」の削除に失敗しました。")
 
     def configure_gemini_and_chat_handler(self):
-        """Gemini APIクライアントを設定し、Chat Handlerも適切に再初期化または設定更新します。
-        プロジェクト設定（モデル名、システム指示）が変更された場合、履歴を維持しつつハンドラを更新します。
+        """Gemini APIクライアントを設定し、Chat Handlerも現在のプロジェクト設定で適切に更新します。
+        APIキー設定時、またはモデル名・システム指示が変更された場合にハンドラを更新（履歴は維持）。
         """
         api_key_from_os = get_os_api_key()
         config_success = False
@@ -730,21 +778,26 @@ class MainWindow(QWidget):
             system_prompt = self.current_project_settings.get("main_system_prompt", "")
 
             if self.chat_handler is None:
-                # 初めての初期化 (APIキーが設定された直後など)
-                self._initialize_chat_handler(model_name=model_to_use, system_instruction=system_prompt)
+                # _initialize_configs_and_project の後、__init__内で呼ばれるので、ここは通らないはずだが念のため
+                self._initialize_chat_handler(
+                    model_name=model_to_use,
+                    project_dir_name=self.current_project_dir_name, # ★ プロジェクト名
+                    system_instruction=system_prompt
+                )
             else:
-                # モデル名かシステム指示が変わった場合、履歴を維持して設定更新
-                current_handler_model = self.chat_handler.model_name
-                current_handler_system_instruction = self.chat_handler._system_instruction_text # 内部変数にアクセス
-
-                if current_handler_model != model_to_use or current_handler_system_instruction != system_prompt:
-                    print("MainWindow: Project settings (model or system prompt) changed. Updating chat handler while keeping history.")
+                # --- ★★★ APIキー設定成功後、または設定変更時にハンドラを更新 ★★★ ---
+                # プロジェクト名は変わらないので、update_settings_and_restart_chat には渡さない
+                if self.chat_handler.model_name != model_to_use or \
+                   self.chat_handler._system_instruction_text != system_prompt:
+                    print("MainWindow: Settings (model or system prompt) changed. Updating chat handler (keeping history).")
                     self.chat_handler.update_settings_and_restart_chat(
                         new_model_name=model_to_use,
                         new_system_instruction=system_prompt
+                        # new_project_dir_name はここでは変更しない
                     )
                 # else: モデルもシステム指示も同じなら何もしない
-        elif self.chat_handler:
+                # --- ★★★ ---------------------------------------------------- ★★★ ---
+        elif self.chat_handler: # API設定失敗
              self.chat_handler._model = None
              self.chat_handler._chat_session = None
 
@@ -1093,11 +1146,11 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, "入力エラー", "アイテム名を入力してください。")
 
     def closeEvent(self, event):
-        """ウィンドウが閉じられるときに呼び出されるイベントハンドラ。
-
-        現在のメインシステムプロンプトをプロジェクト設定に保存します。
+        """ウィンドウが閉じられる前に呼び出されるイベント。
+        現在のプロジェクト設定（メインプロンプト）とチャット履歴を保存します。
         """
-        print("MainWindow is closing. Saving current main system prompt...")
+        print("--- MainWindow: Closing application ---")
+        # メインシステムプロンプトの保存
         current_main_prompt_text = self.system_prompt_input_main.toPlainText()
         if self.current_project_settings.get("main_system_prompt") != current_main_prompt_text:
             self.current_project_settings["main_system_prompt"] = current_main_prompt_text
@@ -1105,10 +1158,17 @@ class MainWindow(QWidget):
                 print("  Main system prompt saved successfully on close.")
             else:
                 print("  ERROR: Failed to save main system prompt on close.")
-        # 詳細ウィンドウも明示的に閉じる (もし開いていれば)
-        if hasattr(self, 'data_management_widget') and self.data_management_widget._detail_window:
+
+        # 現在のチャット履歴を保存
+        if self.chat_handler:
+            self.chat_handler.save_current_history_on_exit()
+
+        # DetailWindow が開いていれば閉じる (もしあれば)
+        if hasattr(self, 'data_management_widget') and self.data_management_widget and \
+           hasattr(self.data_management_widget, '_detail_window') and self.data_management_widget._detail_window:
             if self.data_management_widget._detail_window.isVisible():
                 self.data_management_widget._detail_window.close()
+        
         super().closeEvent(event)
 
 if __name__ == '__main__':

@@ -5,14 +5,19 @@ Gemini APIとのチャット形式の対話を処理するモジュール。
 このモジュールは GeminiChatHandler クラスを提供し、システム指示、
 会話履歴の管理、一時的なコンテキスト情報とユーザー入力を組み合わせた
 メッセージ送信、およびAIからの応答取得を扱います。
+会話履歴のプロジェクトごとの保存・読み込み機能を含む。
 """
 
 import google.generativeai as genai
-from typing import List, Dict, Tuple, Optional, Union # 型ヒントのために追加
+from typing import List, Dict, Tuple, Optional, Union
+import os # ファイルパス操作用
+import json # JSONデータの読み書き用
 
 # --- グローバル変数 (APIキーと設定済みフラグ) ---
 _API_KEY: Optional[str] = None
 _IS_CONFIGURED: bool = False
+HISTORY_FILENAME = "chat_history.json" # 履歴ファイル名
+PROJECTS_BASE_DIR = "data" # プロジェクトのベースディレクトリ (config_managerと合わせる)
 
 def configure_gemini_api(api_key: str) -> Tuple[bool, str]:
     """Gemini APIクライアントを設定します。
@@ -51,7 +56,8 @@ class GeminiChatHandler:
     """Gemini APIとのチャットセッションを管理し、会話履歴を保持するクラス。
 
     Attributes:
-        model_name (str): 使用するGeminiモデルの名前 (例: 'gemini-1.5-flash')。
+        project_dir_name (str | None): 現在のチャットハンドラが対象とするプロジェクトのディレクトリ名。
+        model_name (str): 使用するGeminiモデルの名前。
         _model (genai.GenerativeModel | None): Geminiモデルのインスタンス。
         _chat_session (genai.ChatSession | None): 現在のチャットセッション。
         _pure_chat_history (List[Dict[str, Union[str, List[Dict[str, str]]]]]):
@@ -60,18 +66,93 @@ class GeminiChatHandler:
         _system_instruction_text (str | None): 現在のチャットセッションのシステム指示。
     """
 
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, project_dir_name: Optional[str] = None): # ★ project_dir_name を追加
         """GeminiChatHandlerのコンストラクタ。
 
         Args:
             model_name (str): 使用するGeminiモデルの名前。
+            project_dir_name (str, optional): 対象プロジェクトのディレクトリ名。
+                                            Noneの場合、履歴の保存・読み込みは行われない。
         """
+        self.project_dir_name: Optional[str] = project_dir_name
         self.model_name: str = model_name
         self._model: Optional[genai.GenerativeModel] = None
         self._chat_session: Optional[genai.ChatSession] = None
         self._pure_chat_history: List[Dict[str, Union[str, List[Dict[str, str]]]]] = []
         self._system_instruction_text: Optional[str] = None
-        self._initialize_model()
+        
+        if self.project_dir_name: # プロジェクト名があれば履歴を読み込む試み
+            self._load_history_from_file() # ★ 履歴読み込み
+            
+        self._initialize_model() # モデル初期化 (システム指示はまだ未設定)
+
+    # --- ★★★ プライベートヘルパー: 履歴ファイルパス取得 ★★★ ---
+    def _get_history_file_path(self) -> Optional[str]:
+        """現在のプロジェクトの履歴ファイルへのフルパスを返します。
+        プロジェクト名が設定されていなければ None を返します。
+        """
+        if not self.project_dir_name:
+            return None
+        # プロジェクトディレクトリの存在確認は呼び出し元で行うか、ここで簡易的に行う
+        project_path = os.path.join(PROJECTS_BASE_DIR, self.project_dir_name)
+        if not os.path.isdir(project_path): # プロジェクトディレクトリがない場合
+            try: # ディレクトリ作成を試みる (MainWindow側でも作成されるはずだが念のため)
+                os.makedirs(project_path, exist_ok=True)
+                print(f"GeminiChatHandler: Created project directory for history: {project_path}")
+            except Exception as e:
+                print(f"GeminiChatHandler: Error creating project directory {project_path}: {e}")
+                return None # ディレクトリ作成失敗ならパスも返せない
+        return os.path.join(project_path, HISTORY_FILENAME)
+    # --- ★★★ ----------------------------------------- ★★★ ---
+
+    # --- ★★★ プライベートヘルパー: 履歴ファイル読み込み ★★★ ---
+    def _load_history_from_file(self):
+        """現在のプロジェクトの履歴ファイルから純粋な会話履歴を読み込みます。
+        ファイルが存在しない、または読み込みに失敗した場合は、履歴は空のままです。
+        """
+        history_file_path = self._get_history_file_path()
+        if not history_file_path:
+            self._pure_chat_history = [] # プロジェクト名がないなら履歴もなし
+            return
+
+        if os.path.exists(history_file_path):
+            try:
+                with open(history_file_path, 'r', encoding='utf-8') as f:
+                    loaded_history = json.load(f)
+                if isinstance(loaded_history, list): # 形式チェック (簡易)
+                    self._pure_chat_history = loaded_history
+                    print(f"Chat history loaded from '{history_file_path}' ({len(self._pure_chat_history)} entries).")
+                else:
+                    print(f"Warning: Invalid history format in '{history_file_path}'. Starting with empty history.")
+                    self._pure_chat_history = []
+            except Exception as e:
+                print(f"Error loading chat history from '{history_file_path}': {e}. Starting with empty history.")
+                self._pure_chat_history = []
+        else:
+            print(f"No chat history file found at '{history_file_path}'. Starting with empty history.")
+            self._pure_chat_history = []
+    # --- ★★★ -------------------------------------------- ★★★ ---
+
+    # --- ★★★ プライベートヘルパー: 履歴ファイル保存 ★★★ ---
+    def _save_history_to_file(self):
+        """現在の純粋な会話履歴をプロジェクトの履歴ファイルに保存します。
+        プロジェクト名が設定されていなければ何もしません。
+        """
+        history_file_path = self._get_history_file_path()
+        if not history_file_path:
+            # print("Debug: Project directory name not set, cannot save history.")
+            return
+
+        try:
+            # 保存先のディレクトリが存在することを確認 (get_history_file_path内で作成試行済み)
+            os.makedirs(os.path.dirname(history_file_path), exist_ok=True)
+            with open(history_file_path, 'w', encoding='utf-8') as f:
+                json.dump(self._pure_chat_history, f, ensure_ascii=False, indent=2)
+            # print(f"Chat history saved to '{history_file_path}' ({len(self._pure_chat_history)} entries).")
+        except Exception as e:
+            print(f"Error saving chat history to '{history_file_path}': {e}")
+    # --- ★★★ ----------------------------------------- ★★★ ---
+
 
     def _initialize_model(self, system_instruction_text: Optional[str] = None):
         """Geminiモデルを初期化（または再初期化）します。
@@ -91,33 +172,32 @@ class GeminiChatHandler:
         
         try:
             print(f"Initializing Gemini model: {self.model_name} with system instruction (length: {len(self._system_instruction_text or '')})")
-            self._model = genai.GenerativeModel(
-                model_name=self.model_name,
-                system_instruction=self._system_instruction_text # ここでシステム指示を設定
-            )
-            # モデル初期化時にチャットセッションもリセット（履歴は保持）
-            self.start_new_chat_session(keep_history=True)
-        except Exception as e:
-            print(f"Error initializing Gemini model '{self.model_name}': {e}")
-            self._model = None
-            self._chat_session = None
+            self._model = genai.GenerativeModel(model_name=self.model_name, system_instruction=self._system_instruction_text)
+            # ★ モデル初期化時に、現在の純粋履歴でチャットセッションを開始
+            if self._model: self.start_new_chat_session(keep_history=True, load_from_file_if_empty=False) # load_from_file_if_empty はコンストラクタで実施済み
+        except Exception as e: print(f"Error initializing Gemini model '{self.model_name}': {e}"); self._model = None; self._chat_session = None
 
 
-    def start_new_chat_session(self, keep_history: bool = False, system_instruction_text: Optional[str] = None):
+    def start_new_chat_session(self, keep_history: bool = False, system_instruction_text: Optional[str] = None, load_from_file_if_empty: bool = True): # ★ load_from_file_if_empty 追加
         """新しいチャットセッションを開始します。
         既存の純粋な会話履歴を引き継ぐか、クリアするかを選択できます。
-        システム指示も更新可能です。
+        システム指示も更新可能。履歴は維持、クリア、またはファイルからロードできます。
 
         Args:
-            keep_history (bool): Trueの場合、既存の純粋な会話履歴を維持します。
-                                 Falseの場合、純粋な会話履歴をクリアします。
-            system_instruction_text (str, optional): 新しいシステム指示。
-                                                     Noneの場合は現在の指示を維持。
+            keep_history (bool): Trueの場合、現在のメモリ上の純粋な会話履歴を維持。
+                                 Falseの場合、メモリ上の純粋な会話履歴をクリア。
+            system_instruction_text (str, optional): 新しいシステム指示。Noneの場合は現在の指示を維持。
+            load_from_file_if_empty (bool): keep_history=False で履歴をクリアした後、
+                                            またはメモリ上の履歴が空の場合に、
+                                            ファイルから履歴を読み込む試みをするか。
         """
-        if system_instruction_text is not None or self._model is None or \
-           (self._system_instruction_text != system_instruction_text and system_instruction_text is not None) :
-            # モデルの再初期化が必要な場合 (システム指示が変わったか、モデルが未初期化)
-            self._initialize_model(system_instruction_text)
+        model_or_system_changed = False
+        if system_instruction_text is not None and self._system_instruction_text != system_instruction_text:
+            self._system_instruction_text = system_instruction_text
+            model_or_system_changed = True
+        
+        if self._model is None or model_or_system_changed:
+             self._initialize_model(self._system_instruction_text) # 現在のシステム指示で再初期化
         
         if not self._model:
             print("Cannot start chat session: Model not initialized.")
@@ -125,11 +205,15 @@ class GeminiChatHandler:
 
         if not keep_history:
             self._pure_chat_history = []
-            print("Chat history cleared.")
+            print("Chat history cleared from memory.")
+            if load_from_file_if_empty and self.project_dir_name: # クリア後、ファイルから再ロードを試みる場合
+                self._load_history_from_file()
+        elif load_from_file_if_empty and not self._pure_chat_history and self.project_dir_name: # 履歴維持だがメモリが空ならファイルから
+            self._load_history_from_file()
+
 
         try:
-            # アプリケーション管理の純粋な会話履歴でチャットセッションを初期化
-            print(f"Starting new chat session with history (length: {len(self._pure_chat_history)})")
+            print(f"Starting new chat session with history from memory (length: {len(self._pure_chat_history)})")
             self._chat_session = self._model.start_chat(history=self._pure_chat_history)
         except Exception as e:
             print(f"Error starting chat session: {e}")
@@ -151,7 +235,7 @@ class GeminiChatHandler:
             if not self._model:
                 return None, "チャットセッションを開始できません: モデルが初期化されていません。APIキーを確認してください。"
             # チャットセッションがなければ（初回など）、ここで開始を試みる
-            self.start_new_chat_session(keep_history=True) # 現在の履歴とシステム指示で
+            self.start_new_chat_session(keep_history=True, load_from_file_if_empty=True) # 履歴を維持し、必要ならファイルからロード
             if not self._chat_session:
                  return None, "チャットセッションの開始に失敗しました。"
 
@@ -177,7 +261,7 @@ class GeminiChatHandler:
             self._pure_chat_history.append({'role': 'user', 'parts': [{'text': user_input.strip()}]})
             self._pure_chat_history.append({'role': 'model', 'parts': [{'text': ai_response_text.strip()}]})
             print(f"  AI Response received. Pure history length: {len(self._pure_chat_history)}")
-            
+            self._save_history_to_file() # ★★★ 応答受け取り後に履歴をファイルに保存 ★★★
             return ai_response_text, None
         except Exception as e:
             print(f"Error sending message or receiving response from Gemini: {e}")
@@ -193,27 +277,40 @@ class GeminiChatHandler:
         """
         return self._pure_chat_history.copy() # コピーを返す
 
-    def clear_pure_chat_history(self):
-        """純粋な会話履歴をクリアします。
+    def clear_pure_chat_history(self): # ★ ファイルもクリアする
+        """純粋な会話履歴をメモリとファイルからクリアします。
         チャットセッションも新しい履歴（空）で再開始します。
         """
         self._pure_chat_history = []
-        print("Pure chat history cleared.")
-        if self._model: # モデルが初期化されていれば、チャットセッションもリセット
-            self.start_new_chat_session(keep_history=False) # 履歴はクリア済みで開始
+        print("Pure chat history cleared from memory.")
+        if self.project_dir_name: # プロジェクト名があればファイルもクリア（空で上書き）
+            self._save_history_to_file() 
+            print(f"Chat history file for project '{self.project_dir_name}' also cleared/emptied.")
+            
+        if self._model:
+            self.start_new_chat_session(keep_history=False, load_from_file_if_empty=False) # 履歴クリアでセッション開始
 
-    def update_settings_and_restart_chat(self, new_model_name: Optional[str] = None, new_system_instruction: Optional[str] = None):
-        """モデル名またはシステム指示を更新し、現在の純粋な会話履歴を維持したまま
+    def update_settings_and_restart_chat(self, new_model_name: Optional[str] = None, new_system_instruction: Optional[str] = None, new_project_dir_name: Optional[str] = None): # ★ new_project_dir_name 追加
+        """モデル名、システム指示、またはプロジェクト名を更新し、
+        適切な会話履歴（現在のメモリ、または新プロジェクトのファイルからロード）で
         チャットセッションを再開（再初期化）します。
 
         Args:
-            new_model_name (str, optional): 新しいモデル名。Noneの場合は現在のモデル名を維持。
-            new_system_instruction (str, optional): 新しいシステム指示。Noneの場合は現在の指示を維持。
+            new_model_name (str, optional): 新しいモデル名。
+            new_system_instruction (str, optional): 新しいシステム指示。
+            new_project_dir_name (str, optional): 新しいプロジェクトディレクトリ名。
+                                                 指定された場合、そのプロジェクトの履歴をロード。
+                                                 Noneの場合、現在のプロジェクトの履歴を維持。
         """
-        if not is_configured():
-            print("Warning: Gemini API not configured. Cannot update settings.")
-            return
+        if not is_configured(): print("Warning: Gemini API not configured. Cannot update settings."); return
 
+        project_changed = False
+        if new_project_dir_name and self.project_dir_name != new_project_dir_name:
+            self.project_dir_name = new_project_dir_name
+            project_changed = True
+            print(f"Chat handler: Project directory name updated to '{self.project_dir_name}'.")
+            self._load_history_from_file() # ★ 新しいプロジェクトの履歴をロード
+        
         model_changed = False
         if new_model_name and self.model_name != new_model_name:
             self.model_name = new_model_name
@@ -228,14 +325,10 @@ class GeminiChatHandler:
             system_instruction_changed = True
             print(f"Chat handler: System instruction updated (length: {len(self._system_instruction_text or '')}).")
 
-        if model_changed or system_instruction_changed:
-            # モデル自体かシステム指示が変わった場合は、モデルを再初期化する必要がある
+        if project_changed or model_changed or system_instruction_changed:
             try:
-                print(f"Re-initializing Gemini model: {self.model_name} (due to settings change).")
-                self._model = genai.GenerativeModel(
-                    model_name=self.model_name,
-                    system_instruction=self._system_instruction_text
-                )
+                print(f"Re-initializing Gemini model: {self.model_name} (due to settings/project change).")
+                self._model = genai.GenerativeModel(model_name=self.model_name, system_instruction=self._system_instruction_text)
             except Exception as e:
                 print(f"Error re-initializing Gemini model '{self.model_name}': {e}")
                 self._model = None
@@ -245,13 +338,22 @@ class GeminiChatHandler:
         # モデルが（再）初期化されていれば、現在の純粋な履歴でチャットセッションを開始
         if self._model:
             try:
-                print(f"Restarting chat session with updated settings and existing history (length: {len(self._pure_chat_history)}).")
+                print(f"Restarting chat session with updated settings and current/loaded history (length: {len(self._pure_chat_history)}).")
                 self._chat_session = self._model.start_chat(history=self._pure_chat_history)
             except Exception as e:
-                print(f"Error restarting chat session with updated settings: {e}")
+                print(f"Error restarting chat session: {e}")
                 self._chat_session = None
-        else:
-            print("Cannot restart chat session: Model not properly initialized after settings update.")
+        else: print("Cannot restart chat session: Model not properly initialized.")
+
+    # --- ★★★ アプリ終了時の保存用メソッド (MainWindowから呼ばれる想定) ★★★ ---
+    def save_current_history_on_exit(self):
+        """現在の純粋な会話履歴をファイルに明示的に保存します。
+        主にアプリケーション終了時に使用します。
+        """
+        if self.project_dir_name and self._pure_chat_history: # 保存すべき履歴がある場合のみ
+             print(f"Saving chat history for project '{self.project_dir_name}' on exit...")
+             self._save_history_to_file()
+    # --- ★★★ ------------------------------------------------------ ★★★ ---
 
 
     # --- ★★★ 単発プロンプト応答用 静的メソッド ★★★ ---
