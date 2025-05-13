@@ -253,7 +253,56 @@ class GeminiChatHandler:
         else:
             print("Cannot restart chat session: Model not properly initialized after settings update.")
 
-    # --- 以前の generate_response 関数は、このクラスのメソッドに置き換えられるか、
-    #     あるいは単発プロンプト用として残す場合は名前を変更するなどする ---
-    # def generate_response(model_name: str, prompt: str) -> Tuple[Optional[str], Optional[str]]:
-    # (この関数は削除またはコメントアウトし、新しいチャットハンドラを使用するように移行)
+
+    # --- ★★★ 単発プロンプト応答用 静的メソッド ★★★ ---
+    @staticmethod
+    def generate_single_response(model_name: str, prompt_text: str) -> Tuple[Optional[str], Optional[str]]:
+        """指定されたプロンプトに対して、単発のAI応答を生成します。
+        チャット履歴は使用・更新しません。
+
+        Args:
+            model_name (str): 使用するGeminiモデルの名前。
+            prompt_text (str): AIへの完全なプロンプトテキスト。
+
+        Returns:
+            Tuple[Optional[str], Optional[str]]: (AIの応答テキスト, エラーメッセージ)
+                                                 成功時は (応答テキスト, None)、失敗時は (None, エラーメッセージ)。
+        """
+        if not is_configured(): # モジュールレベルの is_configured() を使用
+            return None, "Gemini APIが設定されていません。"
+        if not model_name:
+            return None, "モデル名が指定されていません。"
+        if not prompt_text:
+            return None, "プロンプトテキストが空です。"
+
+        try:
+            print(f"Generating single response with model '{model_name}' (prompt length: {len(prompt_text)}).")
+            # 単発応答用のモデルインスタンスをここで作成
+            # システム指示は単発プロンプトの場合はプロンプトテキスト内に含める想定
+            model_for_single_use = genai.GenerativeModel(model_name)
+            response = model_for_single_use.generate_content(prompt_text)
+            
+            ai_response_text = ""
+            # response.text が存在するか、または response.parts からテキストを抽出
+            if hasattr(response, 'text') and response.text:
+                ai_response_text = response.text
+            elif response.parts:
+                for part in response.parts:
+                    if hasattr(part, 'text'):
+                        ai_response_text += part.text
+            
+            if not ai_response_text.strip() and response.prompt_feedback and hasattr(response.prompt_feedback, 'block_reason'):
+                 # 応答が空で、ブロックされた理由がある場合
+                 block_reason = response.prompt_feedback.block_reason
+                 return None, f"AIからの応答がブロックされました。理由: {block_reason}"
+
+            print("Single response generated successfully.")
+            return ai_response_text, None
+        except Exception as e:
+            print(f"Error generating single response from Gemini: {e}")
+            return None, str(e)
+    # --- ★★★ ----------------------------------------- ★★★ ---
+
+# --- 以前のグローバルな generate_response 関数は削除 ---
+# def generate_response(model_name: str, prompt: str) -> Tuple[Optional[str], Optional[str]]:
+# (これは GeminiChatHandler.generate_single_response に置き換えられました)

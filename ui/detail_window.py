@@ -14,9 +14,9 @@ from PyQt5.QtWidgets import (
     QPushButton, QScrollArea, QFrame, QFileDialog, QMessageBox, QDialog,
     QSizePolicy, QSpacerItem, QInputDialog, QApplication
 )
-from PyQt5.QtGui import QPixmap, QImageReader
+from PyQt5.QtGui import QPixmap, QImageReader, QResizeEvent
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QResizeEvent
+from PyQt5.QtWidgets import qApp
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -311,38 +311,77 @@ class DetailWindow(QWidget):
     def _handle_ai_suggestion_request(self):
         """`AIAssistedEditDialog` からAI提案依頼があった場合の処理。
         現在の `self.ai_edit_dialog_mode` に応じてAIへの処理を行います。
+        「説明/メモ」編集支援は単発プロンプトを使用します。
+        「履歴」追記支援は、現時点ではチャットハンドラ経由（要検討）。
         """
         if not self.ai_edit_dialog: return
 
         instruction_text = self.ai_edit_dialog.get_instruction_text()
-        if not instruction_text.strip(): QMessageBox.warning(self.ai_edit_dialog, "入力エラー", "AIへの指示を入力してください。"); return
-        ai_model_to_use = self.main_config.get("model", "gemini-1.5-pro-latest"); self.ai_edit_dialog.show_processing_message(True)
-        from core.gemini_handler import generate_response as call_gemini, is_configured as gemini_is_configured
-        if not gemini_is_configured():
-            QMessageBox.critical(self.ai_edit_dialog, "APIエラー", "Gemini APIが設定されていません。"); self.ai_edit_dialog.show_processing_message(False); return
+        if not instruction_text.strip():
+            QMessageBox.warning(self.ai_edit_dialog, "入力エラー", "AIへの指示を入力してください。")
+            return
 
-        # --- ★★★ モードに応じてプロンプトの前処理や後処理を変えることも可能 ★★★ ---
-        # 例えば、履歴モードの場合は、AIからの応答を1行に整形するような後処理を加えるなど。
-        # 現状は instruction_text をそのまま渡す。
-        final_prompt_for_ai = instruction_text
-        # if self.ai_edit_dialog_mode == "history":
-        #     final_prompt_for_ai += "\n上記の情報を基に、タイムスタンプを除いた1行の履歴エントリを生成してください。" # 例
+        # --- ★★★ AIモデル名は MainWindow の Chat Handler から取得するか、設定から取得 ★★★ ---
+        # self.main_window_instance.chat_handler.model_name のようなアクセスが必要か、
+        # あるいは self.main_config (DetailWindowのコンストラクタで渡される) から取得
+        ai_model_to_use = self.main_config.get("ai_model_for_editing", # 設定キーは仮
+                                               self.main_config.get("default_model", "gemini-1.5-flash")) 
+                                               # MainWindowが持つグローバル設定/プロジェクト設定を渡す想定
+        if hasattr(qApp, 'main_window') and qApp.main_window.chat_handler: # グローバル参照 (推奨されないが良い方法がなければ)
+             ai_model_to_use = qApp.main_window.chat_handler.model_name
+        # -------------------------------------------------------------------------
 
-        ai_suggestion, error_msg = call_gemini(ai_model_to_use, final_prompt_for_ai)
+        print(f"DetailWindow: Requesting AI suggestion (Mode: {self.ai_edit_dialog_mode}) with model '{ai_model_to_use}'. Instruction length: {len(instruction_text)}")
+        self.ai_edit_dialog.show_processing_message(True)
+
+        # --- ★★★ 呼び出すAI処理をモードによって分岐 ★★★ ---
+        ai_suggestion = None
+        error_msg = None
+
+        if self.ai_edit_dialog_mode == "description":
+            # 「説明/メモ」編集支援は、単発プロンプトで GeminiChatHandler の静的メソッドを使用
+            from core.gemini_handler import GeminiChatHandler, is_configured as gemini_is_configured # 再度インポート
+            if not gemini_is_configured():
+                QMessageBox.critical(self.ai_edit_dialog, "APIエラー", "Gemini APIが設定されていません。"); self.ai_edit_dialog.show_processing_message(False); return
+            
+            ai_suggestion, error_msg = GeminiChatHandler.generate_single_response(
+                model_name=ai_model_to_use,
+                prompt_text=instruction_text # 指示全体をプロンプトとして渡す
+            )
+        elif self.ai_edit_dialog_mode == "history":
+            # 「履歴」追記支援の場合
+            # 現状、AIAssistedEditDialog は汎用的な編集ダイアログ。
+            # AIに履歴エントリーの「内容」だけを生成させ、タイムスタンプやID付与は DetailWindow 側で行う。
+            # そのため、ここも単発プロンプトで良い可能性がある。
+            # もしチャットの文脈が必要なら、MainWindow の chat_handler を使うが、
+            # DetailWindow が MainWindow の chat_handler を直接参照するのは結合度が高い。
+            # 今回は、履歴追記も単発プロンプトで試みる。
+            from core.gemini_handler import GeminiChatHandler, is_configured as gemini_is_configured
+            if not gemini_is_configured():
+                QMessageBox.critical(self.ai_edit_dialog, "APIエラー", "Gemini APIが設定されていません。"); self.ai_edit_dialog.show_processing_message(False); return
+
+            # 履歴生成用のプロンプトは instruction_text に含まれていると想定
+            # (例: 「以下の情報に基づいて履歴エントリを1行で提案してください：...」)
+            ai_suggestion, error_msg = GeminiChatHandler.generate_single_response(
+                model_name=ai_model_to_use,
+                prompt_text=instruction_text 
+            )
+        else:
+            error_msg = f"不明な編集モードです: {self.ai_edit_dialog_mode}"
+        # --- ★★★ ------------------------------------ ★★★ ---
+            
         self.ai_edit_dialog.show_processing_message(False)
 
         if error_msg:
             QMessageBox.warning(self.ai_edit_dialog, "AI提案エラー", f"AIからの提案取得に失敗しました:\n{error_msg}")
-        elif ai_suggestion:
-            # --- ★★★ 履歴モードの場合、生成されたテキストを1行に丸める（任意） ★★★ ---
+        elif ai_suggestion is not None: # Noneでないことを確認 (空文字列は許容)
             processed_suggestion = ai_suggestion
-            if self.ai_edit_dialog_mode == "history":
-                # 複数行の提案が来た場合、最初の行だけ採用するか、改行をスペースに置換するなど
-                processed_suggestion = ai_suggestion.splitlines()[0] if ai_suggestion.strip() else "AIからの提案なし"
-            # -------------------------------------------------------------------
+            # if self.ai_edit_dialog_mode == "history": # 履歴モードなら1行に丸める（一先ず現状は無効）
+            #    processed_suggestion = ai_suggestion.splitlines()[0] if ai_suggestion.strip() else "" # 空の場合も考慮
+            
             self.ai_edit_dialog.set_suggestion_text(processed_suggestion)
             QMessageBox.information(self.ai_edit_dialog, "提案取得完了", "AIからの提案を取得しました。必要に応じて編集してください。")
-        else:
+        else: # ai_suggestion が None (エラーなしで応答なし) の場合も考慮
             QMessageBox.information(self.ai_edit_dialog, "提案なし", "AIから有効な提案がありませんでした。")
 
 

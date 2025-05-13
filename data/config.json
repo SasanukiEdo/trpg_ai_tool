@@ -1,5 +1,5 @@
 {
-    "active_project": "dm_test_project",
+    "active_project": "default_project",
     "default_model": "gemini-1.5-pro-latest",
     "available_models": [
         "gemini-1.5-pro-latest",
