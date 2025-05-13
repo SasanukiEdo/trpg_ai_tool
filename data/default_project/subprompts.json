@@ -5,8 +5,9 @@
             "model": ""
         },
         "NPC会話": {
-            "prompt": "",
-            "model": ""
+            "prompt": "キャラクターと会話をする",
+            "model": "",
+            "reference_tags": []
         }
     },
     "戦闘": {

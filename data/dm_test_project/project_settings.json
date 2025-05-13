@@ -1,5 +1,5 @@
 {
     "project_display_name": "dm_test_project",
     "main_system_prompt": "あなたは優秀なAIアシスタントです。",
-    "model": "gemini-1.5-pro-latest"
+    "model": "gemini-1.5-flash-latest"
 }

@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
 import re # ディレクトリ名検証用
+from typing import Optional, List, Dict, Tuple
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -46,7 +47,7 @@ from ui.subprompt_dialog import SubPromptEditDialog
 from ui.data_widget import DataManagementWidget
 
 # --- Gemini API ハンドラー ---
-from core.gemini_handler import configure_gemini_api, generate_response, is_configured
+from core.gemini_handler import GeminiChatHandler, configure_gemini_api, is_configured # クラスと関数をインポート
 
 
 # ==============================================================================
@@ -162,7 +163,9 @@ class MainWindow(QWidget):
     """
 
     def __init__(self):
-        """MainWindowのコンストラクタ。UIの初期化とプロジェクトデータの読み込みを行います。"""
+        """MainWindowのコンストラクタ。UIの初期化とプロジェクトデータの読み込みを行います。
+        GeminiChatHandler のインスタンスも保持します。
+        """
         super().__init__()
         self.global_config: dict = {}
         """dict: `data/config.json` から読み込まれたグローバル設定。"""
@@ -175,16 +178,40 @@ class MainWindow(QWidget):
         {カテゴリ名: {サブプロンプト名: {"prompt": ..., "model": ...}}} の形式。
         """
         self.checked_subprompts: dict[str, set[str]] = {}
-        """dict[str, set[str]]: {カテゴリ名: {チェックされたサブプロンプト名のセット}}。"""
-        self.gemini_configured: bool = False
-        """bool: Gemini APIが正しく設定されていれば True。"""
-        # --- ★★★ プロジェクト選択コンボボックス用のプロジェクト情報リスト ★★★ ---
-        self._projects_list_for_combo: list[tuple[str, str]] = [] # (表示名, ディレクトリ名) のタプルのリスト
-        # -------------------------------------------------------------------
+        # self.gemini_configured: bool = False # is_configured() で確認するので不要かも
+        self._projects_list_for_combo: list[tuple[str, str]] = []
+        
+        # --- ★★★ GeminiChatHandler のインスタンスを初期化 ★★★ ---
+        # モデル名はグローバル設定から取得することを想定。最初はダミーでも良い。
+        temp_global_config_for_model = load_global_config() # モデル名取得のため一時ロード
+        initial_model_name = temp_global_config_for_model.get(
+            "default_model", 
+            DEFAULT_PROJECT_SETTINGS.get("model", "gemini-1.5-flash") # フォールバック
+        )
+        self.chat_handler: Optional[GeminiChatHandler] = None # configure_gemini で初期化
+        self._initialize_chat_handler(initial_model_name) # chat_handlerを初期化するメソッドを呼ぶ
+        # --- ★★★ ------------------------------------------- ★★★ ---
 
-        self._initialize_configs_and_project() # 設定とプロジェクトデータを初期化
-        self.init_ui()                        # UIを構築
-        self.configure_gemini()               # Gemini APIクライアントを設定
+        self._initialize_configs_and_project() # この中でプロジェクト設定がロードされる
+        self.init_ui() # UI初期化
+        self.configure_gemini_and_chat_handler() # APIキー設定とチャットハンドラ再設定
+
+    def _initialize_chat_handler(self, model_name: str, system_instruction: Optional[str] = None):
+        """GeminiChatHandlerを初期化または再初期化します。
+        システム指示もここで設定します。
+        """
+        print(f"MainWindow: Initializing chat handler with model '{model_name}'.")
+        self.chat_handler = GeminiChatHandler(model_name=model_name)
+        # 初回またはシステム指示が変わる場合、チャットセッションをリセットしてシステム指示を適用
+        # (GeminiChatHandler内で model.start_chat が呼ばれる際にシステム指示が適用される)
+        current_system_prompt = system_instruction
+        if current_system_prompt is None and self.current_project_settings: # プロジェクト設定から取得
+            current_system_prompt = self.current_project_settings.get("main_system_prompt", "")
+        
+        self.chat_handler.start_new_chat_session(
+            keep_history=False, # 新しいモデルやシステム指示なら履歴はクリア
+            system_instruction_text=current_system_prompt
+        )
 
     def _initialize_configs_and_project(self):
         """グローバル設定を読み込み、アクティブなプロジェクトのデータをロードします。"""
@@ -465,22 +492,36 @@ class MainWindow(QWidget):
         """指定されたディレクトリ名のプロジェクトに実際に切り替える内部メソッド。
 
         関連する設定の更新、データの再読み込み、UIの更新を行います。
+        Chat Handler も新しいプロジェクト設定で再初期化します。
 
         Args:
             new_project_dir_name (str): 切り替え先のプロジェクトのディレクトリ名。
         """
         print(f"--- MainWindow: Switching project to '{new_project_dir_name}' ---")
+        old_project_dir_name = self.current_project_dir_name
         self.current_project_dir_name = new_project_dir_name
         
         # グローバル設定のアクティブプロジェクトを更新・保存
         self.global_config["active_project"] = self.current_project_dir_name
         if not save_global_config(self.global_config):
             QMessageBox.warning(self, "保存エラー", "アクティブプロジェクトの変更の保存に失敗しました。")
-            # ここで元のプロジェクトに戻すなどの処理も検討できる
+            self.current_project_dir_name = old_project_dir_name # 元に戻す
             return
 
-        self._load_current_project_data() # 新しいプロジェクトのデータをロードし、UI部品も更新
-        # _load_current_project_data内でDataManagementWidgetのset_projectとrefresh_subprompt_tabsが呼ばれる
+        self._load_current_project_data() # 新しいプロジェクトのデータをロード (self.current_project_settings が更新される)
+        
+        # --- ★★★ Chat Handler を新しいプロジェクト設定で再初期化 ★★★ ---
+        new_model = self.current_project_settings.get("model", self.global_config.get("default_model"))
+        new_system_prompt = self.current_project_settings.get("main_system_prompt", "")
+        if self.chat_handler:
+            # モデル名かシステム指示が変わった場合、またはプロジェクトが変わった場合は履歴もクリアして再初期化
+            if self.chat_handler.model_name != new_model or self.chat_handler._system_instruction_text != new_system_prompt or old_project_dir_name != new_project_dir_name:
+                 self._initialize_chat_handler(model_name=new_model, system_instruction=new_system_prompt)
+                 print(f"  Chat handler re-initialized for new project '{new_project_dir_name}'. History cleared.")
+            # else: モデルもシステム指示も同じでプロジェクトも同じなら何もしない (ありえないケースだが)
+        else: # まだハンドラがなければ初期化
+            self._initialize_chat_handler(model_name=new_model, system_instruction=new_system_prompt)
+        # --- ★★★ ------------------------------------------------ ★★★ ---
 
         # コンボボックスの選択状態も（もし必要なら）再確認・設定
         # 通常は_on_project_selected_by_display_nameから呼ばれるので不要だが、直接呼ばれた場合のため
@@ -664,45 +705,40 @@ class MainWindow(QWidget):
 
             else:
                 QMessageBox.critical(self, "削除エラー", f"プロジェクト「{project_display_name}」の削除に失敗しました。")
-    # ---------------------------------------------
 
-    # (configure_gemini, open_settings_dialog, on_send_button_clicked,
-    #  サブプロンプト関連メソッド, データ管理ウィジェット連携メソッド, closeEvent
-    #  のDocstringsとコードは前回のままで変更なしのため、ここでは省略します)
-    # ... configure_gemini ...
-    # ... open_settings_dialog ...
-    # ... on_send_button_clicked ...
-    # ... refresh_subprompt_tabs ...
-    # ... _on_subprompt_tab_changed ...
-    # ... _handle_subprompt_check_change ...
-    # ... add_subprompt_category ...
-    # ... add_or_edit_subprompt ...
-    # ... delete_subprompt ...
-    # ... _handle_add_data_category_request ...
-    # ... _handle_add_data_item_request ...
-    # ... closeEvent ...
-
-    # --- 省略したメソッドのDocstringsとシグネチャのみ再掲（内容は前回と同じ） ---
-    def configure_gemini(self):
-        """Gemini APIクライアントを設定します。OS資格情報からAPIキーを取得します。"""
+    def configure_gemini_and_chat_handler(self):
+        """Gemini APIクライアントを設定し、Chat Handlerも適切に再初期化します。"""
         api_key_from_os = get_os_api_key()
+        config_success = False
         if api_key_from_os:
-            success, message = configure_gemini_api(api_key_from_os)
+            success, message = configure_gemini_api(api_key_from_os) # gemini_handlerのグローバル関数
             if success:
-                print(f"Gemini API設定完了 (Project Model: {self.current_project_settings.get('model')})")
-                self.gemini_configured = True
+                print(f"Gemini API設定完了。")
+                config_success = True
             else:
                 QMessageBox.warning(self, "API設定エラー", f"Gemini APIクライアントの設定に失敗しました:\n{message}")
-                self.gemini_configured = False
         else:
-            # 初回起動時などに表示されるメッセージ
             QMessageBox.information(self, "APIキー未設定",
                                     "Gemini APIキーがOSの資格情報に保存されていません。\n"
                                     "「設定」メニューからAPIキーを保存してください。")
-            self.gemini_configured = False
+        
+        if config_success:
+            # API設定が成功したら、現在のプロジェクト設定に基づいてチャットハンドラを再初期化
+            model_to_use = self.current_project_settings.get("model", self.global_config.get("default_model"))
+            system_prompt = self.current_project_settings.get("main_system_prompt", "")
+            if self.chat_handler is None or self.chat_handler.model_name != model_to_use or \
+               (self.chat_handler._system_instruction_text != system_prompt and system_prompt): # モデル名かシステム指示が変わったら再初期化
+                self._initialize_chat_handler(model_name=model_to_use, system_instruction=system_prompt)
+            elif self.chat_handler: # モデルもシステム指示も同じなら、セッションだけ開始 (履歴は維持)
+                 self.chat_handler.start_new_chat_session(keep_history=True)
+        elif self.chat_handler: # API設定失敗したがハンドラは存在する場合 (APIキー削除時など)
+             self.chat_handler._model = None # モデルを無効化
+             self.chat_handler._chat_session = None
 
     def open_settings_dialog(self):
-        """設定ダイアログを開き、結果を適用します。"""
+        """設定ダイアログを開き、結果を適用します。
+        Chat Handler も必要に応じて再初期化します。
+        """
         dialog = SettingsDialog(self.global_config, self.current_project_settings, parent=self)
         if dialog.exec_() == QDialog.Accepted:
             updated_g_conf, updated_p_conf = dialog.get_updated_configs()
@@ -712,172 +748,122 @@ class MainWindow(QWidget):
                 save_global_config(self.global_config)
                 print("グローバル設定が更新・保存されました。")
 
-            if self.current_project_settings != updated_p_conf:
-                self.current_project_settings = updated_p_conf
-                save_project_settings(self.current_project_dir_name, self.current_project_settings)
+            global_settings_changed = self.global_config != updated_g_conf
+            project_settings_changed = self.current_project_settings != updated_p_conf
+            if global_settings_changed: self.global_config = updated_g_conf; save_global_config(self.global_config)
+
+            if project_settings_changed:
+                self.current_project_settings = updated_p_conf; save_project_settings(self.current_project_dir_name, self.current_project_settings)
                 print(f"プロジェクト '{self.current_project_dir_name}' の設定が更新・保存されました。")
+            
+            # UI更新
             self.system_prompt_input_main.setPlainText(self.current_project_settings.get("main_system_prompt", ""))
             display_name = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
             self.setWindowTitle(f"TRPG AI Tool - {display_name}")
-            self.configure_gemini()
-            self._populate_project_selector()
+            self._populate_project_selector() 
+            
+            # --- ★★★ Chat Handler を設定変更に応じて再初期化 ★★★ ---
+            # APIキーの再設定と、モデル名またはシステム指示が変更された場合にハンドラを更新
+            self.configure_gemini_and_chat_handler() # この中でモデル名とシステム指示の変更を検知して再初期化
+            # --- ★★★ -------------------------------------------- ★★★ ---
             print("設定ダイアログの変更が適用されました。")
 
     def on_send_button_clicked(self):
-        """「送信」ボタンがクリックされたときの処理。AIに応答を要求します。"
+        """「送信」ボタンがクリックされたときの処理。
+        GeminiChatHandler を使用してAIに応答を要求します。
         チェックされたサブプロンプト、データアイテム、およびタグ検索に基づいた情報をプロンプトに組み込みます。
         """
-        if not self.gemini_configured:
-            QMessageBox.warning(self, "API未設定", "Gemini APIが設定されていません。「設定」からAPIキーを入力してください。")
+        if not is_configured() or not self.chat_handler or not self.chat_handler._model: # API未設定またはハンドラ未初期化
+            QMessageBox.warning(self, "API/モデル未設定", "Gemini APIが設定されていないか、AIモデルの準備ができていません。「設定」を確認してください。")
             return
 
         user_text = self.user_input.toPlainText().strip()
-        if not user_text:
-            QMessageBox.information(self, "入力なし", "送信するメッセージを入力してください。")
-            return
-        # ユーザーの入力もHTML形式で改行を<br>に置換して表示
-        formatted_user_text = user_text.replace("\n", "<br>")
-        self.response_display.append(f"<div style='color: blue;'><b>あなた:</b><br>{formatted_user_text}</div><br>")
+        if not user_text: QMessageBox.information(self, "入力なし", "送信するメッセージを入力してください。"); return
+        
+        formatted_user_text_for_display = user_text.replace("\n", "<br>")
+        self.response_display.append(f"<div style='color: blue;'><b>あなた:</b><br>{formatted_user_text_for_display}</div><br>")
+        self.user_input.clear(); QApplication.processEvents()
 
-        self.user_input.clear()
-        QApplication.processEvents() # UIの応答性を維持
-
-        # --- プロンプト構築 ---
-        final_prompt_parts = []
-        # 1. メインシステムプロンプト
-        main_system_prompt_text = self.current_project_settings.get("main_system_prompt", "").strip()
-        if main_system_prompt_text:
-            final_prompt_parts.append(f"## システム指示\n{main_system_prompt_text}")
-
-        # 2. 選択されたサブプロンプト
-        active_subprompts_for_prompt = []
-        subprompt_models_used = [] # 使用されたサブプロンプトのモデル名を収集
+        # --- 1. 一時的なコンテキスト情報を構築 ---
+        transient_context_parts = []
+        # (1-1) 選択されたサブプロンプト
+        active_subprompts_for_context = []
+        # subprompt_models_used = [] # モデル選択はチャットハンドラ初期化時に行う
         for category, checked_names in self.checked_subprompts.items():
             if category in self.subprompts:
                 for name in checked_names:
                     if name in self.subprompts[category]:
-                        sub_data = self.subprompts[category][name]
-                        prompt_content = sub_data.get("prompt", "")
-                        sub_model = sub_data.get("model", "")
-                        if sub_model: subprompt_models_used.append(sub_model)
-                        if prompt_content:
-                            active_subprompts_for_prompt.append(
-                                f"### サブプロンプト: {category} - {name}\n{prompt_content}"
-                            )
-        if active_subprompts_for_prompt:
-            final_prompt_parts.append("\n## 選択された補助指示\n" + "\n\n".join(active_subprompts_for_prompt))
-
-        # 3. 選択されたデータアイテムの情報
-        checked_data_for_prompt = []
+                        sub_data = self.subprompts[category][name]; prompt_content = sub_data.get("prompt", "")
+                        # sub_model = sub_data.get("model", "") # モデルはハンドラで一括管理
+                        # if sub_model: subprompt_models_used.append(sub_model)
+                        if prompt_content: active_subprompts_for_context.append(f"### サブプロンプト: {category} - {name}\n{prompt_content}")
+        if active_subprompts_for_context: transient_context_parts.append("\n## 現在の補助指示 (サブプロンプト):\n" + "\n\n".join(active_subprompts_for_context))
+        
+        # (1-2) 選択されたデータアイテムの情報
+        checked_data_for_context = []
+        checked_item_ids_for_dedup = set() # タグ検索結果との重複排除用
         checked_data_from_widget = self.data_management_widget.get_checked_items()
         for category, item_ids in checked_data_from_widget.items():
             for item_id in item_ids:
                 item_detail = get_item(self.current_project_dir_name, category, item_id)
                 if item_detail:
-                    # info_str = f"### データ参照: {category} - {item_detail.get('name', 'N/A')}\n"
-                    # info_str += f"  - 名前: {item_detail.get('name', 'N/A')}\n"
-                    # info_str += f"  - 説明/メモ: {item_detail.get('description', '')}\n"; tags = item_detail.get('tags', []);
-                    # if tags: info_str += f"  - タグ: {', '.join(tags)}\n"; checked_data_for_prompt.append(info_str) # ★★★ 修正前: 文字列を追加
+                    checked_item_ids_for_dedup.add(item_id) # 重複排除リストに追加
+                    info_str = f"### データ参照 (直接選択): {category} - {item_detail.get('name', 'N/A')}\n"
+                    info_str += f"  - 名前: {item_detail.get('name', 'N/A')}\n"
+                    info_str += f"  - 説明/メモ: {item_detail.get('description', '')}\n"; tags = item_detail.get('tags', []);
+                    if tags: info_str += f"  - タグ: {', '.join(tags)}\n"; checked_data_for_context.append(info_str)
+        if checked_data_for_context: transient_context_parts.append("\n## 現在の参照データ (直接選択):\n" + "\n".join(checked_data_for_context))
 
-                    # --- ★★★ 修正後: 辞書形式で必要な情報を抽出して追加 ★★★ ---
-                    checked_data_for_prompt.append({ # 辞書形式で追加
-                        "id": item_id,
-                        "name": item_detail.get('name', 'N/A'),
-                        "category": category,
-                        "description": item_detail.get('description', ''),
-                        "tags": item_detail.get('tags', [])
-                    })
-                    # --- ★★★ 修正ここまで ★★★ ---
-        if checked_data_for_prompt: final_prompt_parts.append("\n## 参照データ (直接選択)\n" + "\n".join(checked_data_for_prompt))
-
-        # --- ★★★ 3. タグによる関連情報 (サブプロンプト + データアイテム) ★★★ ---
-        from core.data_manager import find_items_by_tags # ここでインポート
+        # (1-3) タグによる関連情報 (サブプロンプト + データアイテム)
+        from core.data_manager import find_items_by_tags, ITEM_SUMMARY_KEYS, MAX_HISTORY_ENTRIES_IN_SUMMARY
+        reference_tags_from_subprompts = [] # ... (前回のコードと同様に収集)
+        for cat_sp, names_sp in self.checked_subprompts.items():
+            if cat_sp in self.subprompts:
+                for name_sp in names_sp:
+                    if name_sp in self.subprompts[cat_sp]:
+                        ref_tags_sp = self.subprompts[cat_sp][name_sp].get("reference_tags", [])
+                        if ref_tags_sp: reference_tags_from_subprompts.extend(ref_tags_sp)
+        reference_tags_from_data_items = [] # ... (前回のコードと同様に収集)
+        for cat_di, ids_di in self.data_management_widget.get_checked_items().items():
+            for id_di in ids_di:
+                item_detail_di = get_item(self.current_project_dir_name, cat_di, id_di)
+                if item_detail_di:
+                    ref_tags_di = item_detail_di.get("reference_tags", [])
+                    if ref_tags_di: reference_tags_from_data_items.extend(ref_tags_di)
         
-        # (1) サブプロンプトから参照先タグを収集
-        reference_tags_from_subprompts = []
-        for category, checked_names in self.checked_subprompts.items():
-            if category in self.subprompts:
-                for name in checked_names:
-                    if name in self.subprompts[category]:
-                        sub_data = self.subprompts[category][name]
-                        ref_tags = sub_data.get("reference_tags", []) # 参照先タグリスト
-                        if ref_tags and isinstance(ref_tags, list):
-                            reference_tags_from_subprompts.extend(ref_tags) # タグリストをextendで追加
-
-        # (2) データアイテムからタグを収集
-        reference_tags_from_data_items = []
-        for category, item_ids in self.data_management_widget.get_checked_items().items():
-            for item_id in item_ids:
-                item_detail = get_item(self.current_project_dir_name, category, item_id)
-                if item_detail:
-                    ref_tags = item_detail.get("reference_tags", []) # 新しい参照先タグリスト
-                    if ref_tags and isinstance(ref_tags, list):
-                         reference_tags_from_data_items.extend(ref_tags) # タグリストを追加
-
-        # (3) タグをまとめて検索 (重複を削除)
         all_reference_tags = list(set(reference_tags_from_subprompts + reference_tags_from_data_items))
-        
-        # (4) 検索を実行
-        tagged_items_for_prompt = []
+        tagged_items_info_list = []
         if all_reference_tags:
-            tagged_items_for_prompt = find_items_by_tags(
-                self.current_project_dir_name,
-                all_reference_tags, # 検索するタグのリスト
-                case_insensitive=True,  # 大文字・小文字を区別しない
-                search_logic="OR" # OR 検索
-            )
+            found_tagged_items = find_items_by_tags(self.current_project_dir_name, all_reference_tags)
+            if found_tagged_items:
+                tagged_info_str_parts = []
+                for item in found_tagged_items:
+                    if item.get("id") not in checked_item_ids_for_dedup: # 重複排除
+                        item_name = item.get("name", "N/A"); item_category = item.get("category", "不明"); item_desc = item.get("description", "(説明なし)")
+                        recent_hist = item.get("recent_history", []); hist_text = "\n  - " + "\n  - ".join(recent_hist) if recent_hist else ""
+                        tagged_info_str_parts.append(f"### タグ関連情報: {item_category} - {item_name}\n  - 説明/メモ: {item_desc}\n" + (f"  - 最新履歴:\n{hist_text}\n" if hist_text else ""))
+                if tagged_info_str_parts: transient_context_parts.append("\n## 現在のタグ関連情報:\n" + "\n".join(tagged_info_str_parts))
+        
+        final_transient_context = "\n\n".join(transient_context_parts).strip()
+        # --- ここまでで一時コンテキスト構築完了 ---
 
-        # (5) プロンプトに追加 (重複を避ける)
-        if tagged_items_for_prompt:
-            # 既に直接選択されているアイテムのIDのセット (重複排除用)
-            already_included_item_ids = set(item.get("id") for item in checked_data_for_prompt)
-
-            # タグ検索で見つかったアイテムの情報を整形
-            tagged_info_str = ""
-            for item in tagged_items_for_prompt:
-                if item.get("id") not in already_included_item_ids: # 重複をチェック
-                    item_name = item.get("name", "N/A")
-                    item_category = item.get("category", "不明")
-                    item_description = item.get("description", "(説明なし)")
-                    # 最新の履歴2件を取得
-                    recent_history = item.get("recent_history", [])
-                    recent_history_text = ""
-                    if recent_history:
-                        recent_history_text = "\n  - " + "\n  - ".join(recent_history) # 各履歴を改行と - で区切る
-                    
-                    tagged_info_str += f"### タグ関連情報: {item_category} - {item_name}\n"
-                    tagged_info_str += f"  - 説明/メモ: {item_description}\n"
-                    if recent_history_text:
-                        tagged_info_str += f"  - 最新履歴:\n{recent_history_text}\n"
-            
-            if tagged_info_str: # 何か情報があればプロンプトに追加
-                final_prompt_parts.append("\n## タグ関連情報\n" + tagged_info_str)
-        # --- ★★★ ----------------------------------------------------- ★★★ ---
-
-        # 4. ユーザーの入力
-        final_prompt_parts.append(f"\n## ユーザーの現在の入力\n{user_text}")
-        final_prompt_to_ai = "\n\n".join(final_prompt_parts).strip()
-
-        print("--- Final Prompt to AI ---")
-        print(final_prompt_to_ai)
-        print("--------------------------")
-
-        # AIに送信するモデルの決定
-        target_model = self.current_project_settings.get("model", self.global_config.get("default_model"))
-        if subprompt_models_used: # サブプロンプトにモデル指定があれば、最初のものを優先
-            target_model = subprompt_models_used[0]
-            print(f"  (Using model from subprompt: {target_model})")
-        else:
-            print(f"  (Using project/global model: {target_model})")
-
-        ai_response_text, error_message = generate_response(target_model, final_prompt_to_ai)
+        print("--- Transient Context for this turn ---")
+        print(final_transient_context if final_transient_context else "(なし)")
+        print("---------------------------------------")
+        print(f"--- User Input for this turn: '{user_text}' ---")
+        
+        # --- 2. Chat Handler を使ってAIに応答を要求 ---
+        # メインシステムプロンプトは Chat Handler 初期化時に設定済み
+        ai_response_text, error_message = self.chat_handler.send_message_with_context(
+            transient_context=final_transient_context,
+            user_input=user_text # 純粋なユーザー入力
+        )
 
         if error_message:
             self.response_display.append(f"<div style='color: red;'><b>エラー:</b> {error_message}</div><br>")
         elif ai_response_text:
-            # AIの応答もHTML形式で改行を<br>に置換
             formatted_ai_response = ai_response_text.replace("\n", "<br>")
-            self.response_display.append(f"<div style='color: green;'><b>Gemini ({target_model}):</b><br>{formatted_ai_response}</div><br>")
+            self.response_display.append(f"<div style='color: green;'><b>Gemini ({self.chat_handler.model_name}):</b><br>{formatted_ai_response}</div><br>")
         else:
             self.response_display.append("<div style='color: orange;'><b>AIからの応答がありませんでした。</b></div><br>")
 
