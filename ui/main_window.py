@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QTabWidget, QApplication, QDialog, QSplitter, QFrame, QCheckBox,
     QSizePolicy, QStyle, qApp, QInputDialog, QComboBox, QLineEdit,QDialogButtonBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QUrl
 import re # ディレクトリ名検証用
 from typing import Optional, List, Dict, Tuple
 
@@ -193,7 +193,8 @@ class MainWindow(QWidget):
         )
         self.chat_handler: Optional[GeminiChatHandler] = None
         
-        self._initialize_configs_and_project() 
+        self._initialize_configs_and_project() # この中で current_project_settings がロードされる
+        self.configure_gemini_and_chat_handler()  # APIキー設定、必要ならハンドラ再設定
         
         final_initial_model = self.current_project_settings.get("model", initial_model_name)
         initial_system_prompt = self.current_project_settings.get("main_system_prompt", "")
@@ -202,7 +203,7 @@ class MainWindow(QWidget):
         self.init_ui() # ★★★ UI初期化を chat_handler 初期化後に移動 ★★★
                         # _redisplay_chat_history が self.response_display を使うため
 
-        self.configure_gemini_and_chat_handler() 
+        # self.configure_gemini_and_chat_handler() 
 
         # --- ★★★ アプリケーション起動時に履歴を画面に表示 ★★★ ---
         if self.chat_handler and is_configured(): # API設定済みでハンドラがあれば
@@ -307,9 +308,16 @@ class MainWindow(QWidget):
         left_layout.addWidget(self.system_prompt_input_main)
 
         left_layout.addWidget(QLabel("AI応答履歴:"))
+        # self.response_display = QTextBrowser()
+        # self.response_display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # left_layout.addWidget(self.response_display)
+
+        # --- ★★★ QTextBrowser の設定変更とシグナル接続 ★★★ ---
         self.response_display = QTextBrowser()
         self.response_display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        left_layout.addWidget(self.response_display)
+        self.response_display.setOpenLinks(False)  # リンクの自動処理を無効化 [1][2]
+        self.response_display.anchorClicked.connect(self._handle_history_link_clicked) # シグナル接続 [1]
+        left_layout.addWidget(self.response_display) # 左レイアウトに追加
 
         input_area_layout = QHBoxLayout()
         self.user_input = QTextEdit()
@@ -941,55 +949,156 @@ class MainWindow(QWidget):
         else:
             self.response_display.append("<div style='color: orange;'><b>AIからの応答がありませんでした。</b></div><br>")
 
-    # --- ★★★ 新規: 会話履歴を response_display に再表示するメソッド ★★★ ---
+    # 新規: 会話履歴を response_display に再表示するメソッド
     def _redisplay_chat_history(self):
         """現在の GeminiChatHandler が保持する純粋な会話履歴を
         response_display エリアに整形して表示します。
+        各履歴エントリに編集・削除用のHTMLリンクを付加します。
         表示前に現在の内容はクリアされます。
         """
-        if not hasattr(self, 'response_display') or not self.response_display: # UI未初期化の場合
+        if not hasattr(self, 'response_display') or not self.response_display:
             return
         if not self.chat_handler:
-            self.response_display.clear() # ハンドラがなければクリアだけ
+            self.response_display.clear()
             return
 
-        self.response_display.clear() # [2] 既存の内容をクリア
+        self.response_display.clear()
         
         history_to_display = self.chat_handler.get_pure_chat_history()
         if not history_to_display:
             print("MainWindow: No chat history to display.")
             return
 
-        print(f"MainWindow: Redisplaying {len(history_to_display)} entries from chat history.")
-        for message in history_to_display:
+        print(f"MainWindow: Redisplaying {len(history_to_display)} entries from chat history with action links.")
+        
+        # --- ★★★ スタイルシートでリンクの色を調整 (任意) ★★★ ---
+        # デフォルトの青下線だと見づらい場合があるので、少し落ち着いた色にするなど。
+        # 例: self.response_display.document().setDefaultStyleSheet("a { color: #5577AA; text-decoration: none; } a:hover { text-decoration: underline; }")
+        # ------------------------------------------------------
+
+        html_parts = [] # HTMLパーツをリストで収集し、最後に結合してセットする方が効率的
+
+        for index, message in enumerate(history_to_display):
             role = message.get("role")
-            # parts はリストだが、通常テキストチャットでは最初の要素にテキストが入る想定
             text_content = ""
             if message.get("parts") and isinstance(message["parts"], list) and len(message["parts"]) > 0:
                 part = message["parts"][0]
                 if isinstance(part, dict) and "text" in part:
                     text_content = part["text"]
-                elif isinstance(part, str): # parts が文字列リストの場合も考慮 (API仕様による)
+                elif isinstance(part, str):
                     text_content = part
             
-            if not text_content: # 表示するテキストがない場合はスキップ
-                continue
+            if not text_content: continue
 
-            formatted_text_for_display = text_content.replace("\n", "<br>")
+            # HTMLエスケープを考慮 (QTextBrowserは基本的なHTMLタグは解釈するが、安全のため)
+            # ただし、<br> はそのまま使いたいので、ここでは簡易的に replace で対応
+            escaped_text_for_display = text_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
 
+            entry_html = "<div>" # 各エントリをdivで囲む (スタイル調整や区切り線のため)
+            
+            # --- ★★★ 編集・削除リンクの生成 ★★★ ---
+            # リンクのスタイルはCSSで調整可能 (例: font-size, margin)
+            edit_link = f'<a href="edit:{index}:{role}" style="color: #007bff; text-decoration: none; font-size: small; margin-left: 10px;">[編集]</a>'
+            delete_link = f'<a href="delete:{index}:{role}" style="color: #dc3545; text-decoration: none; font-size: small; margin-left: 5px;">[削除]</a>'
+            action_links = f'<span style="float: right;">{edit_link} {delete_link}</span>' # 右寄せ
+            # ----------------------------------------
+            
             if role == "user":
-                self.response_display.append(f"<div style='color: blue;'><b>あなた:</b><br>{formatted_text_for_display}</div><br>")
+                entry_html += f"<div style='color: blue; margin-bottom: 5px;'><b>あなた ({index + 1}):</b>{action_links}<br>{escaped_text_for_display}</div>"
             elif role == "model":
-                # モデル名は chat_handler から取得するのが望ましい
                 model_name_display = self.chat_handler.model_name if self.chat_handler else "AI"
-                self.response_display.append(f"<div style='color: green;'><b>Gemini ({model_name_display}):</b><br>{formatted_text_for_display}</div><br>")
-            else: # 未知のロールの場合はそのまま表示 (通常は発生しないはず)
-                self.response_display.append(f"<div><b>{role or '不明'}:</b><br>{formatted_text_for_display}</div><br>")
+                entry_html += f"<div style='color: green; margin-bottom: 5px;'><b>Gemini ({model_name_display}, {index + 1}):</b>{action_links}<br>{escaped_text_for_display}</div>"
+            else:
+                entry_html += f"<div style='margin-bottom: 5px;'><b>{role or '不明'} ({index + 1}):</b>{action_links}<br>{escaped_text_for_display}</div>"
+            
+            entry_html += "<hr style='border: 0; border-top: 1px solid #eee; margin: 5px 0;'>" # 区切り線
+            entry_html += "</div>"
+            html_parts.append(entry_html)
         
-        # スクロールバーを一番下に移動 (任意)
-        self.response_display.ensureCursorVisible() # 最後のカーソル位置が見えるように
-        # または self.response_display.verticalScrollBar().setValue(self.response_display.verticalScrollBar().maximum())
+        self.response_display.setHtml("".join(html_parts)) # 全体を一度にセット
+        self.response_display.ensureCursorVisible()
+
     # --- ★★★ ---------------------------------------------------- ★★★ ---
+
+    # --- ★★★ 新規: 履歴リンククリック処理メソッド ★★★ ---
+    def _handle_history_link_clicked(self, url: QUrl):
+        """応答履歴内の編集・削除リンクがクリックされたときに呼び出されます。
+        URLのカスタムスキーマをパースし、対応するアクションを実行します。
+        今後、編集・削除以外のリンク処理にも利用することを想定しています。
+
+        Args:
+            url (QUrl): クリックされたリンクのURL。
+                        カスタムスキーマ "action:index:role" を期待します。
+                        例: "edit:0:user", "delete:1:model"
+        """
+        if not self.chat_handler: return
+
+        url_str = url.toString()
+        print(f"History link clicked: {url_str}")
+
+        try:
+            parts = url_str.split(':')
+            if len(parts) != 3:
+                print(f"  Invalid link format: {url_str}")
+                return
+
+            action = parts[0]
+            history_index = int(parts[1])
+            role_clicked = parts[2] # 'user' or 'model'
+
+            current_history = self.chat_handler.get_pure_chat_history()
+            if not (0 <= history_index < len(current_history)):
+                print(f"  Invalid history index: {history_index}")
+                return
+            
+            target_entry = current_history[history_index]
+            # ロールの整合性も確認 (必須ではないが、念のため)
+            if target_entry.get("role") != role_clicked:
+                print(f"  Warning: Role mismatch. Expected '{target_entry.get('role')}', clicked on link for '{role_clicked}'. Proceeding with index {history_index}.")
+
+            original_text = ""
+            if target_entry.get("parts") and target_entry["parts"]:
+                original_text = target_entry["parts"][0].get("text", "")
+
+            if action == "edit":
+                new_text, ok = QInputDialog.getMultiLineText(
+                    self,
+                    f"履歴編集 ({'あなた' if role_clicked == 'user' else 'Gemini'} - {history_index + 1})",
+                    "内容を編集してください:",
+                    original_text
+                )
+                if ok and new_text.strip() != original_text.strip():
+                    # _pure_chat_history を直接変更
+                    # GeminiChatHandler に専用の編集メソッドを作るのがよりクリーンかも
+                    self.chat_handler._pure_chat_history[history_index]['parts'][0]['text'] = new_text.strip()
+                    self.chat_handler._save_history_to_file() # 保存
+                    self._redisplay_chat_history() # 再表示
+                    print(f"  History entry {history_index} ({role_clicked}) edited.")
+                elif ok:
+                    QMessageBox.information(self, "変更なし", "履歴内容は変更されませんでした。")
+
+            elif action == "delete":
+                reply = QMessageBox.question(
+                    self,
+                    "履歴削除確認",
+                    f"履歴エントリ ({history_index + 1} - {'あなた' if role_clicked == 'user' else 'Gemini'}) を本当に削除しますか？\n\n「{original_text[:50] + '...' if len(original_text) > 50 else original_text}」\n\nこの操作は元に戻せません。",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                )
+                if reply == QMessageBox.Yes:
+                    del self.chat_handler._pure_chat_history[history_index]
+                    self.chat_handler._save_history_to_file() # 保存
+                    self._redisplay_chat_history() # 再表示
+                    print(f"  History entry {history_index} ({role_clicked}) deleted.")
+            else:
+                print(f"  Unknown action in link: {action}")
+
+        except ValueError: # int(parts[1]) でエラーなど
+            print(f"  Error parsing link: {url_str}")
+        except Exception as e:
+            print(f"  Error handling history link click: {e}")
+            QMessageBox.warning(self, "処理エラー", f"履歴リンクの処理中にエラーが発生しました:\n{e}")
+    # --- ★★★ ------------------------------------------- ★★★ ---
+
 
     # --- サブプロンプト管理メソッド ---
     def refresh_subprompt_tabs(self):
