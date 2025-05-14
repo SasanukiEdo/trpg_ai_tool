@@ -203,8 +203,6 @@ class MainWindow(QWidget):
         self.init_ui() # ★★★ UI初期化を chat_handler 初期化後に移動 ★★★
                         # _redisplay_chat_history が self.response_display を使うため
 
-        # self.configure_gemini_and_chat_handler() 
-
         # --- ★★★ アプリケーション起動時に履歴を画面に表示 ★★★ ---
         if self.chat_handler and is_configured(): # API設定済みでハンドラがあれば
             self._redisplay_chat_history()
@@ -317,6 +315,7 @@ class MainWindow(QWidget):
         self.response_display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.response_display.setOpenLinks(False)  # リンクの自動処理を無効化 [1][2]
         self.response_display.anchorClicked.connect(self._handle_history_link_clicked) # シグナル接続 [1]
+        self.response_display.setObjectName("responseDisplay") # CSSから参照するため [9]
         left_layout.addWidget(self.response_display) # 左レイアウトに追加
 
         input_area_layout = QHBoxLayout()
@@ -862,9 +861,10 @@ class MainWindow(QWidget):
         user_text = self.user_input.toPlainText().strip()
         if not user_text: QMessageBox.information(self, "入力なし", "送信するメッセージを入力してください。"); return
         
-        formatted_user_text_for_display = user_text.replace("\n", "<br>")
-        self.response_display.append(f"<div style='color: blue;'><b>あなた:</b><br>{formatted_user_text_for_display}</div><br>")
-        self.user_input.clear(); QApplication.processEvents()
+        # --- ★★★ UIへのユーザー入力の即時表示は _redisplay_chat_history に任せる ★★★ ---
+        # formatted_user_text_for_display = user_text.replace("\n", "<br>")
+        # self.response_display.append(f"<div style='color: blue;'><b>あなた:</b><br>{formatted_user_text_for_display}</div><br>") # ← これを削除
+        self.user_input.clear(); QApplication.processEvents() # 入力欄クリアは維持
 
         # --- 1. 一時的なコンテキスト情報を構築 ---
         transient_context_parts = []
@@ -941,19 +941,24 @@ class MainWindow(QWidget):
             user_input=user_text # 純粋なユーザー入力
         )
 
+        # --- ★★★ UI表示は _redisplay_chat_history に一任 ★★★ ---
+        # 以前の append による個別表示処理は削除
         if error_message:
+            # エラーメッセージは従来通り append で表示しても良いし、
+            # あるいは _pure_chat_history にエラーを示す特別なエントリを追加して
+            # _redisplay_chat_history で表示するようにしても良い。
+            # ここでは、簡潔さのため、エラーは直接 append する。
             self.response_display.append(f"<div style='color: red;'><b>エラー:</b> {error_message}</div><br>")
-        elif ai_response_text:
-            formatted_ai_response = ai_response_text.replace("\n", "<br>")
-            self.response_display.append(f"<div style='color: green;'><b>Gemini ({self.chat_handler.model_name}):</b><br>{formatted_ai_response}</div><br>")
-        else:
-            self.response_display.append("<div style='color: orange;'><b>AIからの応答がありませんでした。</b></div><br>")
+        
+        # 正常応答・エラーなし応答の場合、_pure_chat_history が更新されているので再表示
+        self._redisplay_chat_history() # ★★★ ここで全体を再描画 ★★★
+        # --- ★★★ --------------------------------------------- ★★★ ---
 
     # 新規: 会話履歴を response_display に再表示するメソッド
     def _redisplay_chat_history(self):
         """現在の GeminiChatHandler が保持する純粋な会話履歴を
         response_display エリアに整形して表示します。
-        各履歴エントリに編集・削除用のHTMLリンクを付加します。
+        各履歴エントリは _format_history_entry_to_html を使って整形されます。
         表示前に現在の内容はクリアされます。
         """
         if not hasattr(self, 'response_display') or not self.response_display:
@@ -965,19 +970,10 @@ class MainWindow(QWidget):
         self.response_display.clear()
         
         history_to_display = self.chat_handler.get_pure_chat_history()
-        if not history_to_display:
-            print("MainWindow: No chat history to display.")
-            return
-
-        print(f"MainWindow: Redisplaying {len(history_to_display)} entries from chat history with action links.")
+        if not history_to_display: print("MainWindow: No chat history to display."); return
+        print(f"MainWindow: Redisplaying {len(history_to_display)} entries from chat history using formatted HTML.")
         
-        # --- ★★★ スタイルシートでリンクの色を調整 (任意) ★★★ ---
-        # デフォルトの青下線だと見づらい場合があるので、少し落ち着いた色にするなど。
-        # 例: self.response_display.document().setDefaultStyleSheet("a { color: #5577AA; text-decoration: none; } a:hover { text-decoration: underline; }")
-        # ------------------------------------------------------
-
-        html_parts = [] # HTMLパーツをリストで収集し、最後に結合してセットする方が効率的
-
+        html_parts = []
         for index, message in enumerate(history_to_display):
             role = message.get("role")
             text_content = ""
@@ -990,34 +986,67 @@ class MainWindow(QWidget):
             
             if not text_content: continue
 
-            # HTMLエスケープを考慮 (QTextBrowserは基本的なHTMLタグは解釈するが、安全のため)
-            # ただし、<br> はそのまま使いたいので、ここでは簡易的に replace で対応
-            escaped_text_for_display = text_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
-
-            entry_html = "<div>" # 各エントリをdivで囲む (スタイル調整や区切り線のため)
+            # --- ★★★ ヘルパー関数でHTMLを生成 ★★★ ---
+            model_name_for_entry = None
+            if role == "model" and self.chat_handler: # AI応答ならモデル名を取得
+                # API応答自体にモデル名が含まれていればそれを使うのが理想だが、
+                # 今は chat_handler が保持する現在のモデル名を使う
+                model_name_for_entry = self.chat_handler.model_name 
             
-            # --- ★★★ 編集・削除リンクの生成 ★★★ ---
-            # リンクのスタイルはCSSで調整可能 (例: font-size, margin)
-            edit_link = f'<a href="edit:{index}:{role}" style="color: #007bff; text-decoration: none; font-size: small; margin-left: 10px;">[編集]</a>'
-            delete_link = f'<a href="delete:{index}:{role}" style="color: #dc3545; text-decoration: none; font-size: small; margin-left: 5px;">[削除]</a>'
-            action_links = f'<span style="float: right;">{edit_link} {delete_link}</span>' # 右寄せ
-            # ----------------------------------------
-            
-            if role == "user":
-                entry_html += f"<div style='color: blue; margin-bottom: 5px;'><b>あなた ({index + 1}):</b>{action_links}<br>{escaped_text_for_display}</div>"
-            elif role == "model":
-                model_name_display = self.chat_handler.model_name if self.chat_handler else "AI"
-                entry_html += f"<div style='color: green; margin-bottom: 5px;'><b>Gemini ({model_name_display}, {index + 1}):</b>{action_links}<br>{escaped_text_for_display}</div>"
-            else:
-                entry_html += f"<div style='margin-bottom: 5px;'><b>{role or '不明'} ({index + 1}):</b>{action_links}<br>{escaped_text_for_display}</div>"
-            
-            entry_html += "<hr style='border: 0; border-top: 1px solid #eee; margin: 5px 0;'>" # 区切り線
-            entry_html += "</div>"
+            entry_html = self._format_history_entry_to_html(
+                index, role, text_content, model_name_for_entry
+            )
             html_parts.append(entry_html)
+            # --- ★★★ ----------------------------- ★★★ ---
         
-        self.response_display.setHtml("".join(html_parts)) # 全体を一度にセット
+        self.response_display.setHtml("".join(html_parts))
         self.response_display.ensureCursorVisible()
 
+    # --- ★★★ ---------------------------------------------------- ★★★ ---
+
+    # --- ★★★ 新規: 履歴エントリをHTMLに整形するヘルパー関数 ★★★ ---
+    def _format_history_entry_to_html(self, index: int, role: str, text_content: str, model_name: Optional[str] = None) -> str:
+        """指定された履歴エントリの情報を、編集・削除リンク付きのHTML文字列に整形します。
+        スタイルは外部CSSファイルで定義されたクラスに依存します。
+
+        Args:
+            index (int): 履歴リスト内でのインデックス。
+            role (str): 発言者のロール ('user' または 'model')。
+            text_content (str): 発言のテキスト内容。
+            model_name (str, optional): AIの応答の場合、使用されたモデル名。
+
+        Returns:
+            str: 整形されたHTML文字列。
+        """
+        # HTMLエスケープ (基本的なものだけ)
+        # より堅牢にするには、適切なライブラリ（例: bleach）を使うか、
+        # Qtの機能（例: Qt.convertFromPlainText でエスケープするなど）を検討
+        escaped_text = text_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+
+        # アクションリンクの生成
+        edit_link = f'<a class="action-link" href="edit:{index}:{role}">[編集]</a>'
+        delete_link = f'<a class="action-link" href="delete:{index}:{role}">[削除]</a>'
+        actions_span = f'<span class="actions-container">{edit_link} {delete_link}</span>'
+
+        # エントリ全体のHTML
+        entry_class = "history-entry "
+        display_role_name = ""
+        if role == "user":
+            entry_class += "user-entry"
+            display_role_name = f"あなた ({index + 1})"
+        elif role == "model":
+            entry_class += "model-entry"
+            model_name_display = model_name if model_name else (self.chat_handler.model_name if self.chat_handler else "AI")
+            display_role_name = f"Gemini ({model_name_display}, {index + 1})"
+        else:
+            display_role_name = f"{role or '不明'} ({index + 1})"
+
+        html_output = f'<div class="{entry_class}">'
+        html_output += f"<b>{display_role_name}:</b>{actions_span}<br>{escaped_text}"
+        html_output += '<hr class="separator">' # 区切り線もクラスでスタイル指定
+        html_output += '</div>'
+        
+        return html_output
     # --- ★★★ ---------------------------------------------------- ★★★ ---
 
     # --- ★★★ 新規: 履歴リンククリック処理メソッド ★★★ ---
