@@ -192,16 +192,22 @@ class MainWindow(QWidget):
             DEFAULT_PROJECT_SETTINGS.get("model", "gemini-1.5-flash") # フォールバック
         )
         self.chat_handler: Optional[GeminiChatHandler] = None
-        # _initialize_chat_handler は _initialize_configs_and_project の後、
-        # プロジェクト設定がロードされてから呼ぶのが適切
-        # ここでは一旦 None にしておくか、仮のプロジェクト名で初期化
-        # self._initialize_chat_handler(initial_model_name, self.current_project_dir_name) # ここで呼ぶとシステム指示がまだ
-        # --- ★★★ ---------------------------------------------------------------- ★★★ ---
+        
+        self._initialize_configs_and_project() 
+        
+        final_initial_model = self.current_project_settings.get("model", initial_model_name)
+        initial_system_prompt = self.current_project_settings.get("main_system_prompt", "")
+        self._initialize_chat_handler(model_name=final_initial_model, project_dir_name=self.current_project_dir_name, system_instruction=initial_system_prompt)
+        
+        self.init_ui() # ★★★ UI初期化を chat_handler 初期化後に移動 ★★★
+                        # _redisplay_chat_history が self.response_display を使うため
 
-        self._initialize_configs_and_project() # この中で current_project_settings がロードされる
+        self.configure_gemini_and_chat_handler() 
 
-        self.init_ui()
-        self.configure_gemini_and_chat_handler() # APIキー設定、必要ならハンドラ再設定
+        # --- ★★★ アプリケーション起動時に履歴を画面に表示 ★★★ ---
+        if self.chat_handler and is_configured(): # API設定済みでハンドラがあれば
+            self._redisplay_chat_history()
+        # --- ★★★ ------------------------------------------ ★★★ ---
 
     def _initialize_chat_handler(self, model_name: str, project_dir_name: str, system_instruction: Optional[str] = None): # ★ project_dir_name を必須引数に
         """GeminiChatHandlerを初期化または再初期化します。
@@ -511,7 +517,7 @@ class MainWindow(QWidget):
         """指定されたディレクトリ名のプロジェクトに実際に切り替える内部メソッド。
 
         関連する設定の更新、データの再読み込み、UIの更新を行います。
-        Chat Handler も新しいプロジェクト設定で再初期化し、新しいプロジェクトの履歴をロードします。
+        Chat Handler も新しいプロジェクト設定で再初期化し、新しいプロジェクトの履歴をロード・表示します。
 
         Args:
             new_project_dir_name (str): 切り替え先のプロジェクトのディレクトリ名。
@@ -557,9 +563,12 @@ class MainWindow(QWidget):
             self._initialize_chat_handler(
                 model_name=new_model,
                 project_dir_name=new_project_dir_name,
-                system_instruction=new_system_prompt
-            )
-        # --- ★★★ ------------------------------------------------------------------- ★★★ ---
+                system_instruction=new_system_prompt)
+        
+        # --- ★★★ プロジェクト切り替え時に履歴を画面に再表示 ★★★ ---
+        if self.chat_handler and is_configured():
+            self._redisplay_chat_history()
+        # --- ★★★ --------------------------------------------- ★★★ ---
             
         # コンボボックスの表示更新など
         current_display_name_in_combo = ""
@@ -931,6 +940,56 @@ class MainWindow(QWidget):
             self.response_display.append(f"<div style='color: green;'><b>Gemini ({self.chat_handler.model_name}):</b><br>{formatted_ai_response}</div><br>")
         else:
             self.response_display.append("<div style='color: orange;'><b>AIからの応答がありませんでした。</b></div><br>")
+
+    # --- ★★★ 新規: 会話履歴を response_display に再表示するメソッド ★★★ ---
+    def _redisplay_chat_history(self):
+        """現在の GeminiChatHandler が保持する純粋な会話履歴を
+        response_display エリアに整形して表示します。
+        表示前に現在の内容はクリアされます。
+        """
+        if not hasattr(self, 'response_display') or not self.response_display: # UI未初期化の場合
+            return
+        if not self.chat_handler:
+            self.response_display.clear() # ハンドラがなければクリアだけ
+            return
+
+        self.response_display.clear() # [2] 既存の内容をクリア
+        
+        history_to_display = self.chat_handler.get_pure_chat_history()
+        if not history_to_display:
+            print("MainWindow: No chat history to display.")
+            return
+
+        print(f"MainWindow: Redisplaying {len(history_to_display)} entries from chat history.")
+        for message in history_to_display:
+            role = message.get("role")
+            # parts はリストだが、通常テキストチャットでは最初の要素にテキストが入る想定
+            text_content = ""
+            if message.get("parts") and isinstance(message["parts"], list) and len(message["parts"]) > 0:
+                part = message["parts"][0]
+                if isinstance(part, dict) and "text" in part:
+                    text_content = part["text"]
+                elif isinstance(part, str): # parts が文字列リストの場合も考慮 (API仕様による)
+                    text_content = part
+            
+            if not text_content: # 表示するテキストがない場合はスキップ
+                continue
+
+            formatted_text_for_display = text_content.replace("\n", "<br>")
+
+            if role == "user":
+                self.response_display.append(f"<div style='color: blue;'><b>あなた:</b><br>{formatted_text_for_display}</div><br>")
+            elif role == "model":
+                # モデル名は chat_handler から取得するのが望ましい
+                model_name_display = self.chat_handler.model_name if self.chat_handler else "AI"
+                self.response_display.append(f"<div style='color: green;'><b>Gemini ({model_name_display}):</b><br>{formatted_text_for_display}</div><br>")
+            else: # 未知のロールの場合はそのまま表示 (通常は発生しないはず)
+                self.response_display.append(f"<div><b>{role or '不明'}:</b><br>{formatted_text_for_display}</div><br>")
+        
+        # スクロールバーを一番下に移動 (任意)
+        self.response_display.ensureCursorVisible() # 最後のカーソル位置が見えるように
+        # または self.response_display.verticalScrollBar().setValue(self.response_display.verticalScrollBar().maximum())
+    # --- ★★★ ---------------------------------------------------- ★★★ ---
 
     # --- サブプロンプト管理メソッド ---
     def refresh_subprompt_tabs(self):
