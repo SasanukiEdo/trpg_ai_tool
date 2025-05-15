@@ -178,10 +178,15 @@ class GeminiChatHandler:
         except Exception as e: print(f"Error initializing Gemini model '{self.model_name}': {e}"); self._model = None; self._chat_session = None
 
 
-    def start_new_chat_session(self, keep_history: bool = False, system_instruction_text: Optional[str] = None, load_from_file_if_empty: bool = True): # ★ load_from_file_if_empty 追加
+    def start_new_chat_session(self, 
+                               keep_history: bool = False, 
+                               system_instruction_text: Optional[str] = None, 
+                               load_from_file_if_empty: bool = True,
+                               max_history_pairs: Optional[int] = None): # ★★★ 送信履歴の最大往復数を指定する引数 ★★★
         """新しいチャットセッションを開始します。
         既存の純粋な会話履歴を引き継ぐか、クリアするかを選択できます。
         システム指示も更新可能。履歴は維持、クリア、またはファイルからロードできます。
+        送信する履歴の量も制御できます。
 
         Args:
             keep_history (bool): Trueの場合、現在のメモリ上の純粋な会話履歴を維持。
@@ -190,6 +195,8 @@ class GeminiChatHandler:
             load_from_file_if_empty (bool): keep_history=False で履歴をクリアした後、
                                             またはメモリ上の履歴が空の場合に、
                                             ファイルから履歴を読み込む試みをするか。
+            max_history_pairs (int, optional): AIに送信する会話履歴の最大往復数 (ユーザーとAIのペア)。
+                                               None の場合は全ての履歴を送信。0 の場合は履歴なし。
         """
         model_or_system_changed = False
         if system_instruction_text is not None and self._system_instruction_text != system_instruction_text:
@@ -206,68 +213,67 @@ class GeminiChatHandler:
         if not keep_history:
             self._pure_chat_history = []
             print("Chat history cleared from memory.")
-            if load_from_file_if_empty and self.project_dir_name: # クリア後、ファイルから再ロードを試みる場合
-                self._load_history_from_file()
-        elif load_from_file_if_empty and not self._pure_chat_history and self.project_dir_name: # 履歴維持だがメモリが空ならファイルから
-            self._load_history_from_file()
+            if load_from_file_if_empty and self.project_dir_name: self._load_history_from_file()
+        elif load_from_file_if_empty and not self._pure_chat_history and self.project_dir_name: self._load_history_from_file()
 
+
+        # --- ★★★ 送信する履歴をスライス ★★★ ---
+        history_for_api = self._pure_chat_history
+        if max_history_pairs is not None:
+            if max_history_pairs == 0:
+                history_for_api = [] # 履歴なし
+                print("  履歴はありません (max_history_pairs is 0).")
+            elif max_history_pairs > 0:
+                num_messages_to_send = max_history_pairs * 2 # 1往復 = 2メッセージ (user, model)
+                history_for_api = self._pure_chat_history[-num_messages_to_send:] # 末尾から取得
+                print(f"  送信履歴：最後から {len(history_for_api)} messages (max_history_pairs: {max_history_pairs}).")
+            # else: max_history_pairs が負の場合は全ての履歴 (現状は考慮しない)
+        else: # max_history_pairs is None
+            print(f"  全ての履歴を送信 ({len(history_for_api)} messages).")
+        # --- ★★★ ------------------------- ★★★ ---
 
         try:
-            print(f"Starting new chat session with history from memory (length: {len(self._pure_chat_history)})")
-            self._chat_session = self._model.start_chat(history=self._pure_chat_history)
-        except Exception as e:
-            print(f"Error starting chat session: {e}")
-            self._chat_session = None
+            print(f"Starting new chat session with history (length for API: {len(history_for_api)}, total pure: {len(self._pure_chat_history)})")
+            self._chat_session = self._model.start_chat(history=history_for_api) # ★ スライスした履歴を使用
+        except Exception as e: print(f"Error starting chat session: {e}"); self._chat_session = None
 
-    def send_message_with_context(self, transient_context: str, user_input: str) -> Tuple[Optional[str], Optional[str]]:
+    def send_message_with_context(self, 
+                                  transient_context: str, 
+                                  user_input: str,
+                                  max_history_pairs_for_this_turn: Optional[int] = None # ★ 追加
+                                  ) -> Tuple[Optional[str], Optional[str]]:
         """一時的なコンテキストとユーザー入力を組み合わせてメッセージを送信し、AIの応答を取得します。
-        純粋な会話履歴は内部で更新されます。
+        純粋な会話履歴は内部で更新されます。送信する履歴の量も制御できます。
 
         Args:
             transient_context (str): そのターン限りのコンテキスト情報（サブプロンプト、アイテムデータなど）。
             user_input (str): ユーザーが実際に入力したメッセージ（純粋な入力）。
+            max_history_pairs_for_this_turn (int, optional): この送受信で使用する履歴の最大往復数。Noneの場合はハンドラの現在の設定を尊重。
 
         Returns:
             Tuple[Optional[str], Optional[str]]: (AIの応答テキスト, エラーメッセージ)
                                                  成功時は (応答テキスト, None)、失敗時は (None, エラーメッセージ)。
         """
         if not self._chat_session:
-            if not self._model:
-                return None, "チャットセッションを開始できません: モデルが初期化されていません。APIキーを確認してください。"
-            # チャットセッションがなければ（初回など）、ここで開始を試みる
-            self.start_new_chat_session(keep_history=True, load_from_file_if_empty=True) # 履歴を維持し、必要ならファイルからロード
-            if not self._chat_session:
-                 return None, "チャットセッションの開始に失敗しました。"
-
-
-        full_message_to_send = ""
-        if transient_context and transient_context.strip(): # 一時コンテキストがあれば追加
-            full_message_to_send += f"{transient_context.strip()}\n\n"
-        full_message_to_send += f"## ユーザーの入力:\n{user_input.strip()}" # 純粋なユーザー入力
-
-        print(f"Sending message to Gemini (total length approx {len(full_message_to_send)} chars).")
-        # print(f"  Full message content:\n---\n{full_message_to_send}\n---") # デバッグ用
-
+            if not self._model: return None, "チャットセッションを開始できません: モデルが初期化されていません。APIキーを確認してください。"
+            # チャットセッションがなければ開始。max_history_pairs も渡す。
+            self.start_new_chat_session(
+                keep_history=True, 
+                load_from_file_if_empty=True,
+                max_history_pairs=max_history_pairs_for_this_turn # ★ ここで渡す
+            )
+            if not self._chat_session: return None, "チャットセッションの開始に失敗しました。"
+        # ... (以降の処理は変更なし、ただし _save_history_to_file() は維持) ...
+        full_message_to_send = ""; # ... (省略) ...
+        if transient_context and transient_context.strip(): full_message_to_send += f"{transient_context.strip()}\n\n"
+        full_message_to_send += f"## ユーザーの入力:\n{user_input.strip()}"
         try:
-            # --- SDKのチャットセッションにメッセージ送信 ---
-            # sendMessageは、送信メッセージと応答を自動で自身の履歴に追加するが、
-            # 我々は _pure_chat_history を別途管理している。
-            # SDKの履歴は、このsendMessage呼び出しのコンテキストとしてのみ使われ、
-            # 次回 start_new_chat_session で _pure_chat_history から再構築される。
-            response = self._chat_session.send_message(full_message_to_send)
-            ai_response_text = response.text
-
-            # --- 純粋な会話履歴を更新 ---
+            response = self._chat_session.send_message(full_message_to_send); ai_response_text = response.text
             self._pure_chat_history.append({'role': 'user', 'parts': [{'text': user_input.strip()}]})
             self._pure_chat_history.append({'role': 'model', 'parts': [{'text': ai_response_text.strip()}]})
-            print(f"  AI Response received. Pure history length: {len(self._pure_chat_history)}")
-            self._save_history_to_file() # ★★★ 応答受け取り後に履歴をファイルに保存 ★★★
+            self._save_history_to_file()
             return ai_response_text, None
-        except Exception as e:
-            print(f"Error sending message or receiving response from Gemini: {e}")
-            # エラーによっては、チャットセッションをリセットした方が良い場合もある
-            # self.start_new_chat_session(keep_history=True) # 例えば接続エラー後など
-            return None, str(e)
+        except Exception as e: return None, str(e)
 
     def get_pure_chat_history(self) -> List[Dict[str, Union[str, List[Dict[str, str]]]]]:
         """現在の純粋な会話履歴を取得します。
@@ -290,7 +296,7 @@ class GeminiChatHandler:
         if self._model:
             self.start_new_chat_session(keep_history=False, load_from_file_if_empty=False) # 履歴クリアでセッション開始
 
-    def update_settings_and_restart_chat(self, new_model_name: Optional[str] = None, new_system_instruction: Optional[str] = None, new_project_dir_name: Optional[str] = None): # ★ new_project_dir_name 追加
+    def update_settings_and_restart_chat(self, new_model_name: Optional[str] = None, new_system_instruction: Optional[str] = None, new_project_dir_name: Optional[str] = None, max_history_pairs_for_restart: Optional[int] = None):
         """モデル名、システム指示、またはプロジェクト名を更新し、
         適切な会話履歴（現在のメモリ、または新プロジェクトのファイルからロード）で
         チャットセッションを再開（再初期化）します。
@@ -338,11 +344,21 @@ class GeminiChatHandler:
         # モデルが（再）初期化されていれば、現在の純粋な履歴でチャットセッションを開始
         if self._model:
             try:
-                print(f"Restarting chat session with updated settings and current/loaded history (length: {len(self._pure_chat_history)}).")
-                self._chat_session = self._model.start_chat(history=self._pure_chat_history)
-            except Exception as e:
-                print(f"Error restarting chat session: {e}")
-                self._chat_session = None
+                # --- ★★★ start_chat に max_history_pairs を渡す ★★★ ---
+                # スライス処理は start_new_chat_session 内で行われるので、
+                # ここでは start_new_chat_session を呼ぶ形の方が一貫する。
+                # ただし、start_new_chat_session は keep_history, load_from_file_if_empty も持つので、
+                # 引数が増えすぎる。直接 start_chat を呼ぶか、start_new_chat_session のロジックを調整。
+                # ここでは、start_new_chat_session を呼び出す形に統一してみる。
+                print(f"Restarting chat session with updated settings, current/loaded history, and range (max_pairs: {max_history_pairs_for_restart}).")
+                self.start_new_chat_session(
+                    keep_history=True, # 履歴は維持 (project_changedならファイルからロード済み)
+                    system_instruction_text=self._system_instruction_text, # 現在のシステム指示
+                    load_from_file_if_empty=(not self._pure_chat_history), # メモリに履歴がなければロード試行
+                    max_history_pairs=max_history_pairs_for_restart # ★ 渡す
+                )
+                # --- ★★★ --------------------------------------- ★★★ ---
+            except Exception as e: print(f"Error restarting chat session: {e}"); self._chat_session = None
         else: print("Cannot restart chat session: Model not properly initialized.")
 
     # --- ★★★ アプリ終了時の保存用メソッド (MainWindowから呼ばれる想定) ★★★ ---

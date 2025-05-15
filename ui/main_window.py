@@ -215,6 +215,7 @@ class MainWindow(QWidget):
     def _initialize_chat_handler(self, model_name: str, project_dir_name: str, system_instruction: Optional[str] = None): # ★ project_dir_name を必須引数に
         """GeminiChatHandlerを初期化または再初期化します。
         指定されたプロジェクトの履歴をロードし、システム指示も設定します。
+        送信履歴範囲も適用します。
 
         Args:
             model_name (str): 使用するモデル名。
@@ -227,18 +228,14 @@ class MainWindow(QWidget):
             return
 
         print(f"MainWindow: Initializing chat handler for project '{project_dir_name}' with model '{model_name}'.")
-        self.chat_handler = GeminiChatHandler(
-            model_name=model_name,
-            project_dir_name=project_dir_name # ★ プロジェクト名を渡す
-        )
-        # GeminiChatHandlerのコンストラクタ内で履歴ロードが試みられる。
-        # システム指示を設定し、チャットセッションを開始。
-        # keep_history=True لأن コンストラクタでファイルからロード済み、または空で初期化済み。
-        # load_from_file_if_empty=False لأن コンストラクタで既に試みている。
+        self.chat_handler = GeminiChatHandler(model_name=model_name, project_dir_name=project_dir_name)
+        
+        # --- ★★★ start_new_chat_session に送信履歴範囲を渡す ★★★ ---
         self.chat_handler.start_new_chat_session(
             keep_history=True, 
             system_instruction_text=system_instruction if system_instruction is not None else "",
-            load_from_file_if_empty=False 
+            load_from_file_if_empty=False, # コンストラクタでロード済みのため
+            max_history_pairs=self.current_history_range_for_prompt # ★ スライダーの値を渡す
         )
 
     def _initialize_configs_and_project(self):
@@ -607,17 +604,19 @@ class MainWindow(QWidget):
         # _initialize_chat_handler を直接呼び出す。
         # プロジェクトが変わるので、履歴は完全に新しいものになるべき。
         if self.chat_handler:
-            self.chat_handler.update_settings_and_restart_chat(
-                new_model_name=new_model,
-                new_system_instruction=new_system_prompt,
-                new_project_dir_name=new_project_dir_name # ★ 新しいプロジェクト名を渡す
-            )
-            print(f"  Chat handler re-initialized for new project '{new_project_dir_name}'. History loaded/cleared.")
-        else: # 通常ここには来ないはず (アプリケーション起動時に初期化されるため)
-            self._initialize_chat_handler(
+            # --- ★★★ update_settings_and_restart_chat を使う形に調整が必要 ★★★ ---
+            # update_settings_and_restart_chat にも max_history_pairs を渡すように GeminiChatHandler を修正するか、
+            # ここで start_new_chat_session を呼ぶ形にする。
+            # 今回は、_initialize_chat_handler を呼ぶのが一貫性がある。
+            # _initialize_chat_handler が内部でスライダーの値を参照して max_history_pairs を設定する。
+            self._initialize_chat_handler( # これで新しいプロジェクトの履歴がロードされ、スライダー設定も適用される
                 model_name=new_model,
                 project_dir_name=new_project_dir_name,
-                system_instruction=new_system_prompt)
+                system_instruction=new_system_prompt
+                )
+            print(f"  Chat handler re-initialized for new project '{new_project_dir_name}'. History (with range) loaded/cleared.")
+        else: 
+            self._initialize_chat_handler(model_name=new_model, project_dir_name=new_project_dir_name, system_instruction=new_system_prompt)
         
         # --- ★★★ プロジェクト切り替え時に履歴を画面に再表示 ★★★ ---
         if self.chat_handler and is_configured():
@@ -850,7 +849,8 @@ class MainWindow(QWidget):
                     self.chat_handler.update_settings_and_restart_chat(
                         new_model_name=model_to_use,
                         new_system_instruction=system_prompt,
-                        new_project_dir_name=self.current_project_dir_name # プロジェクト名も渡す
+                        new_project_dir_name=self.current_project_dir_name, # プロジェクト名も渡す
+                        max_history_pairs_for_restart=self.current_history_range_for_promp
                     )
                 # else: 何も変更がなければ何もしない
             # --- ★★★ ---------------------------------------------------- ★★★ ---
@@ -985,7 +985,8 @@ class MainWindow(QWidget):
         # メインシステムプロンプトは Chat Handler 初期化時に設定済み
         ai_response_text, error_message = self.chat_handler.send_message_with_context(
             transient_context=final_transient_context,
-            user_input=user_text # 純粋なユーザー入力
+            user_input=user_text, # 純粋なユーザー入力
+            max_history_pairs_for_this_turn=self.current_history_range_for_prompt # ★ 追加
         )
 
         # --- ★★★ UI表示は _redisplay_chat_history に一任 ★★★ ---
