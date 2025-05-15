@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
     QTextBrowser, QListWidget, QListWidgetItem, QMessageBox, QAbstractItemView,
     QTabWidget, QApplication, QDialog, QSplitter, QFrame, QCheckBox,
-    QSizePolicy, QStyle, qApp, QInputDialog, QComboBox, QLineEdit,QDialogButtonBox
+    QSizePolicy, QStyle, qApp, QInputDialog, QComboBox, QLineEdit,QDialogButtonBox, QSlider
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QUrl
 import re # ディレクトリ名検証用
@@ -192,6 +192,10 @@ class MainWindow(QWidget):
             DEFAULT_PROJECT_SETTINGS.get("model", "gemini-1.5-flash") # フォールバック
         )
         self.chat_handler: Optional[GeminiChatHandler] = None
+
+        # --- ★★★ 送信履歴範囲用のメンバー変数 ★★★ ---
+        self.current_history_range_for_prompt: int = 20 # デフォルト5往復
+        # --- ★★★ --------------------------------- ★★★ ---
         
         self._initialize_configs_and_project() # この中で current_project_settings がロードされる
         self.configure_gemini_and_chat_handler()  # APIキー設定、必要ならハンドラ再設定
@@ -335,18 +339,44 @@ class MainWindow(QWidget):
             
         left_layout.addWidget(self.response_display) # 左レイアウトに追加
 
-        input_area_layout = QHBoxLayout()
+        # --- ユーザー入力エリアと送信ボタン ---
+        input_area_layout = QHBoxLayout() # 水平レイアウトで入力欄と送信ボタンを配置
         self.user_input = QTextEdit()
         self.user_input.setPlaceholderText("ここにメッセージを入力...")
-        self.user_input.setFixedHeight(100)
+        self.user_input.setFixedHeight(100) # 高さを固定 (任意)
         input_area_layout.addWidget(self.user_input)
-        send_button_layout = QVBoxLayout()
-        self.send_button = QPushButton("送信")
-        self.send_button.clicked.connect(self.on_send_button_clicked)
-        self.send_button.setFixedHeight(self.user_input.height()) # 入力欄の高さに合わせる
-        send_button_layout.addWidget(self.send_button)
-        input_area_layout.addLayout(send_button_layout)
-        left_layout.addLayout(input_area_layout)
+
+        send_button = QPushButton("送信")
+        # send_button.setIcon(self.style().standardIcon(QStyle.SP_DialogOkButton)) # アイコン (任意)
+        send_button.clicked.connect(self.on_send_button_clicked)
+        send_button.setFixedHeight(self.user_input.height()) # 入力欄の高さに合わせる
+        input_area_layout.addWidget(send_button)
+        left_layout.addLayout(input_area_layout) # 左メインレイアウトに追加
+
+        # --- ★★★ 送信履歴範囲設定スライダーを追加 ★★★ ---
+        history_slider_container = QWidget() # ラベルとスライダーをまとめるコンテナ
+        history_slider_layout = QHBoxLayout(history_slider_container) # 水平に配置
+        history_slider_layout.setContentsMargins(0, 5, 0, 5) # 上下のマージン
+
+        self.history_slider_label = QLabel(f"送信履歴範囲: {self.current_history_range_for_prompt} ")
+        history_slider_layout.addWidget(self.history_slider_label)
+
+        self.history_slider = QSlider(Qt.Horizontal) # 水平スライダー [1][5]
+        self.history_slider.setMinimum(0)  # 0往復 (履歴なし) から
+        self.history_slider.setMaximum(100) # 最大20往復 (任意で調整)
+        self.history_slider.setValue(self.current_history_range_for_prompt) # 初期値
+        # self.history_slider.setTickPosition(QSlider.TicksBelow) # 目盛りを下に表示 [1][5]
+        # self.history_slider.setTickInterval(5) # 5ごと (0, 5, 10, 15, 20) に目盛り [1][5]
+        self.history_slider.setSingleStep(1) # キー操作時のステップ
+        self.history_slider.setPageStep(5)  # PageUp/Down時のステップ
+        self.history_slider.setFixedWidth(200) # スライダーの幅を固定 (任意)
+        history_slider_layout.addWidget(self.history_slider)
+        history_slider_layout.addStretch() # 右側に余白を設ける
+
+        self.history_slider.valueChanged.connect(self._on_history_slider_changed) # シグナル接続 [1][7]
+        
+        left_layout.addWidget(history_slider_container) # 左メインレイアウトに追加
+        # --- ★★★ ------------------------------------ ★★★ ---
 
 
         # --- 右側エリア (設定ボタン、サブプロンプト、データ管理) ---
@@ -1020,6 +1050,20 @@ class MainWindow(QWidget):
         self.response_display.ensureCursorVisible()
 
     # --- ★★★ ---------------------------------------------------- ★★★ ---
+
+    # --- ★★★ 新規: 送信履歴範囲スライダーの値変更時のスロット ★★★ ---
+    def _on_history_slider_changed(self, value: int):
+        """送信履歴範囲スライダーの値が変更されたときに呼び出されます。
+        ラベル表示と内部変数を更新します。
+
+        Args:
+            value (int): スライダーの新しい値。
+        """
+        self.current_history_range_for_prompt = value
+        self.history_slider_label.setText(f"送信履歴範囲: {value} ")
+        print(f"History range for prompt set to: {value} pairs.")
+        # 将来的には、この値をプロジェクト設定に保存する処理をここに追加しても良い
+    # --- ★★★ -------------------------------------------------- ★★★ ---
 
     # --- ★★★ 新規: 履歴エントリをHTMLに整形するヘルパー関数 ★★★ ---
     def _format_history_entry_to_html(self, index: int, role: str, text_content: str, model_name: Optional[str] = None) -> str:
