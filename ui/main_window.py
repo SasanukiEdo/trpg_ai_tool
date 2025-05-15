@@ -290,7 +290,7 @@ class MainWindow(QWidget):
     def init_ui(self):
         """メインウィンドウのユーザーインターフェースを構築します。"""
         self.setWindowTitle(f"TRPG AI Tool - 初期化中...")
-        self.setGeometry(200, 200, 1300, 850)
+        self.setGeometry(200, 200, 1300, 1000)
 
         main_layout = QHBoxLayout(self)
 
@@ -298,24 +298,41 @@ class MainWindow(QWidget):
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
 
-        left_layout.addWidget(QLabel("メインシステムプロンプト:"))
+        left_layout.addWidget(QLabel("<b>メインシステムプロンプト:</b>"))
         self.system_prompt_input_main = QTextEdit()
         self.system_prompt_input_main.setPlaceholderText("AIへの全体的な指示を入力...")
         self.system_prompt_input_main.setMinimumHeight(100) # 最小高さを設定
         self.system_prompt_input_main.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed) # 高さは固定
         left_layout.addWidget(self.system_prompt_input_main)
 
-        left_layout.addWidget(QLabel("AI応答履歴:"))
+        left_layout.addWidget(QLabel("<b>AI応答履歴:</b>"))
         # self.response_display = QTextBrowser()
         # self.response_display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         # left_layout.addWidget(self.response_display)
 
         # --- ★★★ QTextBrowser の設定変更とシグナル接続 ★★★ ---
         self.response_display = QTextBrowser()
+        self.response_display.setObjectName("responseDisplay") # CSSから参照するため
         self.response_display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.response_display.setOpenLinks(False)  # リンクの自動処理を無効化 [1][2]
         self.response_display.anchorClicked.connect(self._handle_history_link_clicked) # シグナル接続 [1]
-        self.response_display.setObjectName("responseDisplay") # CSSから参照するため [9]
+
+        try:
+            # main.py と同じ階層にある style.qss を想定
+            # プロジェクトルートの取得は main.py と同様の方法で
+            current_dir = os.path.dirname(os.path.abspath(__file__)) # ui ディレクトリ
+            project_root_from_ui = os.path.dirname(current_dir) # プロジェクトルート
+            qss_file_path_for_document = os.path.join(current_dir, "style.qss")
+
+            with open(qss_file_path_for_document, "r", encoding="utf-8") as f_doc_style:
+                doc_style_sheet = f_doc_style.read()
+                self.response_display.document().setDefaultStyleSheet(doc_style_sheet) # [2][5]
+                print(f"Document stylesheet set for responseDisplay from: {qss_file_path_for_document}")
+        except FileNotFoundError:
+            print(f"Warning: Document stylesheet file not found at {qss_file_path_for_document} for responseDisplay. HTML content might not be styled as expected.")
+        except Exception as e:
+            print(f"Error setting document stylesheet for responseDisplay: {e}")
+            
         left_layout.addWidget(self.response_display) # 左レイアウトに追加
 
         input_area_layout = QHBoxLayout()
@@ -1026,7 +1043,7 @@ class MainWindow(QWidget):
         # アクションリンクの生成
         edit_link = f'<a class="action-link" href="edit:{index}:{role}">[編集]</a>'
         delete_link = f'<a class="action-link" href="delete:{index}:{role}">[削除]</a>'
-        actions_span = f'<span class="actions-container">{edit_link} {delete_link}</span>'
+        actions_span = f'{edit_link} {delete_link}'
 
         # エントリ全体のHTML
         entry_class = "history-entry "
@@ -1042,10 +1059,14 @@ class MainWindow(QWidget):
             display_role_name = f"{role or '不明'} ({index + 1})"
 
         html_output = f'<div class="{entry_class}">'
-        html_output += f"<b>{display_role_name}:</b>{actions_span}<br>{escaped_text}"
+        html_output += f'<div class="name-container">{display_role_name}:</div>'
+        html_output += f'<div class="comment-container">{escaped_text}</div>'
+        html_output += f'<div class="actions-container">{actions_span}</div>'
+        # html_output += f"<b>{display_role_name}:</b>{actions_span}<br>{escaped_text}"
         html_output += '<hr class="separator">' # 区切り線もクラスでスタイル指定
         html_output += '</div>'
         
+        # print(html_output)
         return html_output
     # --- ★★★ ---------------------------------------------------- ★★★ ---
 

@@ -5,7 +5,7 @@ QTextBrowser#responseDisplay {
     /* font-family: "游ゴシック体", YuGothic, "Yu Gothic", Meiryo, sans-serif; /* フォント指定 */
     font-size: 11pt;
     border: 1px solid #ccc; /* 枠線 (任意) */
-    background-color: #f9f9f9; /* 背景色 (任意) */
+    background-color: #fcfcfc; /* 背景色 (任意) */
 }
 
 /* 各履歴エントリを囲むdivの共通スタイル */
@@ -16,17 +16,21 @@ QTextBrowser#responseDisplay {
 
 /* ユーザーの発言エントリ */
 .user-entry {
-    color: #0000AA; /* 少し暗めの青 */
+    color: #444444; /* 少し暗めの青 */
+    margin-right: 10px;
+    margin-left: 10px;
 }
 
 /* AIの応答エントリ */
 .model-entry {
-    color: #006400; /* 少し暗めの緑 */
+    color:rgb(0, 85, 177);
+    margin-right: 10px;
+    margin-left: 20px;
 }
 
 /* 履歴エントリ内のアクションリンク (編集・削除) */
 .history-entry a.action-link {
-    color: #007bff; /* Bootstrap primary blue */
+    color: #007bff;
     text-decoration: none;
     font-size: 9pt;
     margin-left: 8px;
@@ -37,16 +41,33 @@ QTextBrowser#responseDisplay {
 }
 
 /* 編集・削除リンクを右寄せするためのspan */
-.history-entry span.actions-container {
+.history-entry div.actions-container {
     float: right; /* 右寄せ */
+}
+
+/* ロールネームのボックススタイル */
+.name-container {
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+/* 応答部分のボックススタイル */
+.comment-container {
+    line-height: 150%;
+    margin-bottom: 5px;
+}
+
+/* 編集・削除リンクのボックススタイル */
+.actions-container {
+    text-align: right;
 }
 
 /* 各履歴エントリ間の区切り線 */
 .history-entry hr.separator {
     border: 0;
-    border-top: 1px solid #e0e0e0; /* 少し薄めの区切り線 */
-    margin-top: 8px;
-    margin-bottom: 8px;
+    border-top: 1px solid #eeeeee; /* 少し薄めの区切り線 */
+    margin-top: 0px;
+    margin-bottom: 20px;
 }
 
 /* (オプション) MainWindow全体のウィジェットスタイルなどもここに追加可能 */
