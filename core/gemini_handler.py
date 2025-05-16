@@ -240,40 +240,67 @@ class GeminiChatHandler:
     def send_message_with_context(self, 
                                   transient_context: str, 
                                   user_input: str,
-                                  max_history_pairs_for_this_turn: Optional[int] = None # ★ 追加
+                                  max_history_pairs_for_this_turn: Optional[int] = None
                                   ) -> Tuple[Optional[str], Optional[str]]:
         """一時的なコンテキストとユーザー入力を組み合わせてメッセージを送信し、AIの応答を取得します。
-        純粋な会話履歴は内部で更新されます。送信する履歴の量も制御できます。
+        このメソッドを呼び出す前に、start_new_chat_session で適切な履歴範囲が設定された
+        チャットセッションが開始されていることを前提とします。
+        実際には、毎回このメソッドの最初で start_new_chat_session を呼び出し、
+        最新の履歴範囲設定を適用します。
 
         Args:
-            transient_context (str): そのターン限りのコンテキスト情報（サブプロンプト、アイテムデータなど）。
-            user_input (str): ユーザーが実際に入力したメッセージ（純粋な入力）。
-            max_history_pairs_for_this_turn (int, optional): この送受信で使用する履歴の最大往復数。Noneの場合はハンドラの現在の設定を尊重。
-
-        Returns:
-            Tuple[Optional[str], Optional[str]]: (AIの応答テキスト, エラーメッセージ)
-                                                 成功時は (応答テキスト, None)、失敗時は (None, エラーメッセージ)。
+            transient_context (str): そのターン限りのコンテキスト情報。
+            user_input (str): ユーザーが実際に入力したメッセージ。
+            max_history_pairs_for_this_turn (int, optional): この送受信で使用する履歴の最大往復数。
+                                                           Noneの場合は全ての履歴を送信。
         """
-        if not self._chat_session:
-            if not self._model: return None, "チャットセッションを開始できません: モデルが初期化されていません。APIキーを確認してください。"
-            # チャットセッションがなければ開始。max_history_pairs も渡す。
-            self.start_new_chat_session(
-                keep_history=True, 
-                load_from_file_if_empty=True,
-                max_history_pairs=max_history_pairs_for_this_turn # ★ ここで渡す
-            )
-            if not self._chat_session: return None, "チャットセッションの開始に失敗しました。"
-        # ... (以降の処理は変更なし、ただし _save_history_to_file() は維持) ...
-        full_message_to_send = ""; # ... (省略) ...
-        if transient_context and transient_context.strip(): full_message_to_send += f"{transient_context.strip()}\n\n"
+        if not self._model:
+            # APIキー未設定などでモデルが初期化されていない場合
+            # configure_gemini_api の呼び出しを MainWindow 側で行うように促す
+            api_configured = is_configured()
+            if not api_configured:
+                return None, "Gemini APIが設定されていません。「設定」からAPIキーを再設定してください。"
+            
+            # モデルがない場合は、現在の設定で再初期化を試みる
+            print("send_message_with_context: Model not found, attempting to re-initialize model and chat session.")
+            self._initialize_model(self._system_instruction_text) # 現在のシステム指示でモデル初期化
+            if not self._model: # それでもダメならエラー
+                return None, "チャットセッションを開始できません: モデルの初期化に失敗しました。"
+        
+        # --- ★★★ 毎回 start_new_chat_session を呼び出し、最新の履歴範囲を適用 ★★★ ---
+        # これにより、start_new_chat_session 内のデバッグログも毎回表示されるはず。
+        # keep_history=True で現在の純粋履歴を維持し、max_history_pairs を渡す。
+        self.start_new_chat_session(
+            keep_history=True, 
+            system_instruction_text=self._system_instruction_text, # 現在のシステム指示を維持
+            load_from_file_if_empty=False, # 既にロード済みのはずなので不要
+            max_history_pairs=max_history_pairs_for_this_turn # ★ 渡された履歴範囲を使用
+        )
+        # --- ★★★ -------------------------------------------------------------- ★★★ ---
+
+        if not self._chat_session: # start_new_chat_session でセッション開始に失敗した場合
+             return None, "チャットセッションの開始に失敗しました (send_message内)。"
+
+        full_message_to_send = ""
+        if transient_context and transient_context.strip():
+            full_message_to_send += f"{transient_context.strip()}\n\n"
         full_message_to_send += f"## ユーザーの入力:\n{user_input.strip()}"
+
+        print(f"Sending message to Gemini (total length approx {len(full_message_to_send)} chars).")
+        
         try:
-            response = self._chat_session.send_message(full_message_to_send); ai_response_text = response.text
+            response = self._chat_session.send_message(full_message_to_send)
+            ai_response_text = response.text
+
             self._pure_chat_history.append({'role': 'user', 'parts': [{'text': user_input.strip()}]})
             self._pure_chat_history.append({'role': 'model', 'parts': [{'text': ai_response_text.strip()}]})
+            print(f"  AI Response received. Pure history length: {len(self._pure_chat_history)}")
             self._save_history_to_file()
+            
             return ai_response_text, None
-        except Exception as e: return None, str(e)
+        except Exception as e:
+            print(f"Error sending message or receiving response from Gemini: {e}")
+            return None, str(e)
 
     def get_pure_chat_history(self) -> List[Dict[str, Union[str, List[Dict[str, str]]]]]:
         """現在の純粋な会話履歴を取得します。

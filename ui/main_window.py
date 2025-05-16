@@ -986,7 +986,7 @@ class MainWindow(QWidget):
         ai_response_text, error_message = self.chat_handler.send_message_with_context(
             transient_context=final_transient_context,
             user_input=user_text, # 純粋なユーザー入力
-            max_history_pairs_for_this_turn=self.current_history_range_for_prompt # ★ 追加
+            max_history_pairs_for_this_turn=self.current_history_range_for_prompt # ★ スライダーの値を渡す
         )
 
         # --- ★★★ UI表示は _redisplay_chat_history に一任 ★★★ ---
