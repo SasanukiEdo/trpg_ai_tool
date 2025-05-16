@@ -528,11 +528,11 @@ if __name__ == '__main__':
     os.makedirs(os.path.join(test_project_base_path, "gamedata"), exist_ok=True) # gamedataも作成
 
     # ダミーのカテゴリとアイテムを作成 (data_manager を使用)
-    dm_create_cat(test_project_dm_widget, "キャラクター")
-    dm_create_cat(test_project_dm_widget, "魔法")
-    dm_add_item(test_project_dm_widget, "キャラクター", {"id": "char01", "name": "勇者エルウィン"})
-    dm_add_item(test_project_dm_widget, "キャラクター", {"id": "char02", "name": "魔導士ルナ"})
-    dm_add_item(test_project_dm_widget, "魔法", {"id": "spell01", "name": "ファイアボール"})
+    # dm_create_cat(test_project_dm_widget, "キャラクター")
+    # dm_create_cat(test_project_dm_widget, "魔法")
+    # dm_add_item(test_project_dm_widget, "キャラクター", {"id": "char01", "name": "勇者エルウィン"})
+    # dm_add_item(test_project_dm_widget, "キャラクター", {"id": "char02", "name": "魔導士ルナ"})
+    # dm_add_item(test_project_dm_widget, "魔法", {"id": "spell01", "name": "ファイアボール"})
     # -------------------------------------------------
 
     # DataManagementWidget のインスタンス作成と表示
