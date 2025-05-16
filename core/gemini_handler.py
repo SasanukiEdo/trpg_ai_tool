@@ -398,6 +398,100 @@ class GeminiChatHandler:
              self._save_history_to_file()
     # --- ★★★ ------------------------------------------------------ ★★★ ---
 
+    # --- ★★★ 会話履歴を任意で含める単発応答生成メソッド (インスタンスメソッド) ★★★ ---
+    def generate_response_with_optional_history(
+        self, 
+        main_prompt_text: str, 
+        num_history_pairs_to_include: Optional[int] = 0
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """指定された主要プロンプトと、オプションで現在の会話履歴の一部をコンテキストとして、
+        AIからの単発の応答を生成します。
+        このメソッドは、現在のチャットセッション (_chat_session) や
+        永続的な純粋会話履歴 (_pure_chat_history) を変更しません。
+        現在のモデルとシステム指示を使用します。
+
+        Args:
+            main_prompt_text (str): AIへの主要な指示や質問。
+            num_history_pairs_to_include (int, optional): 
+                コンテキストに含める純粋な会話履歴の最新の往復数。
+                0 または None の場合は履歴を含めない。デフォルトは0。
+
+        Returns:
+            Tuple[Optional[str], Optional[str]]: (AIの応答テキスト, エラーメッセージ)
+        """
+        if not is_configured() or not self._model: # API未設定またはモデル未初期化
+            # _model は _initialize_model で設定される
+            if not is_configured():
+                return None, "Gemini APIが設定されていません。"
+            # モデルがない場合は、現在の設定で再初期化を試みる（呼び出し元に促すのがベターだが）
+            print("generate_response_with_optional_history: Model not found, attempting to re-initialize.")
+            self._initialize_model(self._system_instruction_text)
+            if not self._model:
+                return None, "AIモデルの準備ができていません。APIキーや設定を確認してください。"
+        
+        if not main_prompt_text:
+            return None, "主要なプロンプトテキストが空です。"
+
+        # --- 1. 送信する履歴を準備 ---
+        history_context_parts = []
+        if num_history_pairs_to_include and num_history_pairs_to_include > 0 and self._pure_chat_history:
+            num_messages_from_history = num_history_pairs_to_include * 2
+            # スライスした履歴を取得
+            history_segment_to_include = self._pure_chat_history[-num_messages_from_history:]
+            
+            for message in history_segment_to_include:
+                role = message.get("role", "unknown")
+                text = ""
+                if message.get("parts") and isinstance(message["parts"], list) and message["parts"]:
+                    part_content = message["parts"][0]
+                    if isinstance(part_content, dict) and "text" in part_content:
+                        text = part_content["text"]
+                    elif isinstance(part_content, str): # parts が文字列のリストの場合
+                        text = part_content
+                
+                if text: # テキストがあれば整形して追加
+                    # 役割に応じて整形 (例: "ユーザー: こんにちは", "AI: どうも")
+                    # ここではシンプルな形式で
+                    history_context_parts.append(f"{'ユーザー' if role == 'user' else 'AI'}: {text}")
+            print(f"  Including {len(history_context_parts)} messages from history (latest {num_history_pairs_to_include} pairs).")
+
+        # --- 2. 最終的なプロンプトを構築 ---
+        final_prompt_for_generation = ""
+        if history_context_parts:
+            final_prompt_for_generation += "## 関連する過去の会話履歴:\n"
+            final_prompt_for_generation += "\n".join(history_context_parts)
+            final_prompt_for_generation += "\n\n---\n\n" # 履歴と主要プロンプトの区切り
+        
+        final_prompt_for_generation += "## AIへの現在の指示:\n"
+        final_prompt_for_generation += main_prompt_text
+
+        print(f"Generating response with optional history (model: {self.model_name}, prompt length approx: {len(final_prompt_for_generation)} chars).")
+        # print(f"  Final prompt for generation:\n---\n{final_prompt_for_generation}\n---") # デバッグ用
+
+        try:
+            # --- 3. AIに応答を要求 (チャットセッションは使わない) ---
+            # 現在のモデルインスタンス (_model) はシステム指示を含んでいる
+            response = self._model.generate_content(final_prompt_for_generation) 
+            
+            ai_response_text = ""
+            if hasattr(response, 'text') and response.text:
+                ai_response_text = response.text
+            elif response.parts:
+                for part in response.parts:
+                    if hasattr(part, 'text'):
+                        ai_response_text += part.text
+            
+            if not ai_response_text.strip() and response.prompt_feedback and hasattr(response.prompt_feedback, 'block_reason'):
+                 block_reason = response.prompt_feedback.block_reason
+                 return None, f"AIからの応答がブロックされました。理由: {block_reason}"
+
+            print("Response with optional history generated successfully.")
+            return ai_response_text, None
+        except Exception as e:
+            print(f"Error generating response with optional history from Gemini: {e}")
+            return None, str(e)
+    # --- ★★★ -------------------------------------------------------------- ★★★ ---
+
 
     # --- ★★★ 単発プロンプト応答用 静的メソッド ★★★ ---
     @staticmethod

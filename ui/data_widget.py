@@ -15,7 +15,7 @@ import sys
 import os
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QListWidget, QPushButton,
-    QTabWidget, QMessageBox, QInputDialog, QListWidgetItem, QApplication
+    QTabWidget, QMessageBox, QInputDialog, QListWidgetItem, QApplication, qApp
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
 
@@ -442,51 +442,63 @@ class DataManagementWidget(QWidget):
             print(f"DetailWindow project updated to '{self.current_project_dir_name}'.")
 
 
-    def show_detail_window(self, category: str, item_id: str):
-        """指定されたアイテムの詳細表示ウィンドウを表示（またはアクティブ化）します。
+    def show_detail_window(self, category_name: str, item_id: str):
+        """指定されたアイテムの詳細ウィンドウを表示またはアクティブにします。
+        MainWindowのchat_handlerと履歴範囲設定も渡します。
 
         Args:
-            category (str): 表示するアイテムのカテゴリ名。
+            category_name (str): 表示するアイテムのカテゴリ名。
             item_id (str): 表示するアイテムのID。
         """
-        self.ensure_detail_window_exists()
-        self._last_detail_item = {"category": category, "id": item_id}
+        # 既に詳細ウィンドウが表示中で、同じアイテムなら前面に出すだけ
+        if self._detail_window and self._detail_window.isVisible():
+            if self._detail_window.current_category == category_name and self._detail_window.current_item_id == item_id:
+                self._detail_window.activateWindow()
+                self._detail_window.raise_()
+                return
 
-        # DetailWindowに渡すmain_config (主にモデル名) を最新に保つ
-        # (ensure_detail_window_exists で初期設定されるが、プロジェクトモデル変更後に呼ばれる可能性も考慮)
-        main_window_instance = self.window()
-        if main_window_instance and hasattr(main_window_instance, 'current_project_settings') and self._detail_window:
-            project_model = main_window_instance.current_project_settings.get('model')
-            if project_model:
-                 self._detail_window.main_config["model"] = project_model
+        # 既存の詳細ウィンドウがあれば閉じる
+        if self._detail_window:
+            self._detail_window.close()
+            self._detail_window = None
 
-        # 位置調整ロジック (メインウィンドウの右隣に表示)
-        main_win_global_pos = self.window().mapToGlobal(QPoint(0,0))
-        main_win_width = self.window().width()
-        main_win_height = self.window().height()
-        screen_geo = QApplication.primaryScreen().availableGeometry() if QApplication.primaryScreen() else self.window().geometry()
+        # --- MainWindowインスタンスから chat_handler と履歴範囲設定を取得 ---
+        main_window_instance = None
+        main_window_chat_handler_ref = None
+        current_history_range_val = 0  # デフォルト値
 
-        detail_width = 500
-        detail_height = main_win_height
-        new_x = main_win_global_pos.x() + main_win_width + 5
-        new_y = main_win_global_pos.y()
+        # qApp.main_window に MainWindowのインスタンスが設定されていることを前提に取得
+        if hasattr(qApp, 'main_window') and qApp.main_window:
+            main_window_instance = qApp.main_window
+            if hasattr(main_window_instance, 'chat_handler'):
+                main_window_chat_handler_ref = main_window_instance.chat_handler
+            if hasattr(main_window_instance, 'current_history_range_for_prompt'):
+                current_history_range_val = main_window_instance.current_history_range_for_prompt
+        else:
+            print("Warning: Could not access MainWindow instance from qApp.main_window.")
 
-        # 画面外にはみ出ないように調整
-        if new_x + detail_width > screen_geo.right(): new_x = main_win_global_pos.x() - detail_width - 5
-        if new_x < screen_geo.left(): new_x = screen_geo.left()
-        if new_y < screen_geo.top(): new_y = screen_geo.top()
-        if new_y + detail_height > screen_geo.bottom():
-            detail_height = screen_geo.bottom() - new_y
-            if detail_height < 200: detail_height = 200 # 最小高さを確保
-            if new_y + detail_height > screen_geo.bottom(): new_y = screen_geo.bottom() - detail_height
+        # --- DetailWindow を新規作成し、必要な情報を渡す ---
+        self._detail_window = DetailWindow(
+            main_config=self.main_config,
+            project_dir_name=self.current_project_dir_name,
+            main_window_chat_handler=main_window_chat_handler_ref,
+            current_history_range_setting=current_history_range_val,
+            parent=self  # DataManagementWidget を親に設定（必要に応じて変更可能）
+        )
 
-        self._detail_window.setGeometry(new_x, new_y, detail_width, detail_height)
-        self._detail_window.load_data(category, item_id) # DetailWindow が自身のプロジェクト名でロード
+        # 詳細ウィンドウの位置調整（既存のロジックを維持）
+        # 例: 画面中央に表示したい場合など
+        if self._detail_window:
+            # 画面中央に移動（例）
+            screen_geometry = QApplication.desktop().availableGeometry(self)
+            window_size = self._detail_window.sizeHint()
+            x = screen_geometry.x() + (screen_geometry.width() - window_size.width()) // 2
+            y = screen_geometry.y() + (screen_geometry.height() - window_size.height()) // 2
+            self._detail_window.move(x, y)
 
-        if not self._detail_window.isVisible():
+            # アイテムデータを読み込み、表示
+            self._detail_window.load_data(category_name, item_id)
             self._detail_window.show()
-        self._detail_window.activateWindow()
-        self._detail_window.raise_()
 
 
     def _handle_detail_saved(self, category: str, item_id: str):
@@ -528,11 +540,11 @@ if __name__ == '__main__':
     os.makedirs(os.path.join(test_project_base_path, "gamedata"), exist_ok=True) # gamedataも作成
 
     # ダミーのカテゴリとアイテムを作成 (data_manager を使用)
-    dm_create_cat(test_project_dm_widget, "キャラクター")
-    dm_create_cat(test_project_dm_widget, "魔法")
-    dm_add_item(test_project_dm_widget, "キャラクター", {"id": "char01", "name": "勇者エルウィン"})
-    dm_add_item(test_project_dm_widget, "キャラクター", {"id": "char02", "name": "魔導士ルナ"})
-    dm_add_item(test_project_dm_widget, "魔法", {"id": "spell01", "name": "ファイアボール"})
+    # dm_create_cat(test_project_dm_widget, "キャラクター")
+    # dm_create_cat(test_project_dm_widget, "魔法")
+    # dm_add_item(test_project_dm_widget, "キャラクター", {"id": "char01", "name": "勇者エルウィン"})
+    # dm_add_item(test_project_dm_widget, "キャラクター", {"id": "char02", "name": "魔導士ルナ"})
+    # dm_add_item(test_project_dm_widget, "魔法", {"id": "spell01", "name": "ファイアボール"})
     # -------------------------------------------------
 
     # DataManagementWidget のインスタンス作成と表示
