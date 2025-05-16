@@ -412,7 +412,7 @@ class MainWindow(QWidget):
 
         # --- 2. サブシステムプロンプト管理セクション ---
         subprompt_header_layout = QHBoxLayout()
-        subprompt_header_layout.addWidget(QLabel("<b>サブシステムプロンプト管理:</b>"))
+        subprompt_header_layout.addWidget(QLabel("<b>サブプロンプト管理:</b>"))
         subprompt_header_layout.addStretch()
         self.add_subprompt_category_button = QPushButton("カテゴリ追加")
         self.add_subprompt_category_button.setToolTip("サブプロンプトの新しいカテゴリを作成します。")
@@ -433,7 +433,7 @@ class MainWindow(QWidget):
 
         # --- 3. アイテム管理セクション ---
         item_management_header_layout = QHBoxLayout()
-        item_management_header_layout.addWidget(QLabel("<b>アイテム管理:</b>"))
+        item_management_header_layout.addWidget(QLabel("<b>データ管理:</b>"))
         item_management_header_layout.addStretch()
         # DataManagementWidget 内部のボタンをこちらに移動（ただし、シグナル処理は DataManagementWidget に委譲する形を維持）
         self.data_category_add_button = QPushButton("カテゴリ追加")
@@ -443,15 +443,15 @@ class MainWindow(QWidget):
         )
         item_management_header_layout.addWidget(self.data_category_add_button)
 
-        self.data_item_add_button = QPushButton("アイテム追加")
-        self.data_item_add_button.setToolTip("現在のカテゴリに新しいアイテムを追加します。")
+        self.data_item_add_button = QPushButton("データの追加")
+        self.data_item_add_button.setToolTip("現在のカテゴリに新しいデータを追加します。")
         self.data_item_add_button.clicked.connect(
             lambda: self.data_management_widget._request_add_item() # DataWidgetのメソッドを直接呼ぶかシグナル
         )
         item_management_header_layout.addWidget(self.data_item_add_button)
 
         self.data_item_delete_checked_button = QPushButton("チェック削除") # 名前を短縮
-        self.data_item_delete_checked_button.setToolTip("現在のカテゴリでチェックされているアイテムを全て削除します。")
+        self.data_item_delete_checked_button.setToolTip("現在のカテゴリでチェックされているデータを全て削除します。")
         self.data_item_delete_checked_button.clicked.connect(
             lambda: self.data_management_widget.delete_checked_items() # DataWidgetのメソッドを直接呼ぶ
         )

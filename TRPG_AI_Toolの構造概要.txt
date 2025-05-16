@@ -4,44 +4,52 @@
 
 現在のプロジェクト (`trpg_ai_tool`) の主要なファイル構成は以下の通りです。UI関連 (`ui/`)、コアロジック関連 (`core/`)、データ関連 (`data/`) が分離されています。
 
-*   `main.py`: アプリケーションのエントリーポイント。
-*   **`core/`**: アプリケーションのコアロジックを格納するディレクトリ。
-    *   `api_key_manager.py`: APIキーのOS資格情報ストアへの保存・取得・削除。
-    *   `config_manager.py`: グローバル設定 (`config.json`) とプロジェクト設定 (`project_settings.json`) の読み書き、プロジェクトディレクトリの一覧取得・**削除**。
-    *   `gemini_handler.py`: Google Gemini APIとの通信処理、クライアント設定。
-    *   `subprompt_manager.py`: サブプロンプトデータ (`subprompts.json`) の読み書き。
-*   **`ui/`**: PyQt5ベースのユーザーインターフェース関連ファイルを格納。
-    *   `main_window.py`: メインウィンドウ (`MainWindow`)。UI全体の構築、イベント処理、コアロジック呼び出し、**プロジェクト選択・新規作成・削除機能**。
-    *   `settings_dialog.py`: 設定ダイアログ (`SettingsDialog`)。
-    *   `subprompt_dialog.py`: サブプロンプト編集ダイアログ (`SubPromptEditDialog`)。
-    *   `data_widget.py`: データ管理エリア (`DataManagementWidget`)。カテゴリタブ、アイテムリスト表示。
-    *   `detail_window.py`: アイテム詳細表示・編集ウィンドウ (`DetailWindow`)。**AI支援による履歴追記、履歴の編集・削除、画像プレビューの相対パス対応と表示安定化**。
-    *   `data_item_widget.py`: データリストの各項目ウィジェット (`DataItemWidget`)。
-    *   `ai_text_edit_dialog.py`: AI支援編集ダイアログ (`AIAssistedEditDialog`)。「説明/メモ」編集と**「履歴」追記支援**に利用。
+*   `main.py`: アプリケーションのエントリーポイント。**外部CSSファイル (`style.qss`) の読み込み処理を追加**。
+*   **`style.qss` (新規)**: アプリケーション全体のUIスタイル（特に応答履歴表示エリア）を定義する外部CSSファイル。
+*   **`core/`**: アプリケーションのコアロジック。
+    *   `api_key_manager.py`: APIキー管理。
+    *   `config_manager.py`: グローバル設定とプロジェクト設定の管理。
+    *   **`gemini_handler.py` (大幅改修)**:
+        *   **`GeminiChatHandler` クラス**: Gemini APIとのチャット形式の対話を管理。
+            *   システム指示の設定。
+            *   **「純粋な会話履歴」の保持、プロジェクトごとのファイル保存・読み込み機能 (`chat_history.json`)**。
+            *   一時的なコンテキスト情報（サブプロンプト、アイテムデータ、タグ関連情報など）とユーザー入力を組み合わせたメッセージ送信。
+            *   **AIへの送信履歴範囲の制御機能**。
+        *   **`generate_single_response` 静的メソッド**: チャット履歴に依存しない単発のプロンプト応答機能（アイテム編集支援用）。
+    *   `subprompt_manager.py`: サブプロンプトデータの読み書き（**参照先タグ対応**）。
+    *   `data_manager.py`: アイテムデータの読み書き（**参照先タグ対応**）、**タグによるアイテム検索機能 (`find_items_by_tags`)**。
+*   **`ui/`**: PyQt5ベースのUI関連ファイル。
+    *   `main_window.py`: メインウィンドウ (`MainWindow`)。**`GeminiChatHandler` の利用、応答履歴表示エリア (`response_display`) への履歴再表示機能、履歴の編集・削除機能（HTMLリンク方式）、AIへの送信履歴範囲設定スライダーの実装**。
+    *   `settings_dialog.py`: 設定ダイアログ。
+    *   `subprompt_dialog.py`: サブプロンプト編集ダイアログ（**参照先タグ入力対応**）。
+    *   `data_widget.py`: データ管理エリア。
+    *   `detail_window.py`: アイテム詳細表示・編集ウィンドウ（**参照先タグ入力対応**、AI編集支援機能は単発プロンプト応答を利用）。
+    *   `ai_text_edit_dialog.py`: AI支援編集ダイアログ。
 *   **`data/{project_dir_name}/`**: 各プロジェクトのデータを格納するディレクトリ。
     *   `project_settings.json`: プロジェクト固有の設定（表示名、使用モデル、メインシステムプロンプトなど）。
-    *   `subprompts.json`: プロジェクト固有のサブプロンプトデータ（カテゴリ別）。
-    *   `gamedata/`: プロジェクトのゲームデータ（キャラクター、アイテムなど）をカテゴリ別にJSONファイルで格納するサブディレクトリ。
-        *   `{category_name}.json`: 各カテゴリのアイテムデータを格納するJSONファイル。各アイテムにはID、名前、説明、履歴（各エントリにIDとタイムスタンプ、内容を保持）、タグ、画像パス（プロジェクト内`images/`からの相対パス）などが含まれる。
-    *   **`images/` (新規)**: プロジェクトに関連する画像ファイル（アイテムの画像など）を格納するサブディレクトリ。アイテムデータ内の `image_path` は、このディレクトリからの相対パスで記録される。
-    *   `data_manager.py`: カテゴリ別アイテムデータ (`gamedata/{category}.json`) の読み書き、アイテムのCRUD操作、履歴追加（各履歴にID付与）、**画像保存用ディレクトリ (`images/`) のパス取得・作成**。
+    *   `subprompts.json`: プロジェクト固有のサブプロンプトデータ（カテゴリ別、**参照先タグ情報を含む**）。
+    *   `gamedata/`: プロジェクトのゲームデータ（キャラクター、アイテムなど）をカテゴリ別にJSONファイルで格納。
+        *   `{category_name}.json`: 各カテゴリのアイテムデータ。各アイテムにはID、名前、説明、履歴（各エントリにIDとタイムスタンプ、内容）、タグ、画像パス（相対パス）、**参照先タグ情報**などが含まれる。
+    *   `images/`: プロジェクト関連の画像ファイル。
+    *   **`chat_history.json` (新規)**: プロジェクトごとのAIとの「純粋な会話履歴」（ユーザー発言とAI応答のペア）をJSON形式で保存するファイル。
 
 
 ### 2. 主要な処理フロー
 
 *   **起動時**:
-    1.  `main.py` が `MainWindow` をインスタンス化。
-    2.  `MainWindow.__init__` が `_initialize_configs_and_project` を呼び出し。
-    3.  `load_global_config` で `config.json` を読み込み、アクティブなプロジェクトディレクトリ名を取得。
-    4.  `_load_current_project_data` が `load_project_settings` と `load_subprompts` を呼び出し、プロジェクトデータをメモリにロード。
-    5.  `init_ui` でUIを構築。**プロジェクト選択コンボボックス (`_populate_project_selector`) も初期化**。
-    6.  `configure_gemini` でAPIクライアントを設定。
-*   **プロジェクト選択**:
-    1.  ユーザーが `MainWindow` のプロジェクト選択コンボボックスでプロジェクトを選択。
-    2.  `_on_project_selected_by_display_name` が選択された表示名に対応するディレクトリ名を取得し、`_switch_project` を呼び出す。
-    3.  `_switch_project` は `current_project_dir_name` を更新し、`global_config` の `active_project` を更新・保存。
-    4.  `_load_current_project_data` を呼び出し、新しいプロジェクトのデータをロード。
-    5.  `MainWindow` のUI（メインプロンプト、ウィンドウタイトル）、`DataManagementWidget` の表示、`SubPromptTabWidget` の内容が新しいプロジェクトデータで更新される。
+    1.  `main.py` が `style.qss` を読み込み、アプリケーションに適用。`MainWindow` をインスタンス化。
+    2.  `MainWindow.__init__` が `_initialize_configs_and_project` を呼び出し、アクティブプロジェクトの情報をロード。
+    3.  `_initialize_chat_handler` を呼び出し、現在のプロジェクトのモデル名、**プロジェクトディレクトリ名**、システム指示を渡して `GeminiChatHandler` を初期化。
+        *   `GeminiChatHandler` はコンストラクタ内で、指定されたプロジェクトの `chat_history.json` から「純粋な会話履歴」を読み込む。
+    4.  `init_ui` でUIを構築。
+    5.  `configure_gemini_and_chat_handler` でAPIキー設定を確認し、必要ならハンドラを再設定。
+    6.  `_redisplay_chat_history` を呼び出し、読み込んだ会話履歴を `response_display` に表示。
+*   **プロジェクト選択/切り替え時 (`_switch_project`)**:
+    1.  現在のプロジェクトのチャット履歴を `GeminiChatHandler.save_current_history_on_exit()` で保存。
+    2.  `current_project_dir_name` を更新し、新しいプロジェクトのデータをロード。
+    3.  `GeminiChatHandler.update_settings_and_restart_chat()` (または `_initialize_chat_handler`) を呼び出し、新しいプロジェクトのモデル名、システム指示、**新しいプロジェクトディレクトリ名**、**現在の送信履歴範囲設定**を渡す。
+        *   `GeminiChatHandler` は、新しいプロジェクトの `chat_history.json` から履歴を読み込む。
+    4.  `_redisplay_chat_history` を呼び出し、新しいプロジェクトの会話履歴を `response_display` に表示。
 *   **新規プロジェクト作成**:
     1.  ユーザーが `MainWindow` の「新規作成」ボタンをクリック。
     2.  `_on_new_project_button_clicked` がプロジェクト表示名とディレクトリ名を入力するダイアログを表示。
@@ -53,26 +61,36 @@
     2.  `_on_delete_project_button_clicked` が確認ダイアログを表示。
     3.  承認されると `core.config_manager.delete_project_directory` でプロジェクトディレクトリ全体を削除。
     4.  プロジェクト選択コンボボックスを更新し、別のプロジェクトをアクティブにするか、プロジェクトなしの状態にUIを更新。
-*   **AIとの対話**:
-    1.  ユーザーが `MainWindow` の入力エリアにメッセージを入力し「送信」。
-    2.  `on_send_button_clicked` がメインシステムプロンプト、選択されたサブプロンプト、選択されたデータアイテム情報を結合し、最終的なプロンプトを生成。
-    3.  `core.gemini_handler.generate_response` を呼び出しAIからの応答を取得。
-    4.  応答を `MainWindow` の表示エリアに表示。
+*   **AIとの対話 (`on_send_button_clicked`)**:
+    1.  一時的なコンテキスト情報（選択されたサブプロンプト、選択されたデータアイテム、タグ検索で見つかったアイテムの情報）を構築。
+    2.  `GeminiChatHandler.send_message_with_context()` を呼び出し、一時コンテキスト、純粋なユーザー入力、**現在の送信履歴範囲設定**を渡す。
+        *   `GeminiChatHandler` 内部では、`start_new_chat_session` が呼び出され、指定された範囲の「純粋な会話履歴」とシステム指示でチャットセッションを開始し、一時コンテキストとユーザー入力でメッセージを送信。
+    3.  AIからの応答を受け取ったら、`GeminiChatHandler` は「純粋な会話履歴」を更新し、`chat_history.json` に保存。
+    4.  `_redisplay_chat_history` を呼び出し、更新された全履歴（新しいやり取りを含む）を `response_display` に再表示（編集・削除リンク付き）。
+*   **応答履歴の編集・削除 (`_handle_history_link_clicked`)**:
+    1.  ユーザーが `response_display` 内の「編集」または「削除」リンクをクリック。
+    2.  リンクの `href` 属性からアクション、履歴インデックス、ロールを特定。
+    3.  **編集**: `QInputDialog.getMultiLineText` で編集させ、`GeminiChatHandler._pure_chat_history` を更新し、ファイルに保存。
+    4.  **削除**: 確認後、`GeminiChatHandler._pure_chat_history` から該当エントリを削除し、ファイルに保存。
+    5.  いずれの場合も `_redisplay_chat_history` で画面を再表示。
+
 *   **アイテム詳細表示・編集**:
     1.  ユーザーが `DataManagementWidget` のアイテムリストからアイテムを選択（またはアイテムのチェックボックス横の「詳細」ボタンをクリック）。
     2.  `DataManagementWidget.show_detail_window` が `DetailWindow` を表示し、該当アイテムのデータをロード。
     3.  ユーザーが `DetailWindow` で情報を編集し「保存」ボタンをクリック。
     4.  `DetailWindow.save_details` が `core.data_manager.update_item` を呼び出しデータを保存。`dataSaved` シグナルを発行。
-*   **AI支援による「説明/メモ」編集**:
-    1.  ユーザーが `DetailWindow` の「AIで「説明/メモ」を編集支援」ボタンをクリック。
-    2.  `_on_ai_update_description_clicked` が `AIAssistedEditDialog` を「description」モードで起動。プロンプトテンプレートと現在の説明を渡す。
-    3.  ユーザーがダイアログ内でAIに指示を出し、提案を編集して「OK」。
-    4.  `DetailWindow` が最終テキストを取得し、`update_item` で保存。
-*   **AI支援による「履歴」追記**:
-    1.  ユーザーが `DetailWindow` の「AIで履歴エントリを生成・追加」ボタンをクリック。
-    2.  `add_history_entry_with_ai_ui` が `AIAssistedEditDialog` を「history」モードで起動。プロンプトテンプレートと現在のアイテム情報を渡す。
-    3.  ユーザーがダイアログ内でAIに指示を出し、提案を編集して「OK」。
-    4.  `DetailWindow` が最終履歴エントリを取得し、`core.data_manager.add_history_entry` で保存（各履歴にIDが付与される）。UIが再ロードされ更新。
+*   **アイテム編集支援 (`DetailWindow._handle_ai_suggestion_request`)**:
+    *   `GeminiChatHandler.generate_single_response()` 静的メソッドを使用し、チャット履歴に影響を与えずに単発のAI応答を取得。
+    *   **AI支援による「説明/メモ」編集**:
+        1.  ユーザーが `DetailWindow` の「AIで「説明/メモ」を編集支援」ボタンをクリック。
+        2.  `_on_ai_update_description_clicked` が `AIAssistedEditDialog` を「description」モードで起動。プロンプトテンプレートと現在の説明を渡す。
+        3.  ユーザーがダイアログ内でAIに指示を出し、提案を編集して「OK」。
+        4.  `DetailWindow` が最終テキストを取得し、`update_item` で保存。
+    *   **AI支援による「履歴」追記**:
+        1.  ユーザーが `DetailWindow` の「AIで履歴エントリを生成・追加」ボタンをクリック。
+        2.  `add_history_entry_with_ai_ui` が `AIAssistedEditDialog` を「history」モードで起動。プロンプトテンプレートと現在のアイテム情報を渡す。
+        3.  ユーザーがダイアログ内でAIに指示を出し、提案を編集して「OK」。
+        4.  `DetailWindow` が最終履歴エントリを取得し、`core.data_manager.add_history_entry` で保存（各履歴にIDが付与される）。UIが再ロードされ更新。
 *   **履歴の編集・削除**:
     1.  ユーザーが `DetailWindow` の「履歴を編集/削除」ボタンをクリック。
     2.  `edit_history_entry_ui` / `delete_history_entry_ui` が番号入力ダイアログを表示。
@@ -98,8 +116,10 @@
     *   `MainWindow` はアクティブなプロジェクトの各種データを保持し、必要に応じて `DataManagementWidget` や `SettingsDialog` に渡す。
     *   `DataManagementWidget` は選択されたアイテムのカテゴリとIDを `DetailWindow` に渡す。
     *   ダイアログ（`SettingsDialog`, `SubPromptEditDialog`, `AIAssistedEditDialog`, `QInputDialog`）は、呼び出し元のウィジェットから初期データを受け取り、編集結果を返す。
-
-
+*   **`GeminiChatHandler._pure_chat_history`**: アプリケーションが管理する「純粋な会話履歴」（ユーザー発言とAI応答のリスト）。プロジェクトごとに `chat_history.json` にJSON形式で永続化される。
+*   **`MainWindow.current_history_range_for_prompt`**: AIに送信する会話履歴の最大往復数を保持する整数値。UIのスライダーで設定され、`GeminiChatHandler` に渡される。
+*   システム指示（メインシステムプロンプト）: `GeminiChatHandler` の `_system_instruction_text` として保持され、モデル初期化時に適用される。
+*   一時的なコンテキスト情報（サブプロンプト、アイテムデータ、タグ関連情報）: `on_send_button_clicked` で毎回構築され、`GeminiChatHandler.send_message_with_context` に渡される。これらは永続的な会話履歴には含まれない。
 
 ### 4. UIコンポーネント間の連携方法
 
@@ -121,13 +141,27 @@
     *   `AIAssistedEditDialog` → `DetailWindow`: ダイアログがAcceptedで閉じられたら、最終的な編集テキストを返し、`DetailWindow` が保存処理とUI更新を行う。
 *   **`MainWindow`/`DetailWindow` ⇔ `QInputDialog`**:
     *   新規プロジェクト作成時、サブプロンプトカテゴリ追加時、データカテゴリ追加時、アイテム追加時、履歴編集・削除時に、ユーザーからの簡単なテキスト入力や数値入力を受け付けるために使用。
+*   **`MainWindow` ⇔ `GeminiChatHandler`**:
+    *   `MainWindow` が `GeminiChatHandler` のインスタンスを生成・保持。
+    *   `MainWindow` が `send_message_with_context` を呼び出してAIとの対話を実行。
+    *   `MainWindow` が `get_pure_chat_history` を呼び出して表示用履歴を取得。
+    *   `MainWindow` が `update_settings_and_restart_chat` や `clear_pure_chat_history` を呼び出してハンドラの状態を制御。
+*   **`MainWindow` (スライダー) → `GeminiChatHandler`**:
+    *   スライダーの値 (`current_history_range_for_prompt`) が、`send_message_with_context` やセッション開始メソッドの引数を通じて `GeminiChatHandler` に渡され、送信する履歴の量を制御。
+*   **`MainWindow` (`response_display`) ⇔ `_handle_history_link_clicked`**:
+    *   `response_display` の `anchorClicked` シグナルが `_handle_history_link_clicked` スロットを呼び出す。
+    *   `_handle_history_link_clicked` は `GeminiChatHandler` の履歴を操作し、ファイルに保存後、`_redisplay_chat_history` で `response_display` を更新。
 
+### 5. UIデザインとレイアウトに関するメモ（現状と今後の改善点）
 
+*   **現状のUIデザイン**:
 ### 5. UIデザインとレイアウトに関するメモ（現状と今後の改善点）
 
 *   **現状のUIデザイン**:
     *   メインウィンドウは左右2ペイン構成。
         *   左ペイン: メインシステムプロンプト入力、AI応答履歴表示、ユーザーメッセージ入力。
+        *   `MainWindow` 左ペイン下部に、AIへの送信履歴範囲を設定するスライダーとラベルを追加。
+        *   応答履歴表示エリア (`response_display`) は、外部CSSファイル (`style.qss`) によってスタイルが適用され、各履歴エントリには編集・削除用のHTMLリンクが付与される。
         *   右ペイン:
             *   **プロジェクト管理セクション**: 「プロジェクト管理:」ラベル（左揃え）と「新規作成」「削除」「設定」ボタン（右揃え）のヘッダー、その下に「選択中のプロジェクト:」ラベルとプロジェクト選択コンボボックス。
             *   **サブシステムプロンプト管理セクション**: 「サブシステムプロンプト管理:」ラベル（左揃え）と「カテゴリ追加」「プロンプト追加」ボタン（右揃え）のヘッダー、その下にサブプロンプトカテゴリタブ。
