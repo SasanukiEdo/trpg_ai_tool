@@ -5,13 +5,17 @@ import os
 from PyQt5.QtWidgets import QApplication, qApp
 from ui.main_window import MainWindow # MainWindow をインポート
 
+from typing import Optional
+
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# --- ★★★ グローバル変数として MainWindow インスタンスを保持 ★★★ ---
+main_window_instance: Optional[MainWindow] = None # 型ヒント (Optional)
+# --- ★★★ ------------------------------------------------- ★★★ ---
 
-# --- アプリケーションの起動 ---
 if __name__ == '__main__':
     app = QApplication(sys.argv)
 
@@ -28,12 +32,23 @@ if __name__ == '__main__':
         print(f"Error loading stylesheet: {e}")
     # --- ★★★ --------------------------------------- ★★★ ---
 
-    main_win = MainWindow()
-    
-    if hasattr(QApplication, 'main_window'): # qApp.main_window のようなグローバル参照のため (推奨はしないが良い方法がなければ)
-        QApplication.main_window = main_win # DetailWindowから参照するため (要検討)
-    else: # PyQt5では qApp を直接使う
-        qApp.main_window = main_win
+    # --- ★★★ MainWindow インスタンスをグローバル変数に代入 ★★★ ---
+    main_window_instance = MainWindow() 
 
-    main_win.show()
+    # ------------------------------------------------------------------------
+    # テストコード記述用スペース
+    # ------------------------------------------------------------------------
+    #print(main_win.get_recent_chat_history_as_string(3))
+
+
+
+    # ------------------------------------------------------------------------
+    
+    # if hasattr(QApplication, 'main_window'):
+    #     QApplication.main_window = main_window_instance
+    # else:
+    #     qApp.main_window = main_window_instance
+
+    main_window_instance.show()
     sys.exit(app.exec_())
+

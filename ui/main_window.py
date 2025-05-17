@@ -1052,6 +1052,65 @@ class MainWindow(QWidget):
 
     # --- ★★★ ---------------------------------------------------- ★★★ ---
 
+    # --- ★★★ 新規: 直近の会話履歴をプロンプト用文字列として整形して返すメソッド ★★★ ---
+    def get_recent_chat_history_as_string(self, max_pairs: int = 3) -> str:
+        """現在のチャット履歴から、直近のN往復分の会話を抽出し、
+        プロンプトに含めるための文字列として整形して返します。
+
+        Args:
+            max_pairs (int): 含める会話の最大往復数 (user + model のペア)。
+
+        Returns:
+            str: 整形された会話履歴文字列。
+                 履歴がない場合は空文字列を返します。
+        """
+        if not self.chat_handler:
+            return "" # ハンドラがなければ空文字列
+
+        pure_history = self.chat_handler.get_pure_chat_history()
+        if not pure_history:
+            return "" # 履歴がなければ空文字列
+
+        # 履歴をスライス (末尾から max_pairs * 2 個)
+        num_messages = max_pairs * 2
+        recent_history = pure_history[-num_messages:] # スライス
+        
+        if not recent_history:
+            return ""
+
+        # StringBuilder 的な使い方 (結合処理)
+        history_text_parts = []
+        for message in recent_history:
+            role = message.get("role")
+            text_content = ""
+            if message.get("parts") and isinstance(message["parts"], list) and len(message["parts"]) > 0:
+                part = message["parts"][0]
+                if isinstance(part, dict) and "text" in part:
+                    text_content = part["text"]
+                elif isinstance(part, str):
+                    text_content = part # parts が str の場合も考慮
+            
+            if not text_content: continue # 内容が空ならスキップ
+
+            # 役割に応じたプレフィックス
+            if role == "user":
+                prefix = "あなた:"
+            elif role == "model":
+                model_name = self.chat_handler.model_name if self.chat_handler else "AI"
+                prefix = f"Gemini ({model_name}):"
+            else:
+                prefix = f"{role or '不明'}:"
+            
+            # エスケープ処理は不要 (QTextBrowser に表示するわけではない)
+            history_text_parts.append(f"{prefix} {text_content}")
+
+        # 履歴を結合
+        history_text = "\n".join(history_text_parts)
+        print(f"  Returning recent chat history (length: {len(recent_history)} messages, {max_pairs} pairs) as string (char length: {len(history_text)}).")
+        return history_text # 完成した文字列を返す
+    # --- ★★★ ------------------------------------------------------------------ ★★★ ---
+
+
     # --- ★★★ 新規: 送信履歴範囲スライダーの値変更時のスロット ★★★ ---
     def _on_history_slider_changed(self, value: int):
         """送信履歴範囲スライダーの値が変更されたときに呼び出されます。
@@ -1439,4 +1498,5 @@ if __name__ == '__main__':
     main_win = MainWindow()
     main_win.show()
     sys.exit(app.exec_())
+
 
