@@ -4,7 +4,7 @@
 
 現在のプロジェクト (`trpg_ai_tool`) の主要なファイル構成は以下の通りです。UI関連 (`ui/`)、コアロジック関連 (`core/`)、データ関連 (`data/`) が分離されています。
 
-*   `main.py`: アプリケーションのエントリーポイント。**外部CSSファイル (`style.qss`) の読み込み処理を追加**。
+*   `main.py`: アプリケーションのエントリーポイント。MainWindow インスタンスを shared_instances モジュールに登録する処理を追加。外部CSSファイル (style.qss) の読み込み処理を追加。
 *   **`style.qss` (新規)**: アプリケーション全体のUIスタイル（特に応答履歴表示エリア）を定義する外部CSSファイル。
 *   **`core/`**: アプリケーションのコアロジック。
     *   `api_key_manager.py`: APIキー管理。
@@ -18,12 +18,13 @@
         *   **`generate_single_response` 静的メソッド**: チャット履歴に依存しない単発のプロンプト応答機能（アイテム編集支援用）。
     *   `subprompt_manager.py`: サブプロンプトデータの読み書き（**参照先タグ対応**）。
     *   `data_manager.py`: アイテムデータの読み書き（**参照先タグ対応**）、**タグによるアイテム検索機能 (`find_items_by_tags`)**。
+    *   `shared_instances.py`: アプリケーション全体で共有されるインスタンス参照（主に MainWindow インスタンス）を保持・提供するモジュール。
 *   **`ui/`**: PyQt5ベースのUI関連ファイル。
-    *   `main_window.py`: メインウィンドウ (`MainWindow`)。**`GeminiChatHandler` の利用、応答履歴表示エリア (`response_display`) への履歴再表示機能、履歴の編集・削除機能（HTMLリンク方式）、AIへの送信履歴範囲設定スライダーの実装**。
+    *   `main_window.py`: メインウィンドウ (`MainWindow`)。**`GeminiChatHandler` の利用、応答履歴表示エリア (`response_display`) への履歴再表示機能、履歴の編集・削除機能（HTMLリンク方式）、AIへの送信履歴範囲設定スライダーの実装、直近の会話履歴を整形して返すヘルパーメソッド (get_recent_chat_history_as_string)。**
     *   `settings_dialog.py`: 設定ダイアログ。
     *   `subprompt_dialog.py`: サブプロンプト編集ダイアログ（**参照先タグ入力対応**）。
     *   `data_widget.py`: データ管理エリア。
-    *   `detail_window.py`: アイテム詳細表示・編集ウィンドウ（**参照先タグ入力対応**、AI編集支援機能は単発プロンプト応答を利用）。
+    *   `detail_window.py`: アイテム詳細表示・編集ウィンドウ。アイテム編集支援時に shared_instances 経由で MainWindow の会話履歴を取得し、プロンプトに含めるように変更。
     *   `ai_text_edit_dialog.py`: AI支援編集ダイアログ。
 *   **`data/{project_dir_name}/`**: 各プロジェクトのデータを格納するディレクトリ。
     *   `project_settings.json`: プロジェクト固有の設定（表示名、使用モデル、メインシステムプロンプトなど）。
@@ -31,7 +32,7 @@
     *   `gamedata/`: プロジェクトのゲームデータ（キャラクター、アイテムなど）をカテゴリ別にJSONファイルで格納。
         *   `{category_name}.json`: 各カテゴリのアイテムデータ。各アイテムにはID、名前、説明、履歴（各エントリにIDとタイムスタンプ、内容）、タグ、画像パス（相対パス）、**参照先タグ情報**などが含まれる。
     *   `images/`: プロジェクト関連の画像ファイル。
-    *   **`chat_history.json` (新規)**: プロジェクトごとのAIとの「純粋な会話履歴」（ユーザー発言とAI応答のペア）をJSON形式で保存するファイル。
+    *   `chat_history.json` (新規): プロジェクトごとのAIとの「純粋な会話履歴」（ユーザー発言とAI応答のペア）をJSON形式で保存するファイル。
 
 
 ### 2. 主要な処理フロー
@@ -120,6 +121,7 @@
 *   **`MainWindow.current_history_range_for_prompt`**: AIに送信する会話履歴の最大往復数を保持する整数値。UIのスライダーで設定され、`GeminiChatHandler` に渡される。
 *   システム指示（メインシステムプロンプト）: `GeminiChatHandler` の `_system_instruction_text` として保持され、モデル初期化時に適用される。
 *   一時的なコンテキスト情報（サブプロンプト、アイテムデータ、タグ関連情報）: `on_send_button_clicked` で毎回構築され、`GeminiChatHandler.send_message_with_context` に渡される。これらは永続的な会話履歴には含まれない。
+*   スタイル情報: アプリケーション全体の基本スタイルは style.qss からロード。応答履歴表示エリアのHTML内のスタイルも style.qss で定義されたクラスに依存。
 
 ### 4. UIコンポーネント間の連携方法
 
@@ -152,9 +154,7 @@
     *   `response_display` の `anchorClicked` シグナルが `_handle_history_link_clicked` スロットを呼び出す。
     *   `_handle_history_link_clicked` は `GeminiChatHandler` の履歴を操作し、ファイルに保存後、`_redisplay_chat_history` で `response_display` を更新。
 
-### 5. UIデザインとレイアウトに関するメモ（現状と今後の改善点）
 
-*   **現状のUIデザイン**:
 ### 5. UIデザインとレイアウトに関するメモ（現状と今後の改善点）
 
 *   **現状のUIデザイン**:
@@ -177,7 +177,6 @@
     *   エラーメッセージやツールチップの充実。
     *   長文になりがちなAI応答履歴表示エリアのスクロール性改善や検索機能（任意）。
     *   各リスト（サブプロンプト、アイテム）の検索・フィルタリング機能。
-    *   アイテムデータのAI編集機能に、現在の会話履歴の一部をコンテキストとして含めるようにする。
     *   コンテキストに含める履歴範囲設定を、プロジェクト設定として永続化する。
 
 

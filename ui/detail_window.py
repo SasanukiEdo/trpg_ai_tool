@@ -17,26 +17,18 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap, QImageReader, QResizeEvent
 from PyQt5.QtCore import Qt, pyqtSignal, QUrl
 
-# --- ★★★ main.py から main_window_instance をインポート ★★★ ---
-# このインポートは、循環参照を避けるため、通常は関数の内部など、
-# 実際に使用する直前で行うのが安全な場合があります。
-# ただし、ここではモジュールレベルで試みます。
-# 循環参照エラーが出る場合は、_handle_ai_suggestion_request メソッド内でインポートします。
-try:
-    from main import main_window_instance # main.py で定義したグローバル変数をインポート [1][5]
-except ImportError: # main.py が直接実行されていない場合 (テスト時など)
-    main_window_instance = None
-    print("Warning: Could not import main_window_instance from main.py. AI editing with history might not work.")
-# --- ★★★ --------------------------------------------------- ★★★ ---
+
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+
 # --- coreモジュールインポート ---
 from core.data_manager import get_item, update_item, add_history_entry
 from core.gemini_handler import GeminiChatHandler, is_configured as gemini_is_configured 
+from core.shared_instances import get_main_window_instance 
 
 # --- uiモジュールインポート ---
 from ui.ai_text_edit_dialog import AIAssistedEditDialog
@@ -324,8 +316,7 @@ class DetailWindow(QWidget):
 
     def _handle_ai_suggestion_request(self):
         """`AIAssistedEditDialog` からAI提案依頼があった場合の処理。
-        編集支援は単発プロンプトを使用します。
-        MainWindow から直近の会話履歴を取得し、プロンプトに追加します。
+        共有モジュール経由で MainWindow から直近の会話履歴を取得し、プロンプトに追加します。
         """
         if not self.ai_edit_dialog: return
 
@@ -334,13 +325,9 @@ class DetailWindow(QWidget):
             QMessageBox.warning(self.ai_edit_dialog, "入力エラー", "AIへの指示を入力してください。")
             return
 
-        # AIモデル名は main_config から取得
-        ai_model_to_use = self.main_config.get("ai_model_for_editing", # 設定キーは仮
-                                               self.main_config.get("default_model", "gemini-1.5-flash")) 
-  
-        if hasattr(qApp, 'main_window') and qApp.main_window.chat_handler: # グローバル参照 (推奨されないが良い方法がなければ)
-             ai_model_to_use = qApp.main_window.chat_handler.model_name
-
+        ai_model_to_use = self.main_config.get("ai_model_for_editing",
+                                               self.main_config.get("default_model", "gemini-1.5-flash"))
+        
         print(f"DetailWindow: Requesting AI suggestion (Mode: {self.ai_edit_dialog_mode}) with model '{ai_model_to_use}'. Instruction length: {len(instruction_text)}")
         self.ai_edit_dialog.show_processing_message(True)
 
@@ -350,33 +337,35 @@ class DetailWindow(QWidget):
         if not gemini_is_configured(): # API設定チェック
             QMessageBox.critical(self.ai_edit_dialog, "APIエラー", "Gemini APIが設定されていません。"); self.ai_edit_dialog.show_processing_message(False); return
 
-        # --- ★★★ 直近の会話履歴を取得し、プロンプトに結合 ★★★ ---
+        # --- ★★★ 直近の会話履歴を取得し、プロンプトに結合 (共有モジュール経由) ★★★ ---
         recent_history_str = ""
-        if main_window_instance and hasattr(main_window_instance, 'get_recent_chat_history_as_string'):
-            # デフォルトで直近3往復の履歴を取得 (必要なら変更)
-            recent_history_str = main_window_instance.get_recent_chat_history_as_string(max_pairs=3) 
-            print(f"  Retrieved recent chat history (approx {len(recent_history_str)} chars) for AI editing prompt.")
+        main_window_ref = get_main_window_instance() # 共有モジュールから MainWindow インスタンスを取得
+        if main_window_ref and hasattr(main_window_ref, 'get_recent_chat_history_as_string'):
+            # デフォルトで直近3往復の履歴を取得 (この往復数は設定可能にしても良い)
+            recent_history_str = main_window_ref.get_recent_chat_history_as_string(max_pairs=3) 
+            if recent_history_str: # 履歴が取得できた場合のみログ表示
+                print(f"  Retrieved recent chat history (approx {len(recent_history_str)} chars) for AI editing prompt.")
+            else:
+                print("  No recent chat history available or retrieved.")
         else:
-            print("  Warning: Could not get recent chat history (main_window_instance not available or method missing).")
-        
+            print("  Warning: Could not get recent chat history (main_window_ref not available or method missing).")
 
-        # プロンプトの組み立て (履歴 + アイテム情報 + 指示)
-        # アイテム情報は instruction_text に含めるか、ここで別途取得・整形する
-        # ここでは instruction_text に必要な情報が含まれている前提
-        
+        # プロンプトの組み立て (履歴 + アイテム情報 + 指示)        
         prompt_to_ai = ""
         if recent_history_str:
             prompt_to_ai += "## 直近の会話履歴:\n" + recent_history_str + "\n\n"
         
-        # 現在のアイテム情報をプロンプトに追加する (任意)
-        # current_item_info_for_prompt = self._get_current_item_info_for_prompt() # 別途ヘルパー作成想定
-        # if current_item_info_for_prompt:
-        #     prompt_to_ai += "## 現在のアイテム情報:\n" + current_item_info_for_prompt + "\n\n"
+        # 現在のアイテム情報をプロンプトに追加する (AIAssistedEditDialog のプロンプトテンプレートで対応するのが良いか検討)
+        # 例:
+        # if self.item_data:
+        #     item_name = self.item_data.get("name", "不明なアイテム")
+        #     item_desc = self.item_data.get("description", "(説明なし)")
+        #     prompt_to_ai += f"## 現在編集中のアイテム「{item_name}」の情報:\n説明/メモ: {item_desc}\n\n"
 
-        prompt_to_ai += "## AIへの指示:\n" + instruction_text
+        prompt_to_ai += "## AIへの具体的な指示:\n" + instruction_text # AIAssistedEditDialogからの指示
 
         print(f"  Final prompt for AI editing (length: {len(prompt_to_ai)} chars):\n---\n{prompt_to_ai[:500]}...\n---") # 長いので先頭だけ表示
-        # --- ★★★ --------------------------------------------- ★★★ ---
+        # --- ★★★ -------------------------------------------------------------- ★★★ ---
 
         # 呼び出すAI処理 (generate_single_response は変更なし)
         if self.ai_edit_dialog_mode == "description" or self.ai_edit_dialog_mode == "history":
@@ -400,6 +389,7 @@ class DetailWindow(QWidget):
             QMessageBox.information(self.ai_edit_dialog, "提案取得完了", "AIからの提案を取得しました。必要に応じて編集してください。")
         else: # ai_suggestion が None (エラーなしで応答なし) の場合も考慮
             QMessageBox.information(self.ai_edit_dialog, "提案なし", "AIから有効な提案がありませんでした。")
+
 
 
     def select_image_file(self):

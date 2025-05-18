@@ -3,18 +3,18 @@
 import sys
 import os
 from PyQt5.QtWidgets import QApplication, qApp
+from typing import Optional # Optional をインポート
 from ui.main_window import MainWindow # MainWindow をインポート
-
-from typing import Optional
+# --- ★★★ 共有インスタンスモジュールからセッターをインポート ★★★ ---
+from core.shared_instances import set_main_window_instance 
+# --- ★★★ ------------------------------------------------- ★★★ ---
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# --- ★★★ グローバル変数として MainWindow インスタンスを保持 ★★★ ---
-main_window_instance: Optional[MainWindow] = None # 型ヒント (Optional)
-# --- ★★★ ------------------------------------------------- ★★★ ---
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
@@ -30,10 +30,14 @@ if __name__ == '__main__':
         print(f"Warning: Stylesheet file not found at {qss_file_path}. Using default styles.")
     except Exception as e:
         print(f"Error loading stylesheet: {e}")
-    # --- ★★★ --------------------------------------- ★★★ ---
+    # --- --------------------------------------- ---
+    
+    main_win = MainWindow() # MainWindow インスタンスを作成
+    
+    # --- ★★★ 作成したインスタンスを共有モジュールにセット ★★★ ---
+    set_main_window_instance(main_win)
 
-    # --- ★★★ MainWindow インスタンスをグローバル変数に代入 ★★★ ---
-    main_window_instance = MainWindow() 
+
 
     # ------------------------------------------------------------------------
     # テストコード記述用スペース
@@ -44,11 +48,11 @@ if __name__ == '__main__':
 
     # ------------------------------------------------------------------------
     
+    # DetailWindow から qApp.main_window で参照する古い方法は完全に不要になる
     # if hasattr(QApplication, 'main_window'):
-    #     QApplication.main_window = main_window_instance
+    #     QApplication.main_window = main_win 
     # else:
-    #     qApp.main_window = main_window_instance
+    #     qApp.main_window = main_win
 
-    main_window_instance.show()
+    main_win.show()
     sys.exit(app.exec_())
-
