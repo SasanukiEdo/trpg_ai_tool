@@ -302,9 +302,9 @@ class MainWindow(QWidget):
         left_layout.addWidget(QLabel("<b>メインシステムプロンプト:</b>"))
         self.system_prompt_input_main = QTextEdit()
         self.system_prompt_input_main.setPlaceholderText("AIへの全体的な指示を入力...")
-        self.system_prompt_input_main.setMinimumHeight(100) # 最小高さを設定
         self.system_prompt_input_main.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed) # 高さは固定
         left_layout.addWidget(self.system_prompt_input_main)
+        self.system_prompt_input_main.setFixedHeight(100)
 
         left_layout.addWidget(QLabel("<b>AI応答履歴:</b>"))
         # self.response_display = QTextBrowser()
@@ -481,8 +481,10 @@ class MainWindow(QWidget):
         right_layout.setStretchFactor(self.data_management_widget, 2) # データ管理エリアがより広がる
         # ----------------------------------------------------
 
+        # 左右画面の比率設定
         main_layout.addWidget(left_widget, 7)
         main_layout.addWidget(right_widget, 3)
+        right_widget.setMaximumWidth(350)
 
         # UI初期化後にプロジェクトコンボボックスを初期化・設定
         self._populate_project_selector()
@@ -1022,6 +1024,7 @@ class MainWindow(QWidget):
         print(f"MainWindow: Redisplaying {len(history_to_display)} entries from chat history using formatted HTML.")
         
         html_parts = []
+
         for index, message in enumerate(history_to_display):
             role = message.get("role")
             text_content = ""
@@ -1048,7 +1051,17 @@ class MainWindow(QWidget):
             # --- ★★★ ----------------------------- ★★★ ---
         
         self.response_display.setHtml("".join(html_parts))
-        self.response_display.ensureCursorVisible()
+        
+        # --- ★★★ 表示後、一番下にスクロール ★★★ ---
+        # 方法1: カーソルを最後に移動して表示 [1][5]
+        # self.response_display.moveCursor(QTextCursor.End) 
+        # self.response_display.ensureCursorVisible() # これでも良いが、setValueの方が確実な場合もある
+
+        # 方法2: スクロールバーを直接操作 [1][5] (より確実性が高い場合がある)
+        scroll_bar = self.response_display.verticalScrollBar()
+        scroll_bar.setValue(scroll_bar.maximum())
+        # --- ★★★ ----------------------------- ★★★ ---
+    
 
     # --- ★★★ ---------------------------------------------------- ★★★ ---
 

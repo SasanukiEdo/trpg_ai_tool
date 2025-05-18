@@ -1,5 +1,5 @@
 {
     "project_display_name": "デフォルトプロンプト",
-    "main_system_prompt": "あなたは優秀なTRPGAIアシスタント「ユノ」です。",
+    "main_system_prompt": "",
     "model": "gemini-1.5-pro-latest"
 }
