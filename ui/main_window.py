@@ -306,10 +306,26 @@ class MainWindow(QWidget):
         left_layout.addWidget(self.system_prompt_input_main)
         self.system_prompt_input_main.setFixedHeight(100)
 
-        left_layout.addWidget(QLabel("<b>AI応答履歴:</b>"))
-        # self.response_display = QTextBrowser()
-        # self.response_display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        # left_layout.addWidget(self.response_display)
+        # --- ★★★ AI応答履歴ラベルとスクロールボタン ★★★ ---
+        history_display_header_layout = QHBoxLayout() # 水平レイアウト
+        history_display_label = QLabel("<b>AI応答履歴:</b>")
+        history_display_header_layout.addWidget(history_display_label)
+        history_display_header_layout.addStretch() # ボタンを右に寄せるためのスペーサー
+
+        self.scroll_to_top_button = QPushButton("↑ 先頭へ")
+        self.scroll_to_top_button.setToolTip("履歴の先頭に移動します")
+        self.scroll_to_top_button.setFixedSize(80, 25) # ボタンサイズを固定 (任意)
+        self.scroll_to_top_button.clicked.connect(self._scroll_history_to_top)
+        history_display_header_layout.addWidget(self.scroll_to_top_button)
+
+        self.scroll_to_bottom_button = QPushButton("↓ 末尾へ")
+        self.scroll_to_bottom_button.setToolTip("履歴の末尾（最新）に移動します")
+        self.scroll_to_bottom_button.setFixedSize(80, 25) # ボタンサイズを固定 (任意)
+        self.scroll_to_bottom_button.clicked.connect(self._scroll_history_to_bottom)
+        history_display_header_layout.addWidget(self.scroll_to_bottom_button)
+        
+        left_layout.addLayout(history_display_header_layout) # 左メインレイアウトに追加
+        # --- ★★★ ------------------------------------ ★★★ ---
 
         # --- ★★★ QTextBrowser の設定変更とシグナル接続 ★★★ ---
         self.response_display = QTextBrowser()
@@ -1137,6 +1153,28 @@ class MainWindow(QWidget):
         print(f"History range for prompt set to: {value} pairs.")
         # 将来的には、この値をプロジェクト設定に保存する処理をここに追加しても良い
     # --- ★★★ -------------------------------------------------- ★★★ ---
+
+    # --- ★★★ 新規: AI応答履歴スクロール用スロットメソッド ★★★ ---
+    def _scroll_history_to_top(self):
+        """AI応答履歴表示エリアを一番上にスクロールします。"""
+        if hasattr(self, 'response_display') and self.response_display:
+            scroll_bar = self.response_display.verticalScrollBar()
+            scroll_bar.setValue(scroll_bar.minimum()) # 最小値に設定 [1][5]
+            print("Scrolled history to top.")
+
+    def _scroll_history_to_bottom(self):
+        """AI応答履歴表示エリアを一番下にスクロールします。"""
+        if hasattr(self, 'response_display') and self.response_display:
+            # 方法1: スクロールバー直接操作
+            scroll_bar = self.response_display.verticalScrollBar()
+            scroll_bar.setValue(scroll_bar.maximum()) # 最大値に設定 [1][5]
+            
+            # 方法2: カーソル移動 (こちらも有効)
+            # self.response_display.moveCursor(QTextCursor.End)
+            # self.response_display.ensureCursorVisible()
+            print("Scrolled history to bottom.")
+    # --- ★★★ ------------------------------------------------ ★★★ ---
+
 
     # --- ★★★ 新規: 履歴エントリをHTMLに整形するヘルパー関数 ★★★ ---
     def _format_history_entry_to_html(self, index: int, role: str, text_content: str, model_name: Optional[str] = None) -> str:
