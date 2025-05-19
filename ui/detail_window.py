@@ -14,8 +14,8 @@ from PyQt5.QtWidgets import (
     QPushButton, QScrollArea, QFrame, QFileDialog, QMessageBox, QDialog,
     QSizePolicy, QSpacerItem, QInputDialog, QApplication, qApp
 )
-from PyQt5.QtGui import QPixmap, QImageReader, QResizeEvent
-from PyQt5.QtCore import Qt, pyqtSignal, QUrl
+from PyQt5.QtGui import QPixmap, QImageReader, QResizeEvent, QShowEvent
+from PyQt5.QtCore import Qt, pyqtSignal, QUrl, QTimer
 
 
 
@@ -166,6 +166,7 @@ class DetailWindow(QWidget):
         self.setWindowTitle(f"詳細: {self.item_data.get('name', 'N/A')} ({category})")
         self._build_detail_view() # データに基づいてUIを構築
         self.save_button.setEnabled(True) # データロード成功で保存ボタンを有効化
+
 
     def clear_view(self):
         """現在の詳細表示エリアの内容をクリアします。"""
@@ -477,12 +478,13 @@ class DetailWindow(QWidget):
                     # setScaledContents(True) は使わないか、False にする
                     self.img_preview_label.setScaledContents(False) # QLabelによる自動スケーリングを無効化 [22]
                     
+                    # アスペクト比を計算
+                    aspect_ratio = pixmap.height() / pixmap.width() if pixmap.width() != 0 else 1 # ゼロ除算を避ける
+                    
                     # ラベルのサイズを取得
-                    label_width = self.img_preview_label.width()
-                    label_height = self.img_preview_label.height()
-
-                    print(f"  ラベル幅: {self.img_preview_label.width()}")
-                    print(f"  ラベル高: {self.img_preview_label.height()}")
+                    # label_width = self.img_preview_label.width()
+                    label_width = 450
+                    label_height = int(label_width * aspect_ratio)
 
                     if label_width > 0 and label_height > 0: # ラベルサイズが有効な場合のみ
                         # アスペクト比を保ちつつ、ラベルのサイズに収まるようにスケーリング
@@ -511,6 +513,7 @@ class DetailWindow(QWidget):
         
         self.img_preview_label.clear() # 画像がない場合やエラー時はクリア
 
+    
     def resizeEvent(self, event: 'QResizeEvent'):
         """ウィンドウのリサイズイベント。
         画像プレビューのアスペクト比を維持して再描画します。
