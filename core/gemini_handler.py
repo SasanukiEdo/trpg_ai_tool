@@ -157,10 +157,7 @@ class GeminiChatHandler:
     def _initialize_model(self, system_instruction_text: Optional[str] = None):
         """Geminiモデルを初期化（または再初期化）します。
         指定されたシステム指示でモデルを設定します。
-
-        Args:
-            system_instruction_text (str, optional): モデルに与えるシステム指示。
-                                                     Noneの場合は現在の指示を維持。
+        システム指示が空またはNoneの場合は、system_instruction引数を省略してモデルを初期化します。
         """
         if not is_configured():
             print("Error: Gemini API is not configured. Cannot initialize model.")
@@ -168,14 +165,54 @@ class GeminiChatHandler:
             return
 
         if system_instruction_text is not None:
-            self._system_instruction_text = system_instruction_text
+            self._system_instruction_text = system_instruction_text.strip() if system_instruction_text else None # 空文字列もNone扱いにするか検討
         
         try:
-            print(f"Initializing Gemini model: {self.model_name} with system instruction (length: {len(self._system_instruction_text or '')})")
-            self._model = genai.GenerativeModel(model_name=self.model_name, system_instruction=self._system_instruction_text)
-            # ★ モデル初期化時に、現在の純粋履歴でチャットセッションを開始
-            if self._model: self.start_new_chat_session(keep_history=True, load_from_file_if_empty=False) # load_from_file_if_empty はコンストラクタで実施済み
-        except Exception as e: print(f"Error initializing Gemini model '{self.model_name}': {e}"); self._model = None; self._chat_session = None
+            # --- ★★★ システム指示が実質的に空かどうかの判定 ★★★ ---
+            effective_system_instruction = self._system_instruction_text
+            if effective_system_instruction and not effective_system_instruction.strip(): # スペースのみの場合も空とみなす
+                effective_system_instruction = None
+            # --- ★★★ ---------------------------------------- ★★★ ---
+
+            print(f"Initializing Gemini model: {self.model_name} with system instruction (effective: {'provided' if effective_system_instruction else 'omitted'}, original_length: {len(self._system_instruction_text or '')})")
+
+            # --- ★★★ system_instruction を渡すかどうかを条件分岐 ★★★ ---
+            if effective_system_instruction:
+                self._model = genai.GenerativeModel(
+                    model_name=self.model_name,
+                    system_instruction=effective_system_instruction
+                )
+            else: # システム指示が空またはNoneなら、引数自体を渡さない
+                self._model = genai.GenerativeModel(
+                    model_name=self.model_name
+                )
+            # --- ★★★ --------------------------------------------- ★★★ ---
+            
+            if self._model:
+                print(f"  Gemini model '{self.model_name}' initialized successfully.")
+                # モデル初期化成功時にチャットセッションもリセット（または開始）
+                # 履歴は維持し、現在のスライダー設定で履歴範囲を適用する
+                # MainWindow側から max_history_pairs を取得する必要があるが、
+                # ここでは一旦、履歴範囲なし（全履歴）でセッション開始する。
+                # MainWindow側で _initialize_chat_handler を呼ぶ際に、
+                # start_new_chat_session に適切な max_history_pairs を渡すようにする。
+                if hasattr(self, 'start_new_chat_session'): # start_new_chat_session が定義されていれば
+                     # この時点では MainWindow のスライダー値を知る術がないので、
+                     # 一旦 max_history_pairs=None (全履歴) でセッションを開始しておく。
+                     # MainWindow._initialize_chat_handler がこの後すぐに
+                     # 適切な max_history_pairs で start_new_chat_session を呼び直すことを期待。
+                    self.start_new_chat_session(
+                        keep_history=True, 
+                        load_from_file_if_empty=False, # コンストラクタでロード済み想定
+                        max_history_pairs=None # ★注意: ここでは一旦None。MainWindow側で調整要
+                    )
+            else:
+                print(f"  Warning: Gemini model '{self.model_name}' initialization resulted in None (no exception, but no model).")
+
+        except Exception as e:
+            print(f"Error initializing Gemini model '{self.model_name}': {e}")
+            self._model = None
+            self._chat_session = None
 
 
     def start_new_chat_session(self, 

@@ -182,6 +182,7 @@ class DetailWindow(QWidget):
         self.setWindowTitle("詳細情報 (アイテム未選択)")
         self.save_button.setEnabled(False)
 
+
     def _build_detail_view(self):
         """`self.item_data` に基づいて詳細表示UIを動的に構築します。
         履歴表示に通し番号と区切り線を追加し、タイムスタンプを非表示にします。
@@ -191,14 +192,14 @@ class DetailWindow(QWidget):
         if not self.item_data: return
 
         # 名前
-        name_label = QLabel("名前:"); name_edit = QLineEdit(self.item_data.get("name", "")); self.detail_widgets['name'] = name_edit; self.content_layout.addWidget(name_label); self.content_layout.addWidget(name_edit)
+        name_label = QLabel("<b>名前:</b>"); name_edit = QLineEdit(self.item_data.get("name", "")); self.detail_widgets['name'] = name_edit; self.content_layout.addWidget(name_label); self.content_layout.addWidget(name_edit)
 
         # 説明/メモ
-        desc_label = QLabel("説明/メモ:"); desc_edit = QTextEdit(self.item_data.get("description", "")); desc_edit.setMinimumHeight(150); desc_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding); self.detail_widgets['description'] = desc_edit; self.content_layout.addWidget(desc_label); self.content_layout.addWidget(desc_edit)
+        desc_label = QLabel("<b>説明/メモ:</b>"); desc_edit = QTextEdit(self.item_data.get("description", "")); desc_edit.setMinimumHeight(150); desc_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding); self.detail_widgets['description'] = desc_edit; self.content_layout.addWidget(desc_label); self.content_layout.addWidget(desc_edit)
         ai_update_button = QPushButton("AIで「説明/メモ」を編集支援"); ai_update_button.clicked.connect(self._on_ai_update_description_clicked); self.content_layout.addWidget(ai_update_button)
 
         # 履歴
-        history_label = QLabel("履歴:")
+        history_label = QLabel("<b>履歴:</b>")
         self.content_layout.addWidget(history_label) # ラベルを先に追加
 
         history_view_container = QWidget() # 履歴表示とボタンをまとめるコンテナ
@@ -244,14 +245,14 @@ class DetailWindow(QWidget):
         self.content_layout.addWidget(history_view_container)
 
         # タグ (既存のアイテム自身のタグ)
-        tags_label = QLabel("タグ (カンマ区切り):")
+        tags_label = QLabel("<b>タグ</b> (カンマ区切り):")
         tags_edit = QLineEdit(", ".join(self.item_data.get("tags", [])))
         self.detail_widgets['tags'] = tags_edit
         self.content_layout.addWidget(tags_label)
         self.content_layout.addWidget(tags_edit)
 
         # --- ★★★ 参照先タグ入力フィールドを追加 (アイテム用) ★★★ ---
-        ref_tags_label = QLabel("参照先タグ (カンマ区切り、プロンプト連携用):")
+        ref_tags_label = QLabel("<b>参照先タグ</b> (カンマ区切り、プロンプト連携用):")
         ref_tags_edit = QLineEdit(", ".join(self.item_data.get("reference_tags", []))) # 新しいキー
         ref_tags_edit.setPlaceholderText("例: ギルド職員, 魔法武器")
         self.detail_widgets['reference_tags'] = ref_tags_edit # detail_widgets に登録
@@ -260,10 +261,32 @@ class DetailWindow(QWidget):
         # --- ★★★ ------------------------------------------ ★★★ ---
 
         # 画像
-        img_section_layout = QHBoxLayout(); img_label = QLabel("画像:"); img_section_layout.addWidget(img_label); img_section_layout.addStretch(); select_img_button = QPushButton("画像を選択"); select_img_button.clicked.connect(self.select_image_file); clear_img_button = QPushButton("画像をクリア"); clear_img_button.clicked.connect(self.clear_image_file); img_section_layout.addWidget(select_img_button); img_section_layout.addWidget(clear_img_button); self.content_layout.addLayout(img_section_layout)
-        self.img_path_label = QLabel("画像パス: (選択されていません)"); self.img_path_label.setWordWrap(True); self.detail_widgets['image_path_display'] = self.img_path_label; self.content_layout.addWidget(self.img_path_label)
-        # self.img_preview_label = QLabel(); self.img_preview_label.setAlignment(Qt.AlignCenter); self.img_preview_label.setMinimumSize(200, 150); self.img_preview_label.setFrameShape(QFrame.StyledPanel); self.detail_widgets['image_preview'] = self.img_preview_label; self._update_image_preview(self.item_data.get("image_path")); self.content_layout.addWidget(self.img_preview_label)
-        self.img_preview_label = QLabel(); self.img_preview_label.setAlignment(Qt.AlignCenter); self.img_preview_label.setMinimumSize(200, 150); self.img_preview_label.setFrameShape(QFrame.StyledPanel); self.img_preview_label.setScaledContents(True); self.img_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding); self.detail_widgets['image_preview'] = self.img_preview_label; self._update_image_preview(self.item_data.get("image_path")); self.content_layout.addWidget(self.img_preview_label)
+        self.img_path_label = QLabel("<b>画像:</b> (選択されていません)")
+        self.img_path_label.setWordWrap(True)
+        self.detail_widgets['image_path_display'] = self.img_path_label
+        self.content_layout.addWidget(self.img_path_label)
+
+        self.img_preview_label = QLabel()
+        self.img_preview_label.setAlignment(Qt.AlignCenter)
+        self.img_preview_label.setMinimumSize(200, 150)
+        self.img_preview_label.setFrameShape(QFrame.StyledPanel)
+        self.img_preview_label.setScaledContents(True)
+        self.img_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.detail_widgets['image_preview'] = self.img_preview_label
+        self._update_image_preview(self.item_data.get("image_path"))
+        self.content_layout.addWidget(self.img_preview_label)
+
+        img_buttons_layout = QHBoxLayout()
+        select_img_button = QPushButton("画像を選択")
+        select_img_button.clicked.connect(self.select_image_file)
+        img_buttons_layout.addWidget(select_img_button)
+        clear_img_button = QPushButton("画像をクリア")
+        clear_img_button.clicked.connect(self.clear_image_file)
+        img_buttons_layout.addWidget(clear_img_button)
+        img_buttons_layout.addStretch()
+        self.content_layout.addLayout(img_buttons_layout)
+        
+
         spacer = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding); self.content_layout.addSpacerItem(spacer)
 
     def _on_ai_update_description_clicked(self):
@@ -502,14 +525,14 @@ class DetailWindow(QWidget):
                         temp_scaled_pixmap = pixmap.scaledToWidth(max(400, self.img_preview_label.minimumWidth()), Qt.SmoothTransformation)
                         self.img_preview_label.setPixmap(temp_scaled_pixmap)
 
-                    self.img_path_label.setText(f"画像パス: {relative_image_path}")
+                    self.img_path_label.setText(f"<b>画像:</b> {relative_image_path}")
                     return # 正常に表示
                 else:
-                    self.img_path_label.setText("画像パス: (読み込みエラー)")
+                    self.img_path_label.setText("<b>画像:</b> (読み込みエラー)")
             else:
-                self.img_path_label.setText("画像パス: (ファイルが見つかりません)")
+                self.img_path_label.setText("<b>画像:</b> (ファイルが見つかりません)")
         else:
-            self.img_path_label.setText("画像パス: (選択されていません)")
+            self.img_path_label.setText("<b>画像:</b> (選択されていません)")
         
         self.img_preview_label.clear() # 画像がない場合やエラー時はクリア
 

@@ -194,8 +194,12 @@ class MainWindow(QWidget):
         self.chat_handler: Optional[GeminiChatHandler] = None
 
         # --- ★★★ 送信履歴範囲用のメンバー変数 ★★★ ---
-        self.current_history_range_for_prompt: int = 20 # デフォルト5往復
+        self.current_history_range_for_prompt: int = 25 # デフォルト25往復
         # --- ★★★ --------------------------------- ★★★ ---
+
+        # --- ★★★ アイテム履歴の送信数設定用メンバー変数 ★★★ ---
+        self.item_history_length_for_prompt: int = 10 # デフォルト10件
+        # --- ★★★ ----------------------------------------- ★★★ ---
         
         self._initialize_configs_and_project() # この中で current_project_settings がロードされる
         self.configure_gemini_and_chat_handler()  # APIキー設定、必要ならハンドラ再設定
@@ -473,6 +477,27 @@ class MainWindow(QWidget):
         )
         item_management_header_layout.addWidget(self.data_item_delete_checked_button)
         right_layout.addLayout(item_management_header_layout)
+
+        # --- ★★★ アイテム履歴数設定スライダーを追加 (アイテム管理セクション内) ★★★ ---
+        item_history_slider_widget = QWidget() # ラベルとスライダーをまとめる
+        item_history_slider_layout = QHBoxLayout(item_history_slider_widget)
+        item_history_slider_layout.setContentsMargins(0, 2, 0, 2) # 少しマージン調整
+
+        self.item_history_slider_label = QLabel(f"アイテム履歴の送信数: {self.item_history_length_for_prompt} ")
+        item_history_slider_layout.addWidget(self.item_history_slider_label)
+
+        self.item_history_slider = QSlider(Qt.Horizontal)
+        self.item_history_slider.setMinimum(0)  # 0件 (履歴を含めない)
+        self.item_history_slider.setMaximum(30) # 最大30件 (アイテム履歴なのでチャット履歴ほど多くはしない想定)
+        self.item_history_slider.setValue(self.item_history_length_for_prompt)
+        self.item_history_slider.setFixedWidth(180) # 幅を少し小さめに
+        item_history_slider_layout.addWidget(self.item_history_slider)
+        item_history_slider_layout.addStretch()
+
+        self.item_history_slider.valueChanged.connect(self._on_item_history_slider_changed)
+        
+        right_layout.addWidget(item_history_slider_widget) # アイテム管理セクションのヘッダーの下に追加
+        # --- ★★★ ------------------------------------------------------- ★★★ ---
 
         self.data_management_widget = DataManagementWidget(
             project_dir_name=self.current_project_dir_name,
@@ -868,7 +893,7 @@ class MainWindow(QWidget):
                         new_model_name=model_to_use,
                         new_system_instruction=system_prompt,
                         new_project_dir_name=self.current_project_dir_name, # プロジェクト名も渡す
-                        max_history_pairs_for_restart=self.current_history_range_for_promp
+                        max_history_pairs_for_restart=self.current_history_range_for_prompt
                     )
                 # else: 何も変更がなければ何もしない
             # --- ★★★ ---------------------------------------------------- ★★★ ---
@@ -946,20 +971,49 @@ class MainWindow(QWidget):
                         if prompt_content: active_subprompts_for_context.append(f"### サブプロンプト: {category} - {name}\n{prompt_content}")
         if active_subprompts_for_context: transient_context_parts.append("\n## 現在の補助指示 (サブプロンプト):\n" + "\n\n".join(active_subprompts_for_context))
         
-        # (1-2) 選択されたデータアイテムの情報
+        # --- (1-2) 選択されたデータアイテムの情報 ---
         checked_data_for_context = []
-        checked_item_ids_for_dedup = set() # タグ検索結果との重複排除用
+        checked_item_ids_for_dedup = set() 
         checked_data_from_widget = self.data_management_widget.get_checked_items()
         for category, item_ids in checked_data_from_widget.items():
             for item_id in item_ids:
                 item_detail = get_item(self.current_project_dir_name, category, item_id)
                 if item_detail:
-                    checked_item_ids_for_dedup.add(item_id) # 重複排除リストに追加
-                    info_str = f"### データ参照 (直接選択): {category} - {item_detail.get('name', 'N/A')}\n"
-                    info_str += f"  - 名前: {item_detail.get('name', 'N/A')}\n"
-                    info_str += f"  - 説明/メモ: {item_detail.get('description', '')}\n"; tags = item_detail.get('tags', []);
-                    if tags: info_str += f"  - タグ: {', '.join(tags)}\n"; checked_data_for_context.append(info_str)
-        if checked_data_for_context: transient_context_parts.append("\n## 現在の参照データ (直接選択):\n" + "\n".join(checked_data_for_context))
+                    checked_item_ids_for_dedup.add(item_id)
+                    info_str_parts = [] # アイテム情報をパーツごとに収集
+                    info_str_parts.append(f"### データ参照 (直接選択): {category} - {item_detail.get('name', 'N/A')}")
+                    info_str_parts.append(f"  - 名前: {item_detail.get('name', 'N/A')}")
+                    info_str_parts.append(f"  - 説明/メモ: {item_detail.get('description', '')}")
+                    
+                    tags = item_detail.get('tags', [])
+                    if tags: 
+                        info_str_parts.append(f"  - タグ: {', '.join(tags)}")
+
+                    # --- ★★★ アイテムの履歴を指定された件数だけ含める ★★★ ---
+                    item_histories_full = item_detail.get("history", [])
+                    num_histories_to_include = self.item_history_length_for_prompt # スライダーの値
+                    
+                    if num_histories_to_include > 0 and item_histories_full:
+                        # 末尾から指定件数を取得
+                        sliced_item_histories = item_histories_full[-num_histories_to_include:]
+                        history_entries_text = []
+                        for h_entry in sliced_item_histories:
+                            # history_entry は {"id": ..., "timestamp": ..., "entry": ...} の形式
+                            entry_text = h_entry.get("entry", "")
+                            if entry_text: # 空の履歴エントリは無視
+                                history_entries_text.append(f"    - {entry_text.strip()}") # インデントと整形
+                        if history_entries_text:
+                            info_str_parts.append(f"  - 最新の履歴 ({len(sliced_item_histories)}件):")
+                            info_str_parts.extend(history_entries_text)
+                    elif num_histories_to_include == 0:
+                        info_str_parts.append("  - 履歴: (表示設定0件のため省略)")
+                    # else: 履歴なし、または履歴があっても表示設定が0より大きくない場合は何も追加しない
+                    # --- ★★★ -------------------------------------------- ★★★ ---
+                    
+                    checked_data_for_context.append("\n".join(info_str_parts))
+        
+        if checked_data_for_context: 
+            transient_context_parts.append("\n## 現在の参照データ (直接選択):\n" + "\n\n".join(checked_data_for_context)) # 各アイテム間は2重改行
 
         # (1-3) タグによる関連情報 (サブプロンプト + データアイテム)
         from core.data_manager import find_items_by_tags, ITEM_SUMMARY_KEYS, MAX_HISTORY_ENTRIES_IN_SUMMARY
@@ -1150,9 +1204,20 @@ class MainWindow(QWidget):
         """
         self.current_history_range_for_prompt = value
         self.history_slider_label.setText(f"送信履歴範囲: {value} ")
-        print(f"History range for prompt set to: {value} pairs.")
         # 将来的には、この値をプロジェクト設定に保存する処理をここに追加しても良い
     # --- ★★★ -------------------------------------------------- ★★★ ---
+
+    # --- ★★★ 新規: アイテム履歴数スライダーの値変更時のスロット ★★★ ---
+    def _on_item_history_slider_changed(self, value: int):
+        """アイテム履歴表示数スライダーの値が変更されたときに呼び出されます。
+        ラベル表示と内部変数を更新します。
+
+        Args:
+            value (int): スライダーの新しい値。
+        """
+        self.item_history_length_for_prompt = value
+        self.item_history_slider_label.setText(f"アイテム履歴の送信数: {value} ")
+    # --- ★★★ ----------------------------------------------------- ★★★ ---
 
     # --- ★★★ 新規: AI応答履歴スクロール用スロットメソッド ★★★ ---
     def _scroll_history_to_top(self):
