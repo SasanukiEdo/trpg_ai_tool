@@ -363,33 +363,30 @@ class DetailWindow(QWidget):
 
         # --- ★★★ 直近の会話履歴を取得し、プロンプトに結合 (共有モジュール経由) ★★★ ---
         recent_history_str = ""
-        main_window_ref = get_main_window_instance() # 共有モジュールから MainWindow インスタンスを取得
-        if main_window_ref and hasattr(main_window_ref, 'get_recent_chat_history_as_string'):
-            # デフォルトで直近3往復の履歴を取得 (この往復数は設定可能にしても良い)
-            recent_history_str = main_window_ref.get_recent_chat_history_as_string(max_pairs=3) 
-            if recent_history_str: # 履歴が取得できた場合のみログ表示
+        main_window_ref = get_main_window_instance() 
+        if main_window_ref and hasattr(main_window_ref, 'get_recent_chat_history_as_string') and \
+           hasattr(main_window_ref, 'current_history_range_for_prompt'): # メンバー変数の存在も確認
+            
+            # MainWindow のスライダーで設定された履歴の往復数を取得
+            num_history_pairs_from_main = main_window_ref.current_history_range_for_prompt
+            
+            print(f"  Using history range from MainWindow: {num_history_pairs_from_main} pairs.")
+            recent_history_str = main_window_ref.get_recent_chat_history_as_string(max_pairs=num_history_pairs_from_main) 
+            
+            if recent_history_str:
                 print(f"  Retrieved recent chat history (approx {len(recent_history_str)} chars) for AI editing prompt.")
             else:
-                print("  No recent chat history available or retrieved.")
+                print(f"  No recent chat history available or retrieved (range: {num_history_pairs_from_main}).")
         else:
-            print("  Warning: Could not get recent chat history (main_window_ref not available or method missing).")
+            print("  Warning: Could not get recent chat history (main_window_ref not available, method or history range attribute missing).")
+        # --- ★★★ ------------------------------------------------------- ★★★ ---
 
         # プロンプトの組み立て (履歴 + アイテム情報 + 指示)        
         prompt_to_ai = ""
         if recent_history_str:
-            prompt_to_ai += "## 直近の会話履歴:\n" + recent_history_str + "\n\n"
-        
-        # 現在のアイテム情報をプロンプトに追加する (AIAssistedEditDialog のプロンプトテンプレートで対応するのが良いか検討)
-        # 例:
-        # if self.item_data:
-        #     item_name = self.item_data.get("name", "不明なアイテム")
-        #     item_desc = self.item_data.get("description", "(説明なし)")
-        #     prompt_to_ai += f"## 現在編集中のアイテム「{item_name}」の情報:\n説明/メモ: {item_desc}\n\n"
-
-        prompt_to_ai += "## AIへの具体的な指示:\n" + instruction_text # AIAssistedEditDialogからの指示
-
-        print(f"  Final prompt for AI editing (length: {len(prompt_to_ai)} chars):\n---\n{prompt_to_ai[:500]}...\n---") # 長いので先頭だけ表示
-        # --- ★★★ -------------------------------------------------------------- ★★★ ---
+            prompt_to_ai += "## 現在の会話の直近の履歴 (参考情報):\n" + recent_history_str + "\n\n"
+        prompt_to_ai += "## AIへの具体的な指示:\n" + instruction_text
+        print(f"  Final prompt for AI editing (length: {len(prompt_to_ai)} chars):\n---\n{prompt_to_ai[:500]}...\n---")
 
         # 呼び出すAI処理 (generate_single_response は変更なし)
         if self.ai_edit_dialog_mode == "description" or self.ai_edit_dialog_mode == "history":
