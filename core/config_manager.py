@@ -45,6 +45,10 @@ DEFAULT_PROJECT_SETTINGS = {
 }
 """dict: プロジェクト設定ファイルが存在しない場合や、キーが不足している場合に使用されるデフォルト値。"""
 
+# --- クイックセットのファイル名・スロット数 ---
+QUICK_SETS_FILENAME = "quick_sets.json"
+NUM_QUICK_SET_SLOTS = 10 # クイックセットのスロット数
+
 
 # --- グローバル設定の読み書き ---
 

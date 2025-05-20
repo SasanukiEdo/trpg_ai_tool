@@ -13,11 +13,12 @@
 
 import sys
 import os
+import json
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
     QTextBrowser, QListWidget, QListWidgetItem, QMessageBox, QAbstractItemView,
     QTabWidget, QApplication, QDialog, QSplitter, QFrame, QCheckBox,
-    QSizePolicy, QStyle, qApp, QInputDialog, QComboBox, QLineEdit,QDialogButtonBox, QSlider
+    QSizePolicy, QStyle, qApp, QInputDialog, QComboBox, QLineEdit,QDialogButtonBox, QSlider, QGroupBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QUrl
 import re # ディレクトリ名検証用
@@ -200,6 +201,18 @@ class MainWindow(QWidget):
         # --- ★★★ アイテム履歴の送信数設定用メンバー変数 ★★★ ---
         self.item_history_length_for_prompt: int = 10 # デフォルト10件
         # --- ★★★ ----------------------------------------- ★★★ ---
+
+        # --- ★★★ クイックセット関連のメンバー変数 ★★★ ---
+        from core.config_manager import NUM_QUICK_SET_SLOTS # スロット数をインポート
+        self.num_quick_set_slots = NUM_QUICK_SET_SLOTS
+        self.quick_sets_data: Dict[str, Optional[Dict]] = {} # ロードしたクイックセットデータ
+        # UI要素をリストで保持 (後でループ処理するため)
+        self.quick_set_name_labels: List[QLabel] = []
+        self.quick_set_apply_buttons: List[QPushButton] = []
+        self.quick_set_send_buttons: List[QPushButton] = []
+        self.quick_set_save_buttons: List[QPushButton] = []
+        self.quick_set_clear_buttons: List[QPushButton] = []
+        # --- ★★★ ------------------------------------ ★★★ ---
         
         self._initialize_configs_and_project() # この中で current_project_settings がロードされる
         self.configure_gemini_and_chat_handler()  # APIキー設定、必要ならハンドラ再設定
@@ -290,6 +303,66 @@ class MainWindow(QWidget):
         # サブプロンプトタブもUIがあれば更新
         if hasattr(self, 'subprompt_tab_widget'):
             self.refresh_subprompt_tabs()
+
+
+    # --- ★★★ 新規: クイックセットデータをファイルからロードしUIに反映 ★★★ ---
+    def _load_quick_sets(self):
+        """現在のプロジェクトのクイックセットデータをファイルからロードし、
+        UI（スロットのラベル名など）に反映します。
+        """
+        from core.config_manager import QUICK_SETS_FILENAME, PROJECTS_BASE_DIR # 定数をインポート
+        
+        self.quick_sets_data = {} # まずリセット
+        qsets_file_path = os.path.join(PROJECTS_BASE_DIR, self.current_project_dir_name, QUICK_SETS_FILENAME)
+
+        if os.path.exists(qsets_file_path):
+            try:
+                with open(qsets_file_path, 'r', encoding='utf-8') as f:
+                    loaded_data = json.load(f)
+                if isinstance(loaded_data, dict):
+                    self.quick_sets_data = loaded_data
+                    print(f"Quick sets loaded from '{qsets_file_path}'.")
+                else:
+                    print(f"Warning: Invalid format in quick sets file '{qsets_file_path}'.")
+            except Exception as e:
+                print(f"Error loading quick sets from '{qsets_file_path}': {e}")
+        else:
+            print(f"No quick sets file found at '{qsets_file_path}'. Initializing with empty sets.")
+            # ファイルがない場合は、空のデータで初期化 (各スロットをnullに)
+            for i in range(self.num_quick_set_slots):
+                self.quick_sets_data[f"slot_{i}"] = None
+
+        # UIの更新
+        self._update_quick_set_slots_display()
+    # --- ★★★ --------------------------------------------------------- ★★★ ---
+
+    # --- ★★★ 新規: クイックセットスロットの表示を更新するヘルパー ★★★ ---
+    def _update_quick_set_slots_display(self):
+        """現在の self.quick_sets_data に基づいて、
+        各クイックセットスロットのラベル名とボタンの有効状態を更新します。
+        """
+        if not hasattr(self, 'quick_set_name_labels'): return # UI未初期化
+
+        for i in range(self.num_quick_set_slots):
+            slot_id = f"slot_{i}"
+            slot_data = self.quick_sets_data.get(slot_id)
+
+            if slot_data and isinstance(slot_data, dict) and "name" in slot_data:
+                self.quick_set_name_labels[i].setText(f"{i+1}: {slot_data['name']}")
+                self.quick_set_name_labels[i].setToolTip(f"クイックセット名: {slot_data['name']}")
+                self.quick_set_apply_buttons[i].setEnabled(True)
+                self.quick_set_send_buttons[i].setEnabled(True)
+                # self.quick_set_save_buttons[i] は常に有効 (上書きのため)
+                self.quick_set_clear_buttons[i].setEnabled(True)
+            else: # スロットが空またはデータ不正
+                self.quick_set_name_labels[i].setText(f"{i+1}: (未設定)")
+                self.quick_set_name_labels[i].setToolTip("このスロットは現在空です。")
+                self.quick_set_apply_buttons[i].setEnabled(False)
+                self.quick_set_send_buttons[i].setEnabled(False)
+                # self.quick_set_save_buttons[i] は常に有効 (新規保存のため)
+                self.quick_set_clear_buttons[i].setEnabled(False)
+    # --- ★★★ --------------------------------------------------------- ★★★ ---
+
 
 
     def init_ui(self):
@@ -517,10 +590,78 @@ class MainWindow(QWidget):
         # ...
         # right_layout.addWidget(right_splitter)
 
+
+        # --- クイックセット管理セクション ---
+        quick_set_groupbox = QGroupBox("クイックセット")
+        quick_set_main_layout = QVBoxLayout(quick_set_groupbox)
+        quick_set_main_layout.setSpacing(0) # ★ スロット間の垂直スペーシングを詰める
+
+        for i in range(self.num_quick_set_slots):
+            slot_widget = QWidget()
+            slot_layout = QHBoxLayout(slot_widget)
+            slot_layout.setContentsMargins(0, 0, 0, 0) # ← レイアウトのマージンよりスペーシングで調整
+            slot_layout.setSpacing(1) # ★ ボタン間の水平スペーシングを詰める
+
+            # 1. セット名ラベル
+            name_label = QLabel(f"{i+1}: (未設定)") # ★ ラベルも短縮
+            name_label.setMinimumWidth(80)  # ★ 幅を少し詰める
+            name_label.setToolTip("ここに保存されたクイックセット名が表示されます。")
+            slot_layout.addWidget(name_label)
+            self.quick_set_name_labels.append(name_label)
+
+            # --- ★★★ ボタンのラベル名と幅を変更 ★★★ ---
+            button_width = 30 # ★ ボタンの共通幅
+
+            # 2. 「セット」ボタン → 「読」 (読み込み)
+            apply_button = QPushButton("読") # ★ ラベル変更
+            apply_button.setToolTip("このクイックセットの内容を入力欄と選択状態に反映します (送信はしません)。")
+            apply_button.setProperty("slot_index", i)
+            apply_button.clicked.connect(self._on_quick_set_apply_clicked)
+            apply_button.setFixedWidth(button_width) # ★ 幅設定
+            slot_layout.addWidget(apply_button)
+            self.quick_set_apply_buttons.append(apply_button)
+
+            # 3. 「送信」ボタン → 「送」
+            send_button = QPushButton("送") # ★ ラベル変更
+            send_button.setToolTip("このクイックセットの内容を反映し、AIに送信します。")
+            send_button.setProperty("slot_index", i)
+            send_button.clicked.connect(self._on_quick_set_send_clicked)
+            send_button.setFixedWidth(button_width) # ★ 幅設定
+            slot_layout.addWidget(send_button)
+            self.quick_set_send_buttons.append(send_button)
+
+            # 4. 「保存」ボタン → 「保」
+            save_button = QPushButton("保") # ★ ラベル変更
+            save_button.setToolTip("現在の入力内容と選択状態で、このスロットにクイックセットを保存（上書き）します。")
+            save_button.setProperty("slot_index", i)
+            save_button.clicked.connect(self._on_quick_set_save_clicked)
+            save_button.setFixedWidth(button_width) # ★ 幅設定
+            slot_layout.addWidget(save_button)
+            self.quick_set_save_buttons.append(save_button)
+            
+            # 5. 「クリア」ボタン → 「消」
+            clear_button = QPushButton("消") # ★ ラベル変更
+            clear_button.setToolTip("このスロットのクイックセットを削除します。")
+            clear_button.setProperty("slot_index", i)
+            clear_button.clicked.connect(self._on_quick_set_clear_clicked)
+            clear_button.setFixedWidth(button_width) # ★ 幅設定
+            slot_layout.addWidget(clear_button)
+            self.quick_set_clear_buttons.append(clear_button)
+            # --- ★★★ ------------------------------------ ★★★ ---
+
+            # slot_layout.addStretch() # 右端の余白は、グループボックス全体のサイズで調整されるので不要かも
+            quick_set_main_layout.addWidget(slot_widget)
+        
+        # quick_set_main_layout.addStretch() # スロット間の余白はsetSpacingで調整
+        right_layout.addWidget(quick_set_groupbox)
+        # --- ★★★ ------------------------------------ ★★★ ---
+
         # ウィジェット間の伸縮性を調整
-        right_layout.setStretchFactor(self.subprompt_tab_widget, 1) # サブプロンプトタブがある程度広がる
-        right_layout.setStretchFactor(self.data_management_widget, 2) # データ管理エリアがより広がる
+        right_layout.setStretchFactor(self.subprompt_tab_widget, 2) # サブプロンプトタブがある程度広がる
+        right_layout.setStretchFactor(self.data_management_widget, 3) # データ管理エリアがより広がる
         # ----------------------------------------------------
+
+
 
         # 左右画面の比率設定
         main_layout.addWidget(left_widget, 7)
@@ -638,6 +779,9 @@ class MainWindow(QWidget):
             return
 
         self._load_current_project_data() 
+
+        # クイックセットをロード
+        self._load_quick_sets() 
         
         # --- ★★★ Chat Handler を新しいプロジェクトで再初期化 (新しい履歴がロードされる) ★★★ ---
         new_model = self.current_project_settings.get("model", self.global_config.get("default_model"))
@@ -1581,6 +1725,177 @@ class MainWindow(QWidget):
             self.data_management_widget.add_new_item_result(category_from_data_widget, item_name.strip())
         elif ok:
             QMessageBox.warning(self, "入力エラー", "アイテム名を入力してください。")
+
+
+    # --- ★★★ クイックセット操作ボタンのスロットメソッド群 ★★★ ---
+
+    def _get_sender_slot_index(self) -> Optional[int]:
+        """シグナルを送信したボタンからスロットインデックスを取得します。"""
+        sender = self.sender()
+        if sender:
+            slot_index_prop = sender.property("slot_index")
+            if isinstance(slot_index_prop, int):
+                return slot_index_prop
+        return None
+
+    def _save_quick_sets_to_file(self):
+        """現在の self.quick_sets_data をファイルに保存します。"""
+        from core.config_manager import QUICK_SETS_FILENAME, PROJECTS_BASE_DIR
+        qsets_file_path = os.path.join(PROJECTS_BASE_DIR, self.current_project_dir_name, QUICK_SETS_FILENAME)
+        try:
+            os.makedirs(os.path.dirname(qsets_file_path), exist_ok=True)
+            with open(qsets_file_path, 'w', encoding='utf-8') as f:
+                json.dump(self.quick_sets_data, f, ensure_ascii=False, indent=2)
+            print(f"Quick sets saved to '{qsets_file_path}'.")
+        except Exception as e:
+            print(f"Error saving quick sets to '{qsets_file_path}': {e}")
+            QMessageBox.warning(self, "保存エラー", f"クイックセットの保存に失敗しました:\n{e}")
+
+    def _on_quick_set_save_clicked(self):
+        """「保存」ボタンがクリックされたときの処理。
+        現在の入力内容を対応するスロットのクイックセットとして保存します。
+        """
+        slot_index = self._get_sender_slot_index()
+        if slot_index is None: return
+
+        slot_id = f"slot_{slot_index}"
+        
+        # 現在の入力内容を取得
+        current_message = self.user_input.toPlainText().strip()
+        
+        current_checked_subprompts = []
+        for category, names in self.checked_subprompts.items():
+            for name in names:
+                current_checked_subprompts.append(f"{category}:{name}") # カテゴリと名前を結合して保存
+
+        current_checked_items_dict: Dict[str, List[str]] = {}
+        checked_items_from_widget = self.data_management_widget.get_checked_items()
+        for category, item_ids_set in checked_items_from_widget.items():
+            current_checked_items_dict[category] = list(item_ids_set)
+
+        # セット名を入力させる (既存名があればそれをデフォルトに)
+        existing_set_data = self.quick_sets_data.get(slot_id)
+        default_name = existing_set_data.get("name", f"クイックセット {slot_index + 1}") if isinstance(existing_set_data, dict) else f"クイックセット {slot_index + 1}"
+        
+        set_name, ok = QInputDialog.getText(self, "クイックセット名入力", "このクイックセットの名前を入力してください:", text=default_name)
+        if not ok or not set_name.strip():
+            QMessageBox.information(self, "キャンセル", "クイックセットの保存をキャンセルしました。")
+            return
+        
+        set_name = set_name.strip()
+
+        # クイックセットデータを作成
+        new_set_data = {
+            "name": set_name,
+            "message_template": current_message,
+            "subprompts": current_checked_subprompts, # ["Category1:SubpromptName1", "Category2:SubpromptName2"]
+            "data_items": current_checked_items_dict  # {"CategoryA": ["id1", "id2"], "CategoryB": ["id3"]}
+        }
+        
+        self.quick_sets_data[slot_id] = new_set_data
+        self._save_quick_sets_to_file()
+        self._update_quick_set_slots_display() # UI更新
+        QMessageBox.information(self, "保存完了", f"「{set_name}」をスロット {slot_index + 1} に保存しました。")
+        print(f"Quick set '{set_name}' saved to slot {slot_index + 1}.")
+
+
+    def _apply_quick_set_to_ui(self, slot_id: str) -> bool:
+        """指定されたスロットIDのクイックセット内容をUIに適用します。
+        成功した場合は True、セットデータがない場合は False を返します。
+        """
+        set_data = self.quick_sets_data.get(slot_id)
+        if not set_data or not isinstance(set_data, dict):
+            QMessageBox.warning(self, "エラー", f"スロット {slot_id} にクイックセットデータが見つかりません。")
+            return False
+
+        print(f"Applying quick set from {slot_id}: '{set_data.get('name', '(名称未設定)')}'")
+
+        # 1. 送信メッセージをセット
+        self.user_input.setPlainText(set_data.get("message_template", ""))
+
+        # 2. サブプロンプトのチェック状態を更新
+        #    まず全てのチェックを外し、その後セット内のものだけをチェック
+        self.subprompt_management_widget.uncheck_all_subprompts() # このメソッドがSubpromptManagementWidgetに必要
+        subprompts_to_check = set_data.get("subprompts", [])
+        if subprompts_to_check:
+            # サブプロンプト名は "カテゴリ:名前" の形式で保存されている想定
+            # カテゴリと名前に分割してチェック処理を行う
+            # (SubpromptManagementWidget にカテゴリと名前を指定してチェックするメソッドが必要)
+            self.subprompt_management_widget.check_subprompts_by_full_names(subprompts_to_check)
+            # 例: for full_name in subprompts_to_check:
+            #         category, name = full_name.split(":", 1) if ":" in full_name else (None, full_name)
+            #         if category: self.subprompt_management_widget.set_subprompt_checked_state(category, name, True)
+            #         else: # カテゴリなしの場合は全カテゴリから探すなど (要仕様検討)
+
+        # 3. データアイテムのチェック状態を更新
+        #    まず全てのチェックを外し、その後セット内のものだけをチェック
+        self.data_management_widget.uncheck_all_items() # このメソッドがDataManagementWidgetに必要
+        items_to_check = set_data.get("data_items", {})
+        if items_to_check and isinstance(items_to_check, dict):
+            # items_to_check は {"CategoryA": ["id1", "id2"], ...} の形式
+            self.data_management_widget.check_items_by_dict(items_to_check)
+            # 例: for category, item_ids in items_to_check.items():
+            #         for item_id in item_ids:
+            #             self.data_management_widget.set_item_checked_state(category, item_id, True)
+        
+        QApplication.processEvents() # UIの更新を即時反映
+        return True
+
+
+    def _on_quick_set_apply_clicked(self):
+        """「セット」ボタンがクリックされたときの処理。
+        対応するスロットのクイックセット内容をUIに反映します（送信はしない）。
+        """
+        slot_index = self._get_sender_slot_index()
+        if slot_index is None: return
+        slot_id = f"slot_{slot_index}"
+        
+        if self._apply_quick_set_to_ui(slot_id):
+            set_name = self.quick_sets_data.get(slot_id, {}).get("name", f"スロット {slot_index + 1}")
+            QMessageBox.information(self, "セット完了", f"「{set_name}」の内容を適用しました。")
+
+
+    def _on_quick_set_send_clicked(self):
+        """「送信」ボタンがクリックされたときの処理。
+        対応するスロットのクイックセット内容をUIに反映し、その後AIに送信します。
+        """
+        slot_index = self._get_sender_slot_index()
+        if slot_index is None: return
+        slot_id = f"slot_{slot_index}"
+
+        if self._apply_quick_set_to_ui(slot_id):
+            set_name = self.quick_sets_data.get(slot_id, {}).get("name", f"スロット {slot_index + 1}")
+            print(f"Quick set '{set_name}' applied. Now sending to AI...")
+            # 通常の送信処理を呼び出す
+            self.on_send_button_clicked() 
+
+
+    def _on_quick_set_clear_clicked(self):
+        """「クリア」ボタンがクリックされたときの処理。
+        対応するスロットのクイックセットを削除します。
+        """
+        slot_index = self._get_sender_slot_index()
+        if slot_index is None: return
+        slot_id = f"slot_{slot_index}"
+
+        slot_data = self.quick_sets_data.get(slot_id)
+        if not slot_data: # スロットが既に空なら何もしない
+            QMessageBox.information(self, "情報", f"スロット {slot_index + 1} は既に空です。")
+            return
+
+        set_name = slot_data.get("name", f"スロット {slot_index + 1}")
+        reply = QMessageBox.question(
+            self, "クリア確認",
+            f"クイックセット「{set_name}」(スロット {slot_index + 1}) を本当にクリアしますか？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.quick_sets_data[slot_id] = None # スロットデータをNoneに
+            self._save_quick_sets_to_file()
+            self._update_quick_set_slots_display() # UI更新
+            QMessageBox.information(self, "クリア完了", f"「{set_name}」をクリアしました。")
+            print(f"Quick set in slot {slot_index + 1} ('{set_name}') cleared.")
+    # --- ★★★ ------------------------------------------------- ★★★ ---
 
     def closeEvent(self, event):
         """ウィンドウが閉じられる前に呼び出されるイベント。
