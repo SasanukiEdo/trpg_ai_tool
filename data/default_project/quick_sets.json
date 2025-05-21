@@ -1,13 +1,13 @@
 {
   "slot_0": {
     "name": "会話する",
-    "message_template": "仲間と話す",
+    "message_template": "会話する",
     "subprompts": [
       "一般:NPC会話"
     ],
     "data_items": {
       "キャラクター": [
-        "キャラク-7037b970-5c5e-4ee4-aa1b-37b4d1a915e7"
+        "キャラク-f79cb347-4d92-41e1-b2ec-dda9db16cee5"
       ]
     }
   }

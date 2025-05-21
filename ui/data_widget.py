@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QTabWidget, QMessageBox, QInputDialog, QListWidgetItem, QApplication
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
+from typing import Optional, List, Dict, Tuple
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -510,6 +511,91 @@ class DataManagementWidget(QWidget):
         """DetailWindowが閉じられたときに呼び出されるスロット。"""
         self._last_detail_item = {"category": None, "id": None}
         print("DataWidget: Detail window closed.")
+
+    # --- ★★★ クイックセット適用用: 全アイテムのチェックを外すメソッド ★★★ ---
+    def uncheck_all_items(self):
+        """管理している全てのアイテムのチェックを外します。"""
+        if not hasattr(self, 'category_tabs'):
+            print("DataManagementWidget: category_tabs not found, cannot uncheck items.")
+            return
+
+        for i in range(self.category_tabs.count()):
+            tab_widget = self.category_tabs.widget(i) # 各タブのウィジェット (QListWidgetを想定)
+            if isinstance(tab_widget, QListWidget): # もし QListWidget なら
+                list_widget = tab_widget
+                for j in range(list_widget.count()):
+                    item = list_widget.item(j)
+                    if item.flags() & Qt.ItemIsUserCheckable: # チェック可能か確認
+                        item.setCheckState(Qt.Unchecked)
+            # 他のウィジェットタイプ (例: QTreeWidget) の場合は、それに応じた処理が必要
+            # elif isinstance(tab_widget, QTreeWidget):
+            #     iterator = QTreeWidgetItemIterator(tab_widget)
+            #     while iterator.value():
+            #         tree_item = iterator.value()
+            #         if tree_item.flags() & Qt.ItemIsUserCheckable:
+            #             tree_item.setCheckState(0, Qt.Unchecked) # 第0カラム
+            #         iterator += 1
+        
+        # チェック状態が変更されたことを MainWindow に通知するシグナルを発行するか、
+        # MainWindow が直接 self.data_management_widget.get_checked_items() を
+        # 呼び出して内部状態を更新しているなら、その仕組みに合わせる。
+        # 今回は、MainWindow側でチェック状態を能動的に取得しているため、シグナルは必須ではない。
+        print("DataManagementWidget: All items unchecked.")
+        # MainWindow側の checked_items 辞書も更新する必要があるかもしれないが、
+        # QuickSet適用時は、この後すぐに check_items_by_dict で再設定されるので、
+        # uncheck_all_items の段階で MainWindow の checked_items をクリアする必要は必ずしも無い。
+        # ただし、MainWindow の checked_items は get_checked_items() を通じて
+        # UIの状態から再構築されるのが理想的。
+
+
+    # --- ★★★ クイックセット適用用: 指定されたアイテムをチェックするメソッド ★★★ ---
+    def check_items_by_dict(self, items_to_check: Dict[str, List[str]]):
+        """指定されたカテゴリとアイテムIDの辞書に基づいて、アイテムにチェックを入れます。
+        このメソッドを呼び出す前に uncheck_all_items() で全てのチェックが
+        外されていることを前提とすることが多いです。
+
+        Args:
+            items_to_check (Dict[str, List[str]]): 
+                チェックを入れるアイテムの辞書。キーはカテゴリ名、値はアイテムIDのリスト。
+                例: {"キャラクター": ["char_id_1", "char_id_2"], "場所": ["loc_id_1"]}
+        """
+        if not hasattr(self, 'category_tabs'):
+            print("DataManagementWidget: category_tabs not found, cannot check items.")
+            return
+        if not items_to_check:
+            return
+
+        print(f"DataManagementWidget: Checking items by dict: {items_to_check}")
+        checked_count = 0
+        for category_name, item_ids_to_check in items_to_check.items():
+            # カテゴリ名に対応するタブを見つける
+            tab_index = -1
+            for i in range(self.category_tabs.count()):
+                if self.category_tabs.tabText(i) == category_name:
+                    tab_index = i
+                    break
+            
+            if tab_index == -1:
+                print(f"  Warning: Category tab '{category_name}' not found.")
+                continue
+
+            tab_widget = self.category_tabs.widget(tab_index)
+            if isinstance(tab_widget, QListWidget):
+                list_widget = tab_widget
+                for j in range(list_widget.count()):
+                    list_item = list_widget.item(j)
+                    # QListWidgetItem にアイテムIDが保存されている必要がある
+                    # (例: list_item.data(Qt.UserRole) でIDを取得)
+                    item_id_in_list = list_item.data(Qt.UserRole) # UserRole にIDを保存していると仮定
+                    if item_id_in_list in item_ids_to_check:
+                        if list_item.flags() & Qt.ItemIsUserCheckable:
+                            list_item.setCheckState(Qt.Checked)
+                            checked_count += 1
+                            # print(f"  Checked item: Category='{category_name}', ID='{item_id_in_list}'")
+            # 他のウィジェットタイプの場合の処理も同様に
+
+        print(f"  DataManagementWidget: {checked_count} items checked based on the dict.")
+        # ここでも、チェック状態変更の通知や MainWindow の内部状態の更新が必要なら検討。
 
 
 if __name__ == '__main__':

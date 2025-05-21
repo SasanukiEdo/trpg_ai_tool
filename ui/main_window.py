@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
     QTextBrowser, QListWidget, QListWidgetItem, QMessageBox, QAbstractItemView,
     QTabWidget, QApplication, QDialog, QSplitter, QFrame, QCheckBox,
-    QSizePolicy, QStyle, qApp, QInputDialog, QComboBox, QLineEdit,QDialogButtonBox, QSlider, QGroupBox
+    QSizePolicy, QStyle, qApp, QInputDialog, QComboBox, QLineEdit,QDialogButtonBox, QSlider, QGroupBox, QTreeWidgetItemIterator
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QUrl
 import re # ディレクトリ名検証用
@@ -355,7 +355,7 @@ class MainWindow(QWidget):
                 # self.quick_set_save_buttons[i] は常に有効 (上書きのため)
                 self.quick_set_clear_buttons[i].setEnabled(True)
             else: # スロットが空またはデータ不正
-                self.quick_set_name_labels[i].setText(f"{i+1}: (未設定)")
+                self.quick_set_name_labels[i].setText(f"{i+1}:")
                 self.quick_set_name_labels[i].setToolTip("このスロットは現在空です。")
                 self.quick_set_apply_buttons[i].setEnabled(False)
                 self.quick_set_send_buttons[i].setEnabled(False)
@@ -503,7 +503,7 @@ class MainWindow(QWidget):
         # --- 区切り線1 ---
         right_layout.addWidget(self._create_separator_line())
 
-        # --- 2. サブシステムプロンプト管理セクション ---
+        # --- 2. サブシステムプロンプト管理セクション ---        
         subprompt_header_layout = QHBoxLayout()
         subprompt_header_layout.addWidget(QLabel("<b>サブプロンプト管理:</b>"))
         subprompt_header_layout.addStretch()
@@ -603,7 +603,7 @@ class MainWindow(QWidget):
             slot_layout.setSpacing(1) # ★ ボタン間の水平スペーシングを詰める
 
             # 1. セット名ラベル
-            name_label = QLabel(f"{i+1}: (未設定)") # ★ ラベルも短縮
+            name_label = QLabel(f"{i+1}:") # ★ ラベルも短縮
             name_label.setMinimumWidth(80)  # ★ 幅を少し詰める
             name_label.setToolTip("ここに保存されたクイックセット名が表示されます。")
             slot_layout.addWidget(name_label)
@@ -1815,17 +1815,10 @@ class MainWindow(QWidget):
 
         # 2. サブプロンプトのチェック状態を更新
         #    まず全てのチェックを外し、その後セット内のものだけをチェック
-        self.subprompt_management_widget.uncheck_all_subprompts() # このメソッドがSubpromptManagementWidgetに必要
-        subprompts_to_check = set_data.get("subprompts", [])
+        self.uncheck_all_subprompts_in_tree() # まず全てのチェックを外す
+        subprompts_to_check = set_data.get("subprompts", []) # ["Category1:SubpromptName1", ...]
         if subprompts_to_check:
-            # サブプロンプト名は "カテゴリ:名前" の形式で保存されている想定
-            # カテゴリと名前に分割してチェック処理を行う
-            # (SubpromptManagementWidget にカテゴリと名前を指定してチェックするメソッドが必要)
-            self.subprompt_management_widget.check_subprompts_by_full_names(subprompts_to_check)
-            # 例: for full_name in subprompts_to_check:
-            #         category, name = full_name.split(":", 1) if ":" in full_name else (None, full_name)
-            #         if category: self.subprompt_management_widget.set_subprompt_checked_state(category, name, True)
-            #         else: # カテゴリなしの場合は全カテゴリから探すなど (要仕様検討)
+            self.check_subprompts_in_tree_by_full_names(subprompts_to_check)
 
         # 3. データアイテムのチェック状態を更新
         #    まず全てのチェックを外し、その後セット内のものだけをチェック
@@ -1896,6 +1889,61 @@ class MainWindow(QWidget):
             QMessageBox.information(self, "クリア完了", f"「{set_name}」をクリアしました。")
             print(f"Quick set in slot {slot_index + 1} ('{set_name}') cleared.")
     # --- ★★★ ------------------------------------------------- ★★★ ---
+
+    # --- ★★★ サブプロンプトツリーウィジェット操作用メソッド ★★★ ---
+    def uncheck_all_subprompts_in_tree(self):
+        """サブプロンプトツリーウィジェットの全てのアイテムのチェックを外します。"""
+        if not hasattr(self, 'subprompt_tree_widget'): return
+
+        iterator = QTreeWidgetItemIterator(self.subprompt_tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            # チェックボックスを持つアイテム（通常はサブプロンプト名アイテム）のみ操作
+            if item.flags() & Qt.ItemIsUserCheckable:
+                item.setCheckState(0, Qt.Unchecked) # 第0カラムのチェックを外す
+            iterator += 1
+        print("All subprompts unchecked in the tree widget.")
+        self.update_checked_subprompts() # チェック状態を内部変数にも反映
+
+    def check_subprompts_in_tree_by_full_names(self, full_names_to_check: List[str]):
+        """指定された "カテゴリ:名前" 形式のサブプロンプト名のリストに基づいて、
+        サブプロンプトツリーウィジェットの対応するアイテムにチェックを入れます。
+        """
+        if not hasattr(self, 'subprompt_tree_widget'): return
+        if not full_names_to_check: return
+
+        print(f"Checking subprompts in tree: {full_names_to_check}")
+        checked_count = 0
+        for full_name in full_names_to_check:
+            parts = full_name.split(":", 1)
+            category_name_to_find = parts[0]
+            subprompt_name_to_find = parts[1] if len(parts) > 1 else None
+
+            if not subprompt_name_to_find: # "カテゴリ名" だけの場合は、そのカテゴリ全体をチェック？ 現状は無視
+                print(f"  Skipping invalid full_name (no subprompt name): {full_name}")
+                continue
+
+            # カテゴリアイテムを検索
+            category_items = self.subprompt_tree_widget.findItems(
+                category_name_to_find, Qt.MatchExactly | Qt.MatchRecursive, 0 # 第0カラムで検索
+            )
+            for cat_item in category_items:
+                # カテゴリアイテムの直接の子からサブプロンプト名を検索
+                for i in range(cat_item.childCount()):
+                    sub_item = cat_item.child(i)
+                    if sub_item.text(0) == subprompt_name_to_find:
+                        if sub_item.flags() & Qt.ItemIsUserCheckable:
+                            sub_item.setCheckState(0, Qt.Checked)
+                            checked_count += 1
+                            # print(f"  Checked: {category_name_to_find}:{subprompt_name_to_find}")
+                            break # 同じ名前のものが複数ある場合は最初の一つだけ (通常はないはず)
+                else: # for-else: break しなかった場合 (カテゴリ内で見つからなかった)
+                    continue
+                break # カテゴリが見つかり、その中でサブプロンプトも見つかったら次のfull_nameへ
+        
+        print(f"  {checked_count} subprompts checked based on the list.")
+        self.update_checked_subprompts() # チェック状態を内部変数にも反映
+    # --- ★★★ --------------------------------------------------- ★★★ ---
 
     def closeEvent(self, event):
         """ウィンドウが閉じられる前に呼び出されるイベント。
