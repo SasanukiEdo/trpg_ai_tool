@@ -18,9 +18,10 @@ from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
     QTextBrowser, QListWidget, QListWidgetItem, QMessageBox, QAbstractItemView,
     QTabWidget, QApplication, QDialog, QSplitter, QFrame, QCheckBox,
-    QSizePolicy, QStyle, qApp, QInputDialog, QComboBox, QLineEdit,QDialogButtonBox, QSlider, QGroupBox, QTreeWidgetItemIterator
+    QSizePolicy, QStyle, qApp, QInputDialog, QComboBox, QLineEdit,QDialogButtonBox, QSlider, QGroupBox, QTreeWidgetItemIterator,
+    QRadioButton # ★★★ QRadioButton を追加 ★★★
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QUrl
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QUrl, QEvent # ★★★ QEvent を追加 ★★★
 import re # ディレクトリ名検証用
 from typing import Optional, List, Dict, Tuple
 
@@ -214,9 +215,17 @@ class MainWindow(QWidget):
         self.quick_set_clear_buttons: List[QPushButton] = []
         # --- ★★★ ------------------------------------ ★★★ ---
         
+        # --- ★★★ 送信キーモード用のメンバー変数 ★★★ ---
+        self.send_on_enter_mode: bool = True # デフォルトはEnterで送信
+        # --- ★★★ --------------------------------- ★★★ ---
+
         self._initialize_configs_and_project() # この中で current_project_settings がロードされる
         self.configure_gemini_and_chat_handler()  # APIキー設定、必要ならハンドラ再設定
         
+        # --- ★★★ 送信キーモードをグローバル設定から読み込み ★★★ ---
+        self.send_on_enter_mode = self.global_config.get("send_on_enter_mode", True)
+        # --- ★★★ --------------------------------------------- ★★★ ---
+
         final_initial_model = self.current_project_settings.get("model", initial_model_name)
         initial_system_prompt = self.current_project_settings.get("main_system_prompt", "")
         self._initialize_chat_handler(model_name=final_initial_model, project_dir_name=self.current_project_dir_name, system_instruction=initial_system_prompt)
@@ -259,6 +268,11 @@ class MainWindow(QWidget):
         """グローバル設定を読み込み、アクティブなプロジェクトのデータをロードします。"""
         print("--- MainWindow: Initializing configurations and project data ---")
         self.global_config = load_global_config()
+        # --- ★★★ 送信キーモードのデフォルト値をglobal_configに書き込む(初回起動時など) ★★★ ---
+        if "send_on_enter_mode" not in self.global_config:
+            self.global_config["send_on_enter_mode"] = True # デフォルト
+            save_global_config(self.global_config) # 保存
+        # --- ★★★ -------------------------------------------------------------- ★★★ ---
         self.current_project_dir_name = self.global_config.get("active_project", "default_project")
         print(f"  Active project directory name from global config: '{self.current_project_dir_name}'")
         self._load_current_project_data() # 実際のデータ読み込み
@@ -383,7 +397,7 @@ class MainWindow(QWidget):
         left_layout.addWidget(self.system_prompt_input_main)
         self.system_prompt_input_main.setFixedHeight(100)
 
-        # --- ★★★ AI応答履歴ラベルとスクロールボタン ★★★ ---
+        # --- AI応答履歴ラベルとスクロールボタン ---
         history_display_header_layout = QHBoxLayout() # 水平レイアウト
         history_display_label = QLabel("<b>AI応答履歴:</b>")
         history_display_header_layout.addWidget(history_display_label)
@@ -391,83 +405,87 @@ class MainWindow(QWidget):
 
         self.scroll_to_top_button = QPushButton("↑ 先頭へ")
         self.scroll_to_top_button.setToolTip("履歴の先頭に移動します")
-        self.scroll_to_top_button.setFixedSize(80, 25) # ボタンサイズを固定 (任意)
+        self.scroll_to_top_button.setFixedSize(80, 25)
         self.scroll_to_top_button.clicked.connect(self._scroll_history_to_top)
         history_display_header_layout.addWidget(self.scroll_to_top_button)
 
         self.scroll_to_bottom_button = QPushButton("↓ 末尾へ")
         self.scroll_to_bottom_button.setToolTip("履歴の末尾（最新）に移動します")
-        self.scroll_to_bottom_button.setFixedSize(80, 25) # ボタンサイズを固定 (任意)
+        self.scroll_to_bottom_button.setFixedSize(80, 25)
         self.scroll_to_bottom_button.clicked.connect(self._scroll_history_to_bottom)
         history_display_header_layout.addWidget(self.scroll_to_bottom_button)
         
-        left_layout.addLayout(history_display_header_layout) # 左メインレイアウトに追加
-        # --- ★★★ ------------------------------------ ★★★ ---
+        left_layout.addLayout(history_display_header_layout)
 
-        # --- ★★★ QTextBrowser の設定変更とシグナル接続 ★★★ ---
+        # --- QTextBrowser の設定変更とシグナル接続 ---
         self.response_display = QTextBrowser()
-        self.response_display.setObjectName("responseDisplay") # CSSから参照するため
+        self.response_display.setObjectName("responseDisplay")
         self.response_display.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.response_display.setOpenLinks(False)  # リンクの自動処理を無効化 [1][2]
-        self.response_display.anchorClicked.connect(self._handle_history_link_clicked) # シグナル接続 [1]
+        self.response_display.setOpenLinks(False)
+        self.response_display.anchorClicked.connect(self._handle_history_link_clicked)
 
         try:
-            # main.py と同じ階層にある style.qss を想定
-            # プロジェクトルートの取得は main.py と同様の方法で
-            current_dir = os.path.dirname(os.path.abspath(__file__)) # ui ディレクトリ
-            project_root_from_ui = os.path.dirname(current_dir) # プロジェクトルート
+            current_dir = os.path.dirname(os.path.abspath(__file__))
             qss_file_path_for_document = os.path.join(current_dir, "style.qss")
-
             with open(qss_file_path_for_document, "r", encoding="utf-8") as f_doc_style:
                 doc_style_sheet = f_doc_style.read()
-                self.response_display.document().setDefaultStyleSheet(doc_style_sheet) # [2][5]
+                self.response_display.document().setDefaultStyleSheet(doc_style_sheet)
                 print(f"Document stylesheet set for responseDisplay from: {qss_file_path_for_document}")
         except FileNotFoundError:
-            print(f"Warning: Document stylesheet file not found at {qss_file_path_for_document} for responseDisplay. HTML content might not be styled as expected.")
+            print(f"Warning: Document stylesheet file not found at {qss_file_path_for_document} for responseDisplay.")
         except Exception as e:
             print(f"Error setting document stylesheet for responseDisplay: {e}")
             
-        left_layout.addWidget(self.response_display) # 左レイアウトに追加
+        left_layout.addWidget(self.response_display)
 
         # --- ユーザー入力エリアと送信ボタン ---
-        input_area_layout = QHBoxLayout() # 水平レイアウトで入力欄と送信ボタンを配置
+        input_area_layout = QHBoxLayout()
         self.user_input = QTextEdit()
         self.user_input.setPlaceholderText("ここにメッセージを入力...")
-        self.user_input.setFixedHeight(100) # 高さを固定 (任意)
+        self.user_input.setFixedHeight(100)
         input_area_layout.addWidget(self.user_input)
+        self.user_input.installEventFilter(self)
 
         send_button = QPushButton("送信")
-        # send_button.setIcon(self.style().standardIcon(QStyle.SP_DialogOkButton)) # アイコン (任意)
         send_button.clicked.connect(self.on_send_button_clicked)
-        send_button.setFixedHeight(self.user_input.height()) # 入力欄の高さに合わせる
+        send_button.setFixedHeight(self.user_input.height())
         input_area_layout.addWidget(send_button)
-        left_layout.addLayout(input_area_layout) # 左メインレイアウトに追加
+        left_layout.addLayout(input_area_layout)
 
-        # --- ★★★ 送信履歴範囲設定スライダーを追加 ★★★ ---
-        history_slider_container = QWidget() # ラベルとスライダーをまとめるコンテナ
-        history_slider_layout = QHBoxLayout(history_slider_container) # 水平に配置
-        history_slider_layout.setContentsMargins(0, 5, 0, 5) # 上下のマージン
+        # --- ★★★ 送信履歴範囲 と 送信キー設定 を横並びにするためのレイアウト ★★★ ---
+        bottom_controls_layout = QHBoxLayout()
 
+        # --- 送信履歴範囲設定スライダー --- 
+        history_slider_container = QWidget()
+        history_slider_layout = QHBoxLayout(history_slider_container)
+        history_slider_layout.setContentsMargins(0, 5, 0, 5)
         self.history_slider_label = QLabel(f"送信履歴範囲: {self.current_history_range_for_prompt} ")
         history_slider_layout.addWidget(self.history_slider_label)
-
-        self.history_slider = QSlider(Qt.Horizontal) # 水平スライダー [1][5]
-        self.history_slider.setMinimum(0)  # 0往復 (履歴なし) から
-        self.history_slider.setMaximum(100) # 最大20往復 (任意で調整)
-        self.history_slider.setValue(self.current_history_range_for_prompt) # 初期値
-        # self.history_slider.setTickPosition(QSlider.TicksBelow) # 目盛りを下に表示 [1][5]
-        # self.history_slider.setTickInterval(5) # 5ごと (0, 5, 10, 15, 20) に目盛り [1][5]
-        self.history_slider.setSingleStep(1) # キー操作時のステップ
-        self.history_slider.setPageStep(5)  # PageUp/Down時のステップ
-        self.history_slider.setFixedWidth(200) # スライダーの幅を固定 (任意)
+        self.history_slider = QSlider(Qt.Horizontal)
+        self.history_slider.setMinimum(0)
+        self.history_slider.setMaximum(100)
+        self.history_slider.setValue(self.current_history_range_for_prompt)
+        self.history_slider.setFixedWidth(200)
         history_slider_layout.addWidget(self.history_slider)
-        history_slider_layout.addStretch() # 右側に余白を設ける
+        # history_slider_layout.addStretch() # ★★★ 不要なStretchを削除 ★★★
+        self.history_slider.valueChanged.connect(self._on_history_slider_changed)
+        bottom_controls_layout.addWidget(history_slider_container) # ★★★ 横並びレイアウトに追加 ★★★
 
-        self.history_slider.valueChanged.connect(self._on_history_slider_changed) # シグナル接続 [1][7]
+        # --- 送信キーモード選択ラジオボタン --- 
+        send_key_mode_group = QGroupBox() # ★★★ タイトルを削除 ★★★
+        send_key_mode_layout = QHBoxLayout(send_key_mode_group)
+        self.radio_send_on_enter = QRadioButton("Enterで送信 (Shift+Enterで改行)")
+        self.radio_send_on_enter.setChecked(self.send_on_enter_mode)
+        self.radio_send_on_enter.toggled.connect(lambda: self._update_send_key_mode(True))
+        send_key_mode_layout.addWidget(self.radio_send_on_enter)
+        self.radio_send_on_shift_enter = QRadioButton("Shift+Enterで送信 (Enterで改行)")
+        self.radio_send_on_shift_enter.setChecked(not self.send_on_enter_mode)
+        send_key_mode_layout.addWidget(self.radio_send_on_shift_enter)
+        bottom_controls_layout.addWidget(send_key_mode_group) # ★★★ 横並びレイアウトに追加 ★★★
         
-        left_layout.addWidget(history_slider_container) # 左メインレイアウトに追加
-        # --- ★★★ ------------------------------------ ★★★ ---
-
+        bottom_controls_layout.addStretch() # ★★★ 全体の一番右にStretchを追加 ★★★
+        left_layout.addLayout(bottom_controls_layout) # ★★★ 横並びレイアウトを左メインレイアウトに追加 ★★★
+        # --- ★★★ --------------------------------------------------------- ★★★ ---
 
         # --- 右側エリア (設定ボタン、サブプロンプト、データ管理) ---
         right_widget = QWidget()
@@ -1050,19 +1068,25 @@ class MainWindow(QWidget):
     def open_settings_dialog(self):
         """設定ダイアログを開き、結果を適用します。
         Chat Handler も必要に応じて再初期化します。
+        送信キーモードのUIも更新します。
         """
         dialog = SettingsDialog(self.global_config, self.current_project_settings, parent=self)
         if dialog.exec_() == QDialog.Accepted:
             updated_g_conf, updated_p_conf = dialog.get_updated_configs()
 
-            if self.global_config != updated_g_conf:
+            global_settings_changed = self.global_config != updated_g_conf # 更新前に比較
+            project_settings_changed = self.current_project_settings != updated_p_conf
+
+            if global_settings_changed:
                 self.global_config = updated_g_conf
                 save_global_config(self.global_config)
                 print("グローバル設定が更新・保存されました。")
+                # --- ★★★ グローバル設定変更時に送信キーモードUIを更新 ★★★ ---
+                self.send_on_enter_mode = self.global_config.get("send_on_enter_mode", True)
+                self.radio_send_on_enter.setChecked(self.send_on_enter_mode)
+                self.radio_send_on_shift_enter.setChecked(not self.send_on_enter_mode)
+                # --- ★★★ ------------------------------------------------- ★★★ ---
 
-            global_settings_changed = self.global_config != updated_g_conf
-            project_settings_changed = self.current_project_settings != updated_p_conf
-            if global_settings_changed: self.global_config = updated_g_conf; save_global_config(self.global_config)
 
             if project_settings_changed:
                 self.current_project_settings = updated_p_conf; save_project_settings(self.current_project_dir_name, self.current_project_settings)
@@ -1982,11 +2006,66 @@ class MainWindow(QWidget):
         
         super().closeEvent(event)
 
+    # --- ★★★ 新規: 送信キーモード更新用スロット ★★★ ---
+    def _update_send_key_mode(self, send_on_enter_selected: bool):
+        """送信キーモードのラジオボタンが変更されたときに呼び出されます。
+        グローバル設定を更新・保存します。
+        """
+        # QRadioButtonのtoggledシグナルは、チェックが外れたときも発行されるため、
+        # 実際にチェックされた方の状態をみて判定する
+        if self.radio_send_on_enter.isChecked() == send_on_enter_selected:
+            new_mode = send_on_enter_selected
+        else: # もう片方が選択されたはず
+            new_mode = not send_on_enter_selected
+            
+        if self.send_on_enter_mode != new_mode:
+            self.send_on_enter_mode = new_mode
+            self.global_config["send_on_enter_mode"] = self.send_on_enter_mode
+            if save_global_config(self.global_config):
+                print(f"送信キーモードを更新しました: {'Enterで送信' if self.send_on_enter_mode else 'Shift+Enterで送信'}")
+            else:
+                QMessageBox.warning(self, "設定保存エラー", "送信キーモード設定の保存に失敗しました。")
+    # --- ★★★ ------------------------------------------ ★★★ ---
+
+    # --- ★★★ 新規: イベントフィルターメソッド ★★★ ---
+    def eventFilter(self, obj, event: QEvent) -> bool:
+        """user_input QTextEdit のキーイベントを監視し、
+        設定に応じた送信/改行処理を行います。
+        """
+        if obj is self.user_input and event.type() == QEvent.KeyPress:
+            key_event = event # type: ignore (QKeyEventにキャストできるはず)
+            key = key_event.key()
+            modifiers = key_event.modifiers()
+
+            is_shift_pressed = bool(modifiers & Qt.ShiftModifier)
+
+            # Enterキー (ReturnまたはEnter)
+            if key == Qt.Key_Return or key == Qt.Key_Enter:
+                if self.send_on_enter_mode:
+                    if is_shift_pressed:
+                        # Enterで送信モード + Shiftキーあり => 改行
+                        # デフォルトのQTextEditの動作に任せる
+                        return super().eventFilter(obj, event)
+                    else:
+                        # Enterで送信モード + Shiftキーなし => 送信
+                        self.on_send_button_clicked()
+                        return True # イベントを消費 (改行させない)
+                else: # Shift+Enterで送信モード
+                    if is_shift_pressed:
+                        # Shift+Enterで送信モード + Shiftキーあり => 送信
+                        self.on_send_button_clicked()
+                        return True # イベントを消費 (改行させない)
+                    else:
+                        # Shift+Enterで送信モード + Shiftキーなし => 改行
+                        # デフォルトのQTextEditの動作に任せる
+                        return super().eventFilter(obj, event)
+            
+        return super().eventFilter(obj, event) # 他のイベントは基底クラスに任せる
+    # --- ★★★ ------------------------------------ ★★★ ---
+
 if __name__ == '__main__':
     """MainWindowの基本的な表示・インタラクションテスト。"""
     app = QApplication(sys.argv)
     main_win = MainWindow()
     main_win.show()
     sys.exit(app.exec_())
-
-
