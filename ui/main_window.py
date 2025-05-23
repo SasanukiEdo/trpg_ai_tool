@@ -1815,10 +1815,10 @@ class MainWindow(QWidget):
 
         # 2. サブプロンプトのチェック状態を更新
         #    まず全てのチェックを外し、その後セット内のものだけをチェック
-        self.uncheck_all_subprompts_in_tree() # まず全てのチェックを外す
+        self.uncheck_all_subprompts() # 修正: メソッド名を変更
         subprompts_to_check = set_data.get("subprompts", []) # ["Category1:SubpromptName1", ...]
         if subprompts_to_check:
-            self.check_subprompts_in_tree_by_full_names(subprompts_to_check)
+            self.check_subprompts_by_full_names(subprompts_to_check) # 修正: メソッド名を変更
 
         # 3. データアイテムのチェック状態を更新
         #    まず全てのチェックを外し、その後セット内のものだけをチェック
@@ -1891,58 +1891,68 @@ class MainWindow(QWidget):
     # --- ★★★ ------------------------------------------------- ★★★ ---
 
     # --- ★★★ サブプロンプトツリーウィジェット操作用メソッド ★★★ ---
-    def uncheck_all_subprompts_in_tree(self):
-        """サブプロンプトツリーウィジェットの全てのアイテムのチェックを外します。"""
-        if not hasattr(self, 'subprompt_tree_widget'): return
+    def uncheck_all_subprompts(self): # 旧: uncheck_all_subprompts_in_tree
+        """全てのサブプロンプトのチェックを外し、内部状態もクリアします。"""
+        if not hasattr(self, 'subprompt_tab_widget'): return
 
-        iterator = QTreeWidgetItemIterator(self.subprompt_tree_widget)
-        while iterator.value():
-            item = iterator.value()
-            # チェックボックスを持つアイテム（通常はサブプロンプト名アイテム）のみ操作
-            if item.flags() & Qt.ItemIsUserCheckable:
-                item.setCheckState(0, Qt.Unchecked) # 第0カラムのチェックを外す
-            iterator += 1
-        print("All subprompts unchecked in the tree widget.")
-        self.update_checked_subprompts() # チェック状態を内部変数にも反映
+        for i in range(self.subprompt_tab_widget.count()):
+            list_widget = self.subprompt_tab_widget.widget(i)
+            if isinstance(list_widget, QListWidget):
+                for j in range(list_widget.count()):
+                    container_item = list_widget.item(j)
+                    sub_item_widget = list_widget.itemWidget(container_item)
+                    if isinstance(sub_item_widget, SubPromptItemWidget):
+                        sub_item_widget.set_checked(False) # SubPromptItemWidgetのメソッドでチェックを外す
 
-    def check_subprompts_in_tree_by_full_names(self, full_names_to_check: List[str]):
-        """指定された "カテゴリ:名前" 形式のサブプロンプト名のリストに基づいて、
-        サブプロンプトツリーウィジェットの対応するアイテムにチェックを入れます。
+        self.checked_subprompts.clear() # 内部のチェック状態も全てクリア
+        print("All subprompts unchecked in UI and internal state.")
+        # 必要であれば、チェック状態変更を通知するシグナルなどを発行
+
+    def check_subprompts_by_full_names(self, full_names_to_check: List[str]): # 旧: check_subprompts_in_tree_by_full_names
+        """指定された \"カテゴリ:名前\" 形式のサブプロンプト名のリストに基づいて、
+        UIの対応するアイテムにチェックを入れ、内部状態も更新します。
+        このメソッドを呼ぶ前に uncheck_all_subprompts() で全解除推奨。
         """
-        if not hasattr(self, 'subprompt_tree_widget'): return
+        if not hasattr(self, 'subprompt_tab_widget'): return
         if not full_names_to_check: return
 
-        print(f"Checking subprompts in tree: {full_names_to_check}")
+        print(f"Checking subprompts in UI: {full_names_to_check}")
         checked_count = 0
+        
+        # uncheck_all_subprompts で self.checked_subprompts はクリアされている前提
+
         for full_name in full_names_to_check:
             parts = full_name.split(":", 1)
             category_name_to_find = parts[0]
             subprompt_name_to_find = parts[1] if len(parts) > 1 else None
 
-            if not subprompt_name_to_find: # "カテゴリ名" だけの場合は、そのカテゴリ全体をチェック？ 現状は無視
+            if not subprompt_name_to_find:
                 print(f"  Skipping invalid full_name (no subprompt name): {full_name}")
                 continue
 
-            # カテゴリアイテムを検索
-            category_items = self.subprompt_tree_widget.findItems(
-                category_name_to_find, Qt.MatchExactly | Qt.MatchRecursive, 0 # 第0カラムで検索
-            )
-            for cat_item in category_items:
-                # カテゴリアイテムの直接の子からサブプロンプト名を検索
-                for i in range(cat_item.childCount()):
-                    sub_item = cat_item.child(i)
-                    if sub_item.text(0) == subprompt_name_to_find:
-                        if sub_item.flags() & Qt.ItemIsUserCheckable:
-                            sub_item.setCheckState(0, Qt.Checked)
-                            checked_count += 1
-                            # print(f"  Checked: {category_name_to_find}:{subprompt_name_to_find}")
-                            break # 同じ名前のものが複数ある場合は最初の一つだけ (通常はないはず)
-                else: # for-else: break しなかった場合 (カテゴリ内で見つからなかった)
-                    continue
-                break # カテゴリが見つかり、その中でサブプロンプトも見つかったら次のfull_nameへ
+            found_category_tab = False
+            for i in range(self.subprompt_tab_widget.count()):
+                if self.subprompt_tab_widget.tabText(i) == category_name_to_find:
+                    list_widget = self.subprompt_tab_widget.widget(i)
+                    if isinstance(list_widget, QListWidget):
+                        found_category_tab = True
+                        for j in range(list_widget.count()):
+                            container_item = list_widget.item(j)
+                            sub_item_widget = list_widget.itemWidget(container_item)
+                            if isinstance(sub_item_widget, SubPromptItemWidget) and sub_item_widget.name == subprompt_name_to_find:
+                                sub_item_widget.set_checked(True) # SubPromptItemWidgetのメソッドでチェック
+                                # self.checked_subprompts も更新
+                                if category_name_to_find not in self.checked_subprompts:
+                                    self.checked_subprompts[category_name_to_find] = set()
+                                self.checked_subprompts[category_name_to_find].add(subprompt_name_to_find)
+                                checked_count += 1
+                                break 
+                        if found_category_tab: 
+                             break 
+            if not found_category_tab:
+                 print(f"  Warning: Category tab '{category_name_to_find}' not found for subprompt '{subprompt_name_to_find}'.")
         
-        print(f"  {checked_count} subprompts checked based on the list.")
-        self.update_checked_subprompts() # チェック状態を内部変数にも反映
+        print(f"  {checked_count} subprompts checked based on the list and internal state updated.")
     # --- ★★★ --------------------------------------------------- ★★★ ---
 
     def closeEvent(self, event):

@@ -87,7 +87,7 @@ class SubPromptEditDialog(QDialog):
         self.name_input = QLineEdit(initial_data.get("name", ""))
         layout.addRow("名前:", self.name_input)
 
-        self.prompt_input = QTextEdit(initial_data.get("prompt", ""))
+        self.prompt_input = QTextEdit(initial_data.get("prompt", "").replace("\n", "<br>"))
         self.prompt_input.setMinimumHeight(150)
         layout.addRow("プロンプト:", self.prompt_input)
 

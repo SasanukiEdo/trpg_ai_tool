@@ -123,7 +123,7 @@ class SettingsDialog(QDialog):
 
         self.project_system_prompt_input = QTextEdit(
             self.project_settings_edit.get("main_system_prompt",
-                                           DEFAULT_PROJECT_SETTINGS.get("main_system_prompt"))
+                                           DEFAULT_PROJECT_SETTINGS.get("main_system_prompt")).replace("\n", "<br>")
         )
         self.project_system_prompt_input.setMinimumHeight(100) # 少し小さく
         layout.addRow("メインシステムプロンプト:", self.project_system_prompt_input)
