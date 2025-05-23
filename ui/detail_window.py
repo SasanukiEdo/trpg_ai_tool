@@ -195,7 +195,15 @@ class DetailWindow(QWidget):
         name_label = QLabel("<b>名前:</b>"); name_edit = QLineEdit(self.item_data.get("name", "")); self.detail_widgets['name'] = name_edit; self.content_layout.addWidget(name_label); self.content_layout.addWidget(name_edit)
 
         # 説明/メモ
-        desc_label = QLabel("<b>説明/メモ:</b>"); desc_edit = QTextEdit(self.item_data.get("description", "").replace("\n", "<br>")); desc_edit.setMinimumHeight(150); desc_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding); self.detail_widgets['description'] = desc_edit; self.content_layout.addWidget(desc_label); self.content_layout.addWidget(desc_edit)
+        desc_label = QLabel("<b>説明/メモ:</b>")
+        desc_edit = QTextEdit() # まずインスタンスを作成
+        desc_edit.setPlainText(self.item_data.get("description", "")) # setPlainText で設定
+        desc_edit.setMinimumHeight(150)
+        desc_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.detail_widgets['description'] = desc_edit
+        self.content_layout.addWidget(desc_label)
+        self.content_layout.addWidget(desc_edit)
+
         ai_update_button = QPushButton("AIで「説明/メモ」を編集支援"); ai_update_button.clicked.connect(self._on_ai_update_description_clicked); self.content_layout.addWidget(ai_update_button)
 
         # 履歴
@@ -216,7 +224,11 @@ class DetailWindow(QWidget):
             for i, h_entry_dict in enumerate(history_entries):
                 entry_text_for_display = h_entry_dict.get('entry', '(内容なし)')
                 # タイムスタンプは表示しない、代わりに通し番号を表示
-                formatted_entry_text = entry_text_for_display.replace("\n", "<br>")
+                # formatted_entry_text = entry_text_for_display.replace("\n", "<br>") # 修正前コメントアウト
+                # 1. 半角スペースを &nbsp; に置換
+                temp_text = entry_text_for_display.replace(" ", "&nbsp;")
+                # 2. 改行を <br> に置換
+                formatted_entry_text = temp_text.replace("\n", "<br>") # ★★★ 修正箇所 ★★★
                 history_display_html += f"<b>({i + 1})</b> {formatted_entry_text}"
                 if i < len(history_entries) - 1: # 最後の要素以外には区切り線
                     history_display_html += "<hr>" # 区切り線

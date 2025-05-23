@@ -121,10 +121,11 @@ class SettingsDialog(QDialog):
             self.project_model_combo.setCurrentIndex(0)
         layout.addRow("プロジェクト使用モデル:", self.project_model_combo)
 
-        self.project_system_prompt_input = QTextEdit(
+        self.project_system_prompt_input = QTextEdit() # まずインスタンスを作成
+        self.project_system_prompt_input.setPlainText(
             self.project_settings_edit.get("main_system_prompt",
-                                           DEFAULT_PROJECT_SETTINGS.get("main_system_prompt")).replace("\n", "<br>")
-        )
+                                           DEFAULT_PROJECT_SETTINGS.get("main_system_prompt"))
+        ) # setPlainText で設定
         self.project_system_prompt_input.setMinimumHeight(100) # 少し小さく
         layout.addRow("メインシステムプロンプト:", self.project_system_prompt_input)
 
@@ -149,7 +150,8 @@ class SettingsDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addRow(button_box)
 
-        self.setMinimumWidth(600) # ダイアログの最小幅
+        self.setMinimumWidth(800) # ダイアログの最小幅
+        self.setMinimumHeight(550) # ★★★ 最小高さを設定 ★★★
 
     def _create_separator_line(self) -> QFrame:
         """設定セクション間の区切り線を作成して返します。"""

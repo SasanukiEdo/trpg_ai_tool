@@ -106,6 +106,7 @@ class DataItemWidget(QWidget):
         # self.checkbox.blockSignals(True)
         self.checkbox.setChecked(checked)
         # self.checkbox.blockSignals(False)
+        self.checkbox.repaint() # ★★★ update() から repaint() に変更 ★★★
 
     def is_checked(self) -> bool:
         """現在のチェックボックスの状態を返します。

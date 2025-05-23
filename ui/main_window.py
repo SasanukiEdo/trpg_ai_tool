@@ -671,6 +671,7 @@ class MainWindow(QWidget):
         # UI初期化後にプロジェクトコンボボックスを初期化・設定
         self._populate_project_selector()
         self._load_current_project_data()
+        self._load_quick_sets() # ★★★ ここでクイックセットを読み込む ★★★
 
     def _create_separator_line(self) -> QFrame:
         """設定セクション間の区切り線を作成して返します。"""

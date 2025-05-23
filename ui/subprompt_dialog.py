@@ -87,7 +87,8 @@ class SubPromptEditDialog(QDialog):
         self.name_input = QLineEdit(initial_data.get("name", ""))
         layout.addRow("名前:", self.name_input)
 
-        self.prompt_input = QTextEdit(initial_data.get("prompt", "").replace("\n", "<br>"))
+        self.prompt_input = QTextEdit()
+        self.prompt_input.setPlainText(initial_data.get("prompt", ""))
         self.prompt_input.setMinimumHeight(150)
         layout.addRow("プロンプト:", self.prompt_input)
 
@@ -114,7 +115,8 @@ class SubPromptEditDialog(QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addRow(button_box)
-        self.setMinimumWidth(450)
+        self.setMinimumWidth(800)
+        self.setMinimumHeight(600)
 
     def get_data(self) -> dict[str, str | list[str]]:
         """ダイアログで編集されたサブプロンプトのデータを取得します。

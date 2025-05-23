@@ -536,7 +536,7 @@ class DataManagementWidget(QWidget):
     def check_items_by_dict(self, items_to_check: Dict[str, List[str]]):
         """指定されたカテゴリとアイテムIDの辞書に基づいて、アイテムにチェックを入れます。
         このメソッドを呼び出す前に uncheck_all_items() で全てのチェックが
-        外されていることを前提とすることが多いです。
+        外されていることを前提とすることが多いです (MainWindow._apply_quick_set_to_ui参照)。
 
         Args:
             items_to_check (Dict[str, List[str]]): 
@@ -546,58 +546,59 @@ class DataManagementWidget(QWidget):
         if not hasattr(self, 'category_tab_widget'):
             print("DataManagementWidget: category_tab_widget not found, cannot check items.")
             return
+
+        print(f"DataManagementWidget: Starting check_items_by_dict with: {items_to_check}")
+
+        # 1. self.checked_data_items を items_to_check に基づいて更新する
+        #    uncheck_all_items() が事前に呼ばれているため、self.checked_data_items は空のはず。
+        self.checked_data_items.clear() #念のためクリア
+        for category_name, item_ids_in_cat in items_to_check.items():
+            if item_ids_in_cat: # チェックするアイテムIDリストが空でない場合のみ
+                # カテゴリタブが存在するか確認
+                category_tab_exists = False
+                for i in range(self.category_tab_widget.count()):
+                    if self.category_tab_widget.tabText(i) == category_name:
+                        category_tab_exists = True
+                        break
+                
+                if category_tab_exists:
+                    self.checked_data_items[category_name] = set(item_ids_in_cat)
+                else:
+                    print(f"  Warning: Category tab '{category_name}' not found. Cannot set checks for it.")
         
-        # items_to_check が空の場合でも、以前のチェック状態をクリアして通知する必要がある
-        self.checked_data_items.clear() 
+        print(f"  DataManagementWidget: self.checked_data_items updated to: {self.checked_data_items}")
 
-        if not items_to_check:
-            self._update_checked_items_signal() # 空の状態を通知
-            print("DataManagementWidget: No items to check, all checks cleared.")
-            return
+        # 2. 論理的なチェック状態の変更をシグナルで通知
+        self._update_checked_items_signal()
 
-        print(f"DataManagementWidget: Checking items by dict: {items_to_check}")
-        checked_count = 0
+        # 3. 影響があったカテゴリのUIを `refresh_item_list_for_category` で再構築
+        #    items_to_check.keys() に含まれるカテゴリをリフレッシュ対象とする。
+        #    (uncheck_all_items が呼ばれた後なので、元々チェックがあったが今回なくなったカテゴリも
+        #     uncheck_all_items のタイミングでチェックが外れ、その後にこのメソッドが呼ばれるため、
+        #     items_to_check.keys() のカテゴリだけをリフレッシュすれば良いという考え)
+        
+        categories_to_refresh_ui = set(items_to_check.keys())
+        refreshed_categories_count = 0
 
-        for category_name, item_ids_to_check in items_to_check.items():
-            tab_index = -1
+        print(f"  DataManagementWidget: Attempting to refresh UI for categories: {categories_to_refresh_ui}")
+        for category_name in categories_to_refresh_ui:
+            # カテゴリタブが存在するか再度確認
+            tab_found_for_refresh = False
             for i in range(self.category_tab_widget.count()):
                 if self.category_tab_widget.tabText(i) == category_name:
-                    tab_index = i
+                    print(f"    Refreshing item list UI for category '{category_name}'.")
+                    self.refresh_item_list_for_category(category_name)
+                    refreshed_categories_count +=1
+                    tab_found_for_refresh = True
                     break
-            
-            if tab_index == -1:
-                print(f"  Warning: Category tab '{category_name}' not found.")
-                continue
+            if not tab_found_for_refresh:
+                 print(f"    Warning: Category tab '{category_name}' not found during UI refresh phase for check_items_by_dict.")
 
-            tab_widget = self.category_tab_widget.widget(tab_index)
-            if isinstance(tab_widget, QListWidget):
-                list_widget = tab_widget
-                # カテゴリが存在し、チェック対象アイテムがある場合、そのカテゴリのチェック状態を初期化
-                current_category_checks = self.checked_data_items.setdefault(category_name, set())
-                current_category_checks.clear()
+        print(f"  DataManagementWidget: {refreshed_categories_count} category lists were explicitly refreshed.")
 
-                for j in range(list_widget.count()):
-                    list_item_q = list_widget.item(j)
-                    item_widget = list_widget.itemWidget(list_item_q)
-
-                    if isinstance(item_widget, DataItemWidget):
-                        item_id_in_list = item_widget.item_id
-                        if item_id_in_list in item_ids_to_check:
-                            item_widget.set_checked_state(True)
-                            current_category_checks.add(item_id_in_list)
-                            checked_count += 1
-                        else:
-                            item_widget.set_checked_state(False)
-
-        # 存在しないカテゴリが items_to_check に含まれていた場合、そのキーは checked_data_items に残らないようにする
-        # (setdefault で作られてしまう可能性があるため、実在するタブのカテゴリのみ保持)
-        active_categories_in_tabs = {self.category_tab_widget.tabText(i) for i in range(self.category_tab_widget.count())}
-        self.checked_data_items = {
-            cat: ids for cat, ids in self.checked_data_items.items() if cat in active_categories_in_tabs and ids
-        }
-
-        print(f"  DataManagementWidget: {checked_count} items checked based on the dict.")
-        self._update_checked_items_signal()
+        # 4. UIイベント処理を強制 (念のため)
+        QApplication.processEvents()
+        print("DataManagementWidget: check_items_by_dict finished and explicit UI refresh attempted.")
 
 
 if __name__ == '__main__':
