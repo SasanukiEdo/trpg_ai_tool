@@ -47,6 +47,7 @@ from core.api_key_manager import get_api_key as get_os_api_key # OS資格情報�
 from ui.settings_dialog import SettingsDialog
 from ui.subprompt_dialog import SubPromptEditDialog
 from ui.data_widget import DataManagementWidget
+from ui.prompt_preview_dialog import PromptPreviewDialog # ★ 追加
 
 # --- Gemini API ハンドラー ---
 from core.gemini_handler import GeminiChatHandler, configure_gemini_api, is_configured # クラスと関数をインポート
@@ -219,7 +220,17 @@ class MainWindow(QWidget):
         self.send_on_enter_mode: bool = True # デフォルトはEnterで送信
         # --- ★★★ --------------------------------- ★★★ ---
 
-        self._initialize_configs_and_project() # この中で current_project_settings がロードされる
+        # --- ★★★ 状態表示ラベルを追加 ★★★ ---
+        self.status_label = QLabel() # 状態表示用ラベル
+        # --- ★★★ ----------------------- ★★★ ---
+
+        # --- ★★★ 送信内容確認ボタン ★★★ ---
+        self.preview_prompt_button = QPushButton("送信内容確認")
+        self.preview_prompt_button.setToolTip("送信するプロンプトの最終形や設定を確認します。")
+        self.preview_prompt_button.clicked.connect(self._show_prompt_preview_dialog)
+        # --- ★★★ ----------------------- ★★★ ---
+
+        self._initialize_configs_and_project()
         self.configure_gemini_and_chat_handler()  # APIキー設定、必要ならハンドラ再設定
         
         # --- ★★★ 送信キーモードをグローバル設定から読み込み ★★★ ---
@@ -438,21 +449,27 @@ class MainWindow(QWidget):
             
         left_layout.addWidget(self.response_display)
 
-        # --- ユーザー入力エリアと送信ボタン ---
-        input_area_layout = QHBoxLayout()
+        # --- ★★★ 状態表示ラベルをレイアウトに追加 ★★★ ---
+        left_layout.addWidget(self.status_label) # response_display の下に配置
+        # --- ★★★ ---------------------------------- ★★★ ---
+
+        # --- メッセージ入力エリアと送信ボタン (元のシンプルな形に戻す) ---
+        input_area_layout = QHBoxLayout() # 水平レイアウトで入力と送信ボタンを横並び
         self.user_input = QTextEdit()
         self.user_input.setPlaceholderText("ここにメッセージを入力...")
-        self.user_input.setFixedHeight(100)
+        self.user_input.setAcceptRichText(False) # リッチテキストは無効
+        self.user_input.setFixedHeight(100) # 高さを固定
+        self.user_input.installEventFilter(self) # イベントフィルターでEnterキー処理
         input_area_layout.addWidget(self.user_input)
-        self.user_input.installEventFilter(self)
 
-        send_button = QPushButton("送信")
-        send_button.clicked.connect(self.on_send_button_clicked)
-        send_button.setFixedHeight(self.user_input.height())
-        input_area_layout.addWidget(send_button)
-        left_layout.addLayout(input_area_layout)
+        self.send_button = QPushButton("送信")
+        self.send_button.clicked.connect(self.on_send_button_clicked)
+        self.send_button.setFixedHeight(self.user_input.height()) # 入力欄の高さに合わせる
+        input_area_layout.addWidget(self.send_button)
+        left_layout.addLayout(input_area_layout) # 左側メインレイアウトに直接追加
 
-        # --- ★★★ 送信履歴範囲 と 送信キー設定 を横並びにするためのレイアウト ★★★ ---
+
+        # --- 送信履歴範囲、送信キーモード、送信内容確認ボタンをまとめるレイアウト ---
         bottom_controls_layout = QHBoxLayout()
 
         # --- 送信履歴範囲設定スライダー --- 
@@ -467,12 +484,11 @@ class MainWindow(QWidget):
         self.history_slider.setValue(self.current_history_range_for_prompt)
         self.history_slider.setFixedWidth(200)
         history_slider_layout.addWidget(self.history_slider)
-        # history_slider_layout.addStretch() # ★★★ 不要なStretchを削除 ★★★
         self.history_slider.valueChanged.connect(self._on_history_slider_changed)
-        bottom_controls_layout.addWidget(history_slider_container) # ★★★ 横並びレイアウトに追加 ★★★
+        bottom_controls_layout.addWidget(history_slider_container)
 
         # --- 送信キーモード選択ラジオボタン --- 
-        send_key_mode_group = QGroupBox() # ★★★ タイトルを削除 ★★★
+        send_key_mode_group = QGroupBox() # グループボックスのタイトルは不要なので削除
         send_key_mode_layout = QHBoxLayout(send_key_mode_group)
         self.radio_send_on_enter = QRadioButton("Enterで送信 (Shift+Enterで改行)")
         self.radio_send_on_enter.setChecked(self.send_on_enter_mode)
@@ -481,10 +497,13 @@ class MainWindow(QWidget):
         self.radio_send_on_shift_enter = QRadioButton("Shift+Enterで送信 (Enterで改行)")
         self.radio_send_on_shift_enter.setChecked(not self.send_on_enter_mode)
         send_key_mode_layout.addWidget(self.radio_send_on_shift_enter)
-        bottom_controls_layout.addWidget(send_key_mode_group) # ★★★ 横並びレイアウトに追加 ★★★
+        bottom_controls_layout.addWidget(send_key_mode_group)
         
-        bottom_controls_layout.addStretch() # ★★★ 全体の一番右にStretchを追加 ★★★
-        left_layout.addLayout(bottom_controls_layout) # ★★★ 横並びレイアウトを左メインレイアウトに追加 ★★★
+        # --- 送信内容確認ボタンを右端に追加 ---
+        bottom_controls_layout.addStretch(1) # ★ 確認ボタンの前にスペーサーを配置して右寄せ
+        bottom_controls_layout.addWidget(self.preview_prompt_button) # ★ 確認ボタンをここに追加
+
+        left_layout.addLayout(bottom_controls_layout) # このコントロール群を左側メインレイアウトに追加
         # --- ★★★ --------------------------------------------------------- ★★★ ---
 
         # --- 右側エリア (設定ボタン、サブプロンプト、データ管理) ---
@@ -1105,16 +1124,25 @@ class MainWindow(QWidget):
             print("設定ダイアログの変更が適用されました。")
 
     def on_send_button_clicked(self):
-        """「送信」ボタンがクリックされたときの処理。
-        GeminiChatHandler を使用してAIに応答を要求します。
-        チェックされたサブプロンプト、データアイテム、およびタグ検索に基づいた情報をプロンプトに組み込みます。
+        """ユーザー入力と選択されたコンテキスト情報を元に、AIにメッセージを送信し、応答を表示します。
+        送信前にAPIキーの確認とChat Handlerの初期化を行います。
+        応答やエラーは response_display に追記・表示されます。
         """
-        print(f"is_configured(): {is_configured()}")
-        print(f"self.chat_handler: {self.chat_handler}")
-        print(f"self.chat_handler._model: {self.chat_handler._model}")
+        print("--- MainWindow: Send button clicked ---")
+        
+        # --- ★★★ 状態表示を更新: 処理開始 ★★★ ---
+        self.status_label.setText("AI応答を待っています...")
+        QApplication.processEvents() # UIの更新を即座に反映
+        # --- ★★★ ----------------------------- ★★★ ---
 
-        if not is_configured() or not self.chat_handler or not self.chat_handler._model: # API未設定またはハンドラ未初期化
-            QMessageBox.warning(self, "API/モデル未設定", "Gemini APIが設定されていないか、AIモデルの準備ができていません。「設定」を確認してください。")
+        # APIキーが設定されているか、再度確認
+        if not is_configured():
+            QMessageBox.warning(self, "API未設定", "Gemini APIが設定されていません。「設定」を確認してください。")
+            return
+
+        # Chat Handlerが初期化されているか、再度確認
+        if not self.chat_handler:
+            QMessageBox.warning(self, "Chat Handler未初期化", "Chat Handlerが初期化されていません。「設定」を確認してください。")
             return
 
         user_text = self.user_input.toPlainText().strip()
@@ -1238,7 +1266,14 @@ class MainWindow(QWidget):
             # _redisplay_chat_history で表示するようにしても良い。
             # ここでは、簡潔さのため、エラーは直接 append する。
             self.response_display.append(f"<div style='color: red;'><b>エラー:</b> {error_message}</div><br>")
-        
+            # --- ★★★ 状態表示を更新: エラー発生 ★★★ ---
+            self.status_label.setText(f"<font color='red'>エラー: {error_message}</font>")
+            # --- ★★★ ----------------------------- ★★★ ---
+        else:
+            # --- ★★★ 状態表示を更新: 応答完了 ★★★ ---
+            self.status_label.setText("<font color='green'>応答を受信しました。</font>")
+            # --- ★★★ ----------------------------- ★★★ ---
+
         # 正常応答・エラーなし応答の場合、_pure_chat_history が更新されているので再表示
         self._redisplay_chat_history() # ★★★ ここで全体を再描画 ★★★
         # --- ★★★ --------------------------------------------- ★★★ ---
@@ -2002,6 +2037,100 @@ class MainWindow(QWidget):
         self.item_history_length_for_prompt = value
         self.item_history_slider_label.setText(f"アイテム履歴の送信数: {value} ")
     # --- ★★★ ----------------------------------------------------- ★★★ ---
+
+    # --- ★★★ 新しいヘルパーメソッド: プレビュー用の一時コンテキスト取得 ★★★ ---
+    def _get_combined_checked_subprompts_text(self) -> str:
+        """チェックされているサブプロンプトの内容を結合して単一の文字列として返します。"""
+        transient_context = ""
+        # カテゴリの表示順を固定するために、self.subpromptsのキーの順序で処理
+        sorted_categories = sorted(self.subprompts.keys())
+
+        for category in sorted_categories:
+            if category in self.checked_subprompts and category in self.subprompts:
+                # サブプロンプト名の表示順も固定するためにソート
+                sorted_names = sorted(list(self.checked_subprompts[category]))
+                for name in sorted_names:
+                    if name in self.subprompts[category]:
+                        prompt_data = self.subprompts[category][name]
+                        prompt_text = prompt_data.get("prompt", "")
+                        # prompt_model = prompt_data.get("model") # プレビューではモデル名は表示するが、結合時には考慮しない
+                        if prompt_text:
+                            transient_context += f"--- {category} / {name} ---\\n{prompt_text}\\n\\n"
+        return transient_context.strip()
+    # --- ★★★ ------------------------------------------------------- ★★★ ---
+
+    # --- ★★★ 新しいヘルパーメソッド: プレビュー用の履歴取得 ★★★ ---
+    def _get_history_for_preview(self) -> List[Dict[str, any]]:
+        """プレビューダイアログ用に、現在の履歴設定に基づいた会話履歴のリストを返します。
+        GeminiChatHandlerから純粋な履歴を取得し、設定された範囲で切り詰めます。
+        形式: [{'role': 'user'/'model', 'parts': [{'text': ...}]}, ...]
+        """
+        if not self.chat_handler:
+            return []
+
+        pure_history = self.chat_handler.get_pure_chat_history()
+        
+        # current_history_range_for_prompt (往復数) に基づいて履歴を切り詰める
+        # 1往復 = 2メッセージ (user, model)
+        num_messages_to_keep = self.current_history_range_for_prompt * 2
+        
+        if self.current_history_range_for_prompt >= 0 and len(pure_history) > num_messages_to_keep:
+            return pure_history[-num_messages_to_keep:]
+        elif self.current_history_range_for_prompt < 0: # 履歴なしの場合
+            return []
+        else:
+            return pure_history # 全履歴または指定範囲内
+    # --- ★★★ ------------------------------------------------ ★★★ ---
+
+    # --- ★★★ 送信内容確認ダイアログ表示メソッド ★★★ ---
+    def _show_prompt_preview_dialog(self):
+        """送信内容確認ダイアログを表示します。"""
+        if not self.chat_handler:
+            QMessageBox.warning(self, "エラー", "チャットハンドラが初期化されていません。")
+            return
+
+        model_name = self.chat_handler.model_name
+        system_prompt = self.system_prompt_input_main.toPlainText().strip() # これはモデル初期化時の参考
+        transient_context = self._get_combined_checked_subprompts_text()
+        user_input = self.user_input.toPlainText().strip()
+        
+        # ダイアログのAPIプレビューで表示する「メッセージ本体」のために結合しておく
+        # 実際の送信では、transient_context と user_input は結合されて chat_handler.send_message_with_context に渡される
+        full_prompt_for_preview = ""
+        if transient_context:
+            full_prompt_for_preview += transient_context
+        if user_input:
+            if full_prompt_for_preview: # 既にコンテキストがあれば改行を挟む
+                full_prompt_for_preview += "\n\n" # プレビューなので分かりやすく2重改行
+            full_prompt_for_preview += user_input
+        
+        history_for_preview = self._get_history_for_preview() # 送信対象の全履歴
+        
+        generation_config = self.chat_handler.get_generation_config() or {}
+        safety_settings_raw = self.chat_handler.get_safety_settings() or []
+        
+        safety_settings_for_display = []
+        for setting in safety_settings_raw:
+            category_enum = setting.get("category")
+            threshold_enum = setting.get("threshold")
+            safety_settings_for_display.append({
+                "category": category_enum.name if hasattr(category_enum, 'name') else str(category_enum),
+                "threshold": threshold_enum.name if hasattr(threshold_enum, 'name') else str(threshold_enum)
+            })
+
+        dialog = PromptPreviewDialog(self)
+        dialog.update_preview(
+            model_name=model_name,
+            system_prompt=system_prompt, 
+            transient_context=transient_context, # 個別のコンテキストも渡す
+            user_input=user_input,               # 個別のユーザー入力も渡す
+            full_prompt=full_prompt_for_preview, # 結合したものをAPIプレビューのメッセージ部用として渡す
+            history=history_for_preview,
+            generation_config=generation_config,
+            safety_settings=safety_settings_for_display
+        )
+        dialog.exec_()
+    # --- ★★★ ------------------------------------ ★★★ ---
 
 if __name__ == '__main__':
     """MainWindowの基本的な表示・インタラクションテスト。"""
