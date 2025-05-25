@@ -1,0 +1,68 @@
+{
+  "slot_0": {
+    "name": "冒険者ギルドに行く",
+    "message_template": "冒険者ギルドに行く",
+    "subprompts": [
+      "一般:基本ルール・制限事項",
+      "場所:冒険者ギルド"
+    ],
+    "data_items": {
+      "キャラクター": [
+        "e0a35e4e-5f69-4b0d-a8a6-667ea648aa79",
+        "16b282f1-dd3e-4cf4-96f8-ceff30ad348c",
+        "a3f7b82d-5846-483c-8155-80c5a1833a7f"
+      ]
+    }
+  },
+  "slot_1": {
+    "name": "ダンジョンに行く",
+    "message_template": "ダンジョンに行く",
+    "subprompts": [
+      "一般:ダンジョン探索",
+      "一般:基本ルール・制限事項"
+    ],
+    "data_items": {
+      "キャラクター": [
+        "e0a35e4e-5f69-4b0d-a8a6-667ea648aa79",
+        "a3f7b82d-5846-483c-8155-80c5a1833a7f"
+      ]
+    }
+  },
+  "slot_2": {
+    "name": "酒場に行く",
+    "message_template": "酒場に行く",
+    "subprompts": [
+      "一般:基本ルール・制限事項",
+      "場所:酒場"
+    ],
+    "data_items": {
+      "キャラクター": [
+        "e0a35e4e-5f69-4b0d-a8a6-667ea648aa79",
+        "6705521c-3210-45f9-81aa-efca8b812f30",
+        "fb026a33-095f-4ca0-b014-19e34ac0e564",
+        "a3f7b82d-5846-483c-8155-80c5a1833a7f"
+      ]
+    }
+  },
+  "slot_3": {
+    "name": "娼館に行く",
+    "message_template": "娼館に行く",
+    "subprompts": [
+      "一般:エッチシーン",
+      "一般:基本ルール・制限事項",
+      "場所:娼館"
+    ],
+    "data_items": {
+      "キャラクター": [
+        "e0a35e4e-5f69-4b0d-a8a6-667ea648aa79",
+        "a3f7b82d-5846-483c-8155-80c5a1833a7f"
+      ]
+    }
+  },
+  "slot_4": null,
+  "slot_5": null,
+  "slot_6": null,
+  "slot_7": null,
+  "slot_8": null,
+  "slot_9": null
+}

@@ -255,23 +255,33 @@ class GeminiChatHandler:
 
 
         # --- ★★★ 送信する履歴をスライス ★★★ ---
-        history_for_api = self._pure_chat_history
+        history_for_api_raw = self._pure_chat_history
         if max_history_pairs is not None:
             if max_history_pairs == 0:
-                history_for_api = [] # 履歴なし
+                history_for_api_raw = [] # 履歴なし
                 print("  履歴はありません (max_history_pairs is 0).")
             elif max_history_pairs > 0:
                 num_messages_to_send = max_history_pairs * 2 # 1往復 = 2メッセージ (user, model)
-                history_for_api = self._pure_chat_history[-num_messages_to_send:] # 末尾から取得
-                print(f"  送信履歴：最後から {len(history_for_api)} messages (max_history_pairs: {max_history_pairs}).")
+                history_for_api_raw = self._pure_chat_history[-num_messages_to_send:] # 末尾から取得
+                print(f"  送信履歴：最後から {len(history_for_api_raw)} messages (max_history_pairs: {max_history_pairs}).")
             # else: max_history_pairs が負の場合は全ての履歴 (現状は考慮しない)
         else: # max_history_pairs is None
-            print(f"  全ての履歴を送信 ({len(history_for_api)} messages).")
+            print(f"  全ての履歴を送信 ({len(history_for_api_raw)} messages).")
+
+        # APIに送信する履歴から 'usage' フィールドを削除
+        history_for_api = []
+        for entry in history_for_api_raw:
+            # 'usage' フィールドが存在する場合、それ以外のフィールドで新しい辞書を作成
+            if 'usage' in entry:
+                history_for_api.append({k: v for k, v in entry.items() if k != 'usage'})
+            else:
+                history_for_api.append(entry)
         # --- ★★★ ------------------------- ★★★ ---
 
         try:
-            print(f"Starting new chat session with history (length for API: {len(history_for_api)}, total pure: {len(self._pure_chat_history)})")
-            self._chat_session = self._model.start_chat(history=history_for_api) # ★ スライスした履歴を使用
+            print(f"Starting new chat session with history (length for API: {len(history_for_api)}, total pure: {len(self._pure_chat_history)})\n"
+                  f"Sample history entry for API (first if exists): {history_for_api[0] if history_for_api else 'N/A'}")
+            self._chat_session = self._model.start_chat(history=history_for_api) # ★ スライスし、usageを除外した履歴を使用
         except Exception as e: print(f"Error starting chat session: {e}"); self._chat_session = None
 
     def send_message_with_context(self, 
@@ -292,36 +302,28 @@ class GeminiChatHandler:
                                                            Noneの場合は全ての履歴を送信。
         """
         if not self._model:
-            # APIキー未設定などでモデルが初期化されていない場合
-            # configure_gemini_api の呼び出しを MainWindow 側で行うように促す
             api_configured = is_configured()
             if not api_configured:
                 return None, "Gemini APIが設定されていません。「設定」からAPIキーを再設定してください。"
-            
-            # モデルがない場合は、現在の設定で再初期化を試みる
             print("send_message_with_context: Model not found, attempting to re-initialize model and chat session.")
-            self._initialize_model(self._system_instruction_text) # 現在のシステム指示でモデル初期化
-            if not self._model: # それでもダメならエラー
+            self._initialize_model(self._system_instruction_text)
+            if not self._model:
                 return None, "チャットセッションを開始できません: モデルの初期化に失敗しました。"
         
-        # --- ★★★ 毎回 start_new_chat_session を呼び出し、最新の履歴範囲を適用 ★★★ ---
-        # これにより、start_new_chat_session 内のデバッグログも毎回表示されるはず。
-        # keep_history=True で現在の純粋履歴を維持し、max_history_pairs を渡す。
         self.start_new_chat_session(
-            keep_history=True, 
-            system_instruction_text=self._system_instruction_text, # 現在のシステム指示を維持
-            load_from_file_if_empty=False, # 既にロード済みのはずなので不要
-            max_history_pairs=max_history_pairs_for_this_turn # ★ 渡された履歴範囲を使用
+            keep_history=True,
+            system_instruction_text=self._system_instruction_text,
+            load_from_file_if_empty=False,
+            max_history_pairs=max_history_pairs_for_this_turn
         )
-        # --- ★★★ -------------------------------------------------------------- ★★★ ---
 
-        if not self._chat_session: # start_new_chat_session でセッション開始に失敗した場合
+        if not self._chat_session:
              return None, "チャットセッションの開始に失敗しました (send_message内)。"
 
         full_message_to_send = ""
         if transient_context and transient_context.strip():
-            full_message_to_send += f"{transient_context.strip()}\n\n"
-        full_message_to_send += f"## ユーザーの入力:\n{user_input.strip()}"
+            full_message_to_send += f"{transient_context.strip()}\\n\\n"
+        full_message_to_send += f"## ユーザーの入力:\\n{user_input.strip()}"
 
         print(f"Sending message to Gemini (total length approx {len(full_message_to_send)} chars).")
         
@@ -329,14 +331,46 @@ class GeminiChatHandler:
             response = self._chat_session.send_message(full_message_to_send)
             ai_response_text = response.text
 
+            # --- ★★★ トークン使用量情報を取得・保存 ★★★ ---
+            input_tokens = 0
+            output_tokens = 0
+            if hasattr(response, 'usage_metadata'):
+                # 新しいAPI (例: >= 0.7.0)
+                if response.usage_metadata: # Noneでないことを確認
+                    input_tokens = response.usage_metadata.prompt_token_count
+                    output_tokens = response.usage_metadata.candidates_token_count
+                    print(f"  Token usage: Input={input_tokens}, Output={output_tokens} (from usage_metadata)")
+            elif hasattr(response, 'prompt_feedback') and hasattr(response.candidates[0], 'token_count') and response.prompt_feedback is None:
+                # 古いAPIや特定の状況でのフォールバック (あくまで推測)
+                # この部分はAPIの正確な仕様に基づいて調整が必要
+                # prompt_feedback が None で、candidates[0].token_count が出力トークン数を指す場合を想定
+                # 入力トークン数はこの形式では直接取れないことが多い
+                # usage_metadata がない場合に警告を出すなど、より堅牢なエラー処理が必要
+                print("  Warning: response.usage_metadata not found. Attempting to get output tokens from response.candidates[0].token_count. Input tokens will be 0.")
+                if response.candidates and hasattr(response.candidates[0], 'token_count'):
+                     output_tokens = response.candidates[0].token_count
+                     print(f"  Token usage (fallback): Output={output_tokens} (Input tokens not directly available)")
+            else:
+                 print("  Warning: Could not retrieve token usage information from the response.")
+
+            usage_info = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+            # --- ★★★ ------------------------------------ ★★★ ---
+
             self._pure_chat_history.append({'role': 'user', 'parts': [{'text': user_input.strip()}]})
-            self._pure_chat_history.append({'role': 'model', 'parts': [{'text': ai_response_text.strip()}]})
+            # --- ★★★ AIの履歴エントリに usage_info を追加 ★★★ ---
+            self._pure_chat_history.append({
+                'role': 'model', 
+                'parts': [{'text': ai_response_text.strip()}],
+                'usage': usage_info # ★★★ 追加 ★★★
+            })
+            # --- ★★★ --------------------------------------- ★★★ ---
             print(f"  AI Response received. Pure history length: {len(self._pure_chat_history)}")
             self._save_history_to_file()
             
             return ai_response_text, None
         except Exception as e:
             print(f"Error sending message or receiving response from Gemini: {e}")
+            # エラー時にもユーザー入力は履歴に残すか検討 (現在は残していない)
             return None, str(e)
 
     def get_pure_chat_history(self) -> List[Dict[str, Union[str, List[Dict[str, str]]]]]:

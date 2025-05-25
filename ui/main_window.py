@@ -1264,179 +1264,72 @@ class MainWindow(QWidget):
         
         html_parts = []
 
-        for index, message in enumerate(history_to_display):
-            role = message.get("role")
+        for index, message_dict in enumerate(history_to_display): # ★★★ 変数名を message_dict に変更 ★★★
+            role = message_dict.get("role") # ★★★ message_dict から取得 ★★★
             text_content = ""
-            if message.get("parts") and isinstance(message["parts"], list) and len(message["parts"]) > 0:
-                part = message["parts"][0]
+            # ★★★ message_dict から parts を取得 ★★★
+            if message_dict.get("parts") and isinstance(message_dict["parts"], list) and len(message_dict["parts"]) > 0:
+                part = message_dict["parts"][0]
                 if isinstance(part, dict) and "text" in part:
                     text_content = part["text"]
                 elif isinstance(part, str):
                     text_content = part
             
-            if not text_content: continue
+            if not text_content and role != 'model': # modelロールはusageだけでも表示する可能性があるのでスキップしない
+                 if not (role == 'model' and message_dict.get('usage')):
+                      continue
 
-            # --- ★★★ ヘルパー関数でHTMLを生成 ★★★ ---
             model_name_for_entry = None
-            if role == "model" and self.chat_handler: # AI応答ならモデル名を取得
-                # API応答自体にモデル名が含まれていればそれを使うのが理想だが、
-                # 今は chat_handler が保持する現在のモデル名を使う
+            if role == "model" and self.chat_handler:
                 model_name_for_entry = self.chat_handler.model_name 
             
+            # ★★★ _format_history_entry_to_html に message_dict 全体を渡す ★★★
             entry_html = self._format_history_entry_to_html(
-                index, role, text_content, model_name_for_entry
+                index, message_dict, model_name_for_entry 
             )
             html_parts.append(entry_html)
-            # --- ★★★ ----------------------------- ★★★ ---
         
         self.response_display.setHtml("".join(html_parts))
         
-        # --- ★★★ 表示後、一番下にスクロール ★★★ ---
-        # 方法1: カーソルを最後に移動して表示 [1][5]
-        # self.response_display.moveCursor(QTextCursor.End) 
-        # self.response_display.ensureCursorVisible() # これでも良いが、setValueの方が確実な場合もある
-
-        # 方法2: スクロールバーを直接操作 [1][5] (より確実性が高い場合がある)
         scroll_bar = self.response_display.verticalScrollBar()
         scroll_bar.setValue(scroll_bar.maximum())
-        # --- ★★★ ----------------------------- ★★★ ---
     
 
-    # --- ★★★ ---------------------------------------------------- ★★★ ---
-
-    # --- ★★★ 新規: 直近の会話履歴をプロンプト用文字列として整形して返すメソッド ★★★ ---
-    def get_recent_chat_history_as_string(self, max_pairs: int = 3) -> str:
-        """現在のチャット履歴から、直近のN往復分の会話を抽出し、
-        プロンプトに含めるための文字列として整形して返します。
-
-        Args:
-            max_pairs (int): 含める会話の最大往復数 (user + model のペア)。
-
-        Returns:
-            str: 整形された会話履歴文字列。
-                 履歴がない場合は空文字列を返します。
-        """
-        if not self.chat_handler:
-            return "" # ハンドラがなければ空文字列
-
-        pure_history = self.chat_handler.get_pure_chat_history()
-        if not pure_history:
-            return "" # 履歴がなければ空文字列
-
-        # 履歴をスライス (末尾から max_pairs * 2 個)
-        num_messages = max_pairs * 2
-        recent_history = pure_history[-num_messages:] # スライス
-        
-        if not recent_history:
-            return ""
-
-        # StringBuilder 的な使い方 (結合処理)
-        history_text_parts = []
-        for message in recent_history:
-            role = message.get("role")
-            text_content = ""
-            if message.get("parts") and isinstance(message["parts"], list) and len(message["parts"]) > 0:
-                part = message["parts"][0]
-                if isinstance(part, dict) and "text" in part:
-                    text_content = part["text"]
-                elif isinstance(part, str):
-                    text_content = part # parts が str の場合も考慮
-            
-            if not text_content: continue # 内容が空ならスキップ
-
-            # 役割に応じたプレフィックス
-            if role == "user":
-                prefix = "あなた:"
-            elif role == "model":
-                model_name = self.chat_handler.model_name if self.chat_handler else "AI"
-                prefix = f"Gemini ({model_name}):"
-            else:
-                prefix = f"{role or '不明'}:"
-            
-            # エスケープ処理は不要 (QTextBrowser に表示するわけではない)
-            history_text_parts.append(f"{prefix} {text_content}")
-
-        # 履歴を結合
-        history_text = "\n".join(history_text_parts)
-        print(f"  Returning recent chat history (length: {len(recent_history)} messages, {max_pairs} pairs) as string (char length: {len(history_text)}).")
-        return history_text # 完成した文字列を返す
-    # --- ★★★ ------------------------------------------------------------------ ★★★ ---
-
-
-    # --- ★★★ 新規: 送信履歴範囲スライダーの値変更時のスロット ★★★ ---
-    def _on_history_slider_changed(self, value: int):
-        """送信履歴範囲スライダーの値が変更されたときに呼び出されます。
-        ラベル表示と内部変数を更新します。
-
-        Args:
-            value (int): スライダーの新しい値。
-        """
-        self.current_history_range_for_prompt = value
-        self.history_slider_label.setText(f"送信履歴範囲: {value} ")
-        # 将来的には、この値をプロジェクト設定に保存する処理をここに追加しても良い
-    # --- ★★★ -------------------------------------------------- ★★★ ---
-
-    # --- ★★★ 新規: アイテム履歴数スライダーの値変更時のスロット ★★★ ---
-    def _on_item_history_slider_changed(self, value: int):
-        """アイテム履歴表示数スライダーの値が変更されたときに呼び出されます。
-        ラベル表示と内部変数を更新します。
-
-        Args:
-            value (int): スライダーの新しい値。
-        """
-        self.item_history_length_for_prompt = value
-        self.item_history_slider_label.setText(f"アイテム履歴の送信数: {value} ")
-    # --- ★★★ ----------------------------------------------------- ★★★ ---
-
-    # --- ★★★ 新規: AI応答履歴スクロール用スロットメソッド ★★★ ---
-    def _scroll_history_to_top(self):
-        """AI応答履歴表示エリアを一番上にスクロールします。"""
-        if hasattr(self, 'response_display') and self.response_display:
-            scroll_bar = self.response_display.verticalScrollBar()
-            scroll_bar.setValue(scroll_bar.minimum()) # 最小値に設定 [1][5]
-            print("Scrolled history to top.")
-
-    def _scroll_history_to_bottom(self):
-        """AI応答履歴表示エリアを一番下にスクロールします。"""
-        if hasattr(self, 'response_display') and self.response_display:
-            # 方法1: スクロールバー直接操作
-            scroll_bar = self.response_display.verticalScrollBar()
-            scroll_bar.setValue(scroll_bar.maximum()) # 最大値に設定 [1][5]
-            
-            # 方法2: カーソル移動 (こちらも有効)
-            # self.response_display.moveCursor(QTextCursor.End)
-            # self.response_display.ensureCursorVisible()
-            print("Scrolled history to bottom.")
-    # --- ★★★ ------------------------------------------------ ★★★ ---
-
-
     # --- ★★★ 新規: 履歴エントリをHTMLに整形するヘルパー関数 ★★★ ---
-    def _format_history_entry_to_html(self, index: int, role: str, text_content: str, model_name: Optional[str] = None) -> str:
+    # ★★★ 引数を変更: text_content の代わりに message_dict を受け取る ★★★
+    def _format_history_entry_to_html(self, index: int, message_data: dict, model_name: Optional[str] = None) -> str:
         """指定された履歴エントリの情報を、編集・削除リンク付きのHTML文字列に整形します。
         スタイルは外部CSSファイルで定義されたクラスに依存します。
+        AI応答の場合、トークン情報も表示します。
 
         Args:
             index (int): 履歴リスト内でのインデックス。
-            role (str): 発言者のロール ('user' または 'model')。
-            text_content (str): 発言のテキスト内容。
+            message_data (dict): 履歴エントリの辞書データ。
+                                 ('role', 'parts', オプションで 'usage' を含む)
             model_name (str, optional): AIの応答の場合、使用されたモデル名。
 
         Returns:
             str: 整形されたHTML文字列。
         """
-        # HTMLエスケープ (基本的なものだけ)
-        # より堅牢にするには、適切なライブラリ（例: bleach）を使うか、
-        # Qtの機能（例: Qt.convertFromPlainText でエスケープするなど）を検討
+        role = message_data.get("role")
+        text_content = ""
+        if message_data.get("parts") and isinstance(message_data["parts"], list) and len(message_data["parts"]) > 0:
+            part = message_data["parts"][0]
+            if isinstance(part, dict) and "text" in part:
+                text_content = part["text"]
+            elif isinstance(part, str):
+                text_content = part
+
         escaped_text = text_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
 
-        # アクションリンクの生成
         edit_link = f'<a class="action-link" href="edit:{index}:{role}">[編集]</a>'
         delete_link = f'<a class="action-link" href="delete:{index}:{role}">[削除]</a>'
         actions_span = f'{edit_link} {delete_link}'
 
-        # エントリ全体のHTML
         entry_class = "history-entry "
         display_role_name = ""
+        token_info_html = "" # ★★★ トークン情報用HTML ★★★
+
         if role == "user":
             entry_class += "user-entry"
             display_role_name = f"あなた ({index + 1})"
@@ -1444,18 +1337,24 @@ class MainWindow(QWidget):
             entry_class += "model-entry"
             model_name_display = model_name if model_name else (self.chat_handler.model_name if self.chat_handler else "AI")
             display_role_name = f"Gemini ({model_name_display}, {index + 1})"
+            # --- ★★★ トークン情報を取得してHTMLに追加 ★★★ ---
+            usage_data = message_data.get("usage")
+            if isinstance(usage_data, dict):
+                input_tokens = usage_data.get("input_tokens", 0)
+                output_tokens = usage_data.get("output_tokens", 0)
+                if input_tokens is not None and output_tokens is not None: # 両方ある場合のみ表示
+                    token_info_html = f'<span class="token-info">(In: {input_tokens}, Out: {output_tokens} トークン)</span>'
+            # --- ★★★ ------------------------------------ ★★★ ---
         else:
             display_role_name = f"{role or '不明'} ({index + 1})"
 
         html_output = f'<div class="{entry_class}">'
-        html_output += f'<div class="name-container">{display_role_name}:</div>'
+        # ★★★ 表示ロール名とトークン情報を横並びにする ★★★
+        html_output += f'<div class="name-container">{display_role_name} {token_info_html}</div>' 
         html_output += f'<div class="comment-container">{escaped_text}</div>'
         html_output += f'<div class="actions-container">{actions_span}</div>'
-        # html_output += f"<b>{display_role_name}:</b>{actions_span}<br>{escaped_text}"
-        html_output += '<hr class="separator">' # 区切り線もクラスでスタイル指定
-        html_output += '</div>'
+        html_output += '<hr class="separator">'; html_output += '</div>'
         
-        # print(html_output)
         return html_output
     # --- ★★★ ---------------------------------------------------- ★★★ ---
 
@@ -1535,7 +1434,7 @@ class MainWindow(QWidget):
             print(f"  Error parsing link: {url_str}")
         except Exception as e:
             print(f"  Error handling history link click: {e}")
-            QMessageBox.warning(self, "処理エラー", f"履歴リンクの処理中にエラーが発生しました:\n{e}")
+            QMessageBox.warning(self, "処理エラー", f"履歴リンクの処理中にエラーが発生しました:\\n{e}")
     # --- ★★★ ------------------------------------------- ★★★ ---
 
 
@@ -2062,6 +1961,47 @@ class MainWindow(QWidget):
             
         return super().eventFilter(obj, event) # 他のイベントは基底クラスに任せる
     # --- ★★★ ------------------------------------ ★★★ ---
+
+    # --- ★★★ 新規: AI応答履歴スクロール用スロットメソッド ★★★ ---
+    def _scroll_history_to_top(self):
+        """AI応答履歴表示エリアを一番上にスクロールします。"""
+        if hasattr(self, 'response_display') and self.response_display:
+            scroll_bar = self.response_display.verticalScrollBar()
+            scroll_bar.setValue(scroll_bar.minimum()) 
+            print("Scrolled history to top.")
+
+    def _scroll_history_to_bottom(self):
+        """AI応答履歴表示エリアを一番下にスクロールします。"""
+        if hasattr(self, 'response_display') and self.response_display:
+            scroll_bar = self.response_display.verticalScrollBar()
+            scroll_bar.setValue(scroll_bar.maximum())
+            print("Scrolled history to bottom.")
+    # --- ★★★ ------------------------------------------------ ★★★ ---
+
+    # --- ★★★ 新規: 送信履歴範囲スライダーの値変更時のスロット ★★★ ---
+    def _on_history_slider_changed(self, value: int):
+        """送信履歴範囲スライダーの値が変更されたときに呼び出されます。
+        ラベル表示と内部変数を更新します。
+
+        Args:
+            value (int): スライダーの新しい値。
+        """
+        self.current_history_range_for_prompt = value
+        self.history_slider_label.setText(f"送信履歴範囲: {value} ")
+        # 将来的には、この値をプロジェクト設定に保存する処理をここに追加しても良い
+    # --- ★★★ -------------------------------------------------- ★★★ ---
+
+    # --- ★★★ 新規: アイテム履歴数スライダーの値変更時のスロット ★★★ ---
+    def _on_item_history_slider_changed(self, value: int):
+        """アイテム履歴表示数スライダーの値が変更されたときに呼び出されます。
+        ラベル表示と内部変数を更新します。
+
+        Args:
+            value (int): スライダーの新しい値。
+        """
+        self.item_history_length_for_prompt = value
+        self.item_history_slider_label.setText(f"アイテム履歴の送信数: {value} ")
+    # --- ★★★ ----------------------------------------------------- ★★★ ---
 
 if __name__ == '__main__':
     """MainWindowの基本的な表示・インタラクションテスト。"""

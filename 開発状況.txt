@@ -1,7 +1,7 @@
 ## 開発環境
 OS：Windows11
 開発言語：Python 3.10.6
-開発ツール：Visual Studio Code
+開発ツール：Cursor
 
 
 
@@ -35,6 +35,13 @@ OS：Windows11
 *   主要モジュール・クラスへのDocstrings整備完了
 *   共有モジュールの利用
     *   core/shared_instances.py を作成し、MainWindow のインスタンスをグローバルに共有するための set_main_window_instance() と get_main_window_instance() 関数を定義。
+*   **クイックセット機能**:
+    *   現在の入力メッセージ、選択中のサブプロンプト、選択中のデータアイテムの状態を複数スロットに保存・読み込みできる機能。
+    *   UI操作: クイックセットの読み込み（適用）、適用して送信、保存、クリア。
+    *   初回起動時に保存済みのクイックセットを読み込む処理。
+    *   クイックセット適用時のUI（サブプロンプトとデータアイテムのチェック状態）への即時反映。
+        *   サブプロンプトのチェック状態は `MainWindow` の `uncheck_all_subprompts`, `check_subprompts_by_full_names` メソッドによりUIに適用。
+        *   データアイテムのチェック状態は `DataManagementWidget` の `uncheck_all_items`, `check_items_by_dict` メソッドにより論理的に更新後、`refresh_item_list_for_category` を呼び出してUIを再構築することで、非表示タブのアイテムも含めて即時反映。
 
 
 ## 未実装の仕様・今後の課題
