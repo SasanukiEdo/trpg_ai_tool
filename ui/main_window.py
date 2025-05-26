@@ -2102,7 +2102,7 @@ class MainWindow(QWidget):
         if tagged_items_by_tag_parts:
             context_parts.append("\n\n".join(tagged_items_by_tag_parts))
 
-        print(context_parts)
+        # print(context_parts)
 
         return "\n\n\n".join(context_parts).strip() # 各大セクション間は3重改行
     # --- ★★★ ---------------------------------------------------- ★★★ ---
