@@ -294,6 +294,7 @@ class MainWindow(QWidget):
         `self.current_project_settings`, `self.subprompts` を更新し、
         ウィンドウタイトル、メインシステムプロンプト表示などを更新します。
         `DataManagementWidget` のプロジェクトも設定します（UI初期化後）。
+        チェック状態もプロジェクト設定から復元します。
         """
         print(f"--- MainWindow: Loading data for project: '{self.current_project_dir_name}' ---")
         project_settings_loaded = load_project_settings(self.current_project_dir_name)
@@ -309,10 +310,25 @@ class MainWindow(QWidget):
         print(f"  Project settings loaded: Name='{project_display_name_for_title}', Model='{self.current_project_settings.get('model')}'")
 
         self.subprompts = load_subprompts(self.current_project_dir_name)
-        # チェック状態はプロジェクトごとに初期化 (カテゴリが存在すれば空セット、なければキー自体なし)
+        
+        # --- ★★★ チェック状態の復元 (サブプロンプト) ★★★ ---
+        # プロジェクト設定から checked_subprompts を読み込む
+        # 保存形式は {"カテゴリ名": ["サブプロンプト名1", "サブプロンプト名2"], ...} と想定
+        # self.checked_subprompts は {カテゴリ名: set(サブプロンプト名)}
+        saved_checked_subprompts_list_format = self.current_project_settings.get("checked_subprompts", {})
         self.checked_subprompts = {
-            cat: self.checked_subprompts.get(cat, set()) for cat in self.subprompts.keys()
+            cat: set(names) for cat, names in saved_checked_subprompts_list_format.items()
+            if cat in self.subprompts # 存在しないカテゴリは無視
         }
+        # 存在しないサブプロンプト名もフィルタリング (任意だが安全のため)
+        for cat, names_set in self.checked_subprompts.items():
+            if cat in self.subprompts:
+                self.checked_subprompts[cat] = {
+                    name for name in names_set if name in self.subprompts[cat]
+                }
+        print(f"  Checked subprompts restored: {self.checked_subprompts}")
+        # --- ★★★ ------------------------------------ ★★★ ---
+
         print(f"  Subprompts loaded: {len(self.subprompts)} categories.")
 
         # UI要素が既に初期化されていれば、内容を反映
@@ -324,10 +340,22 @@ class MainWindow(QWidget):
         # DataManagementWidget のプロジェクトも設定（UI初期化後）
         if hasattr(self, 'data_management_widget') and self.data_management_widget:
             self.data_management_widget.set_project(self.current_project_dir_name)
+            # --- ★★★ チェック状態の復元 (データアイテム) ★★★ ---
+            # プロジェクト設定から checked_data_items を読み込む
+            # 保存形式は {"カテゴリ名": ["アイテムID1", "アイテムID2"], ...} と想定
+            saved_checked_data_items_list_format = self.current_project_settings.get("checked_data_items", {})
+            # DataManagementWidget の check_items_by_dict は Dict[str, List[str]] を期待
+            # そのため、ここではセットに変換せず、そのまま渡す (存在チェックは DataWidget 側で行う想定)
+            if saved_checked_data_items_list_format: # 空でなければ適用
+                self.data_management_widget.uncheck_all_items() # 念のため全解除
+                self.data_management_widget.check_items_by_dict(saved_checked_data_items_list_format)
+            print(f"  Checked data items restored (passed to DataManagementWidget): {saved_checked_data_items_list_format}")
+            # --- ★★★ -------------------------------------- ★★★ ---
+
 
         # サブプロンプトタブもUIがあれば更新
         if hasattr(self, 'subprompt_tab_widget'):
-            self.refresh_subprompt_tabs()
+            self.refresh_subprompt_tabs() # これによりチェック状態もUIに反映される
 
 
     # --- ★★★ 新規: クイックセットデータをファイルからロードしUIに反映 ★★★ ---
@@ -791,6 +819,7 @@ class MainWindow(QWidget):
 
         関連する設定の更新、データの再読み込み、UIの更新を行います。
         Chat Handler も新しいプロジェクト設定で再初期化し、新しいプロジェクトの履歴をロード・表示します。
+        プロジェクト切り替え前に現在のチェック状態を保存します。
 
         Args:
             new_project_dir_name (str): 切り替え先のプロジェクトのディレクトリ名。
@@ -800,10 +829,11 @@ class MainWindow(QWidget):
             print(f"  Already in project '{new_project_dir_name}'. No switch needed.")
             return
 
-        # --- ★★★ 現在のプロジェクトの履歴を念のため保存 (GeminiChatHandler側でも行うが) ★★★ ---
+        # --- ★★★ 現在のプロジェクトの履歴とチェック状態を保存 ★★★ ---
         if self.chat_handler and self.chat_handler.project_dir_name == self.current_project_dir_name:
             self.chat_handler.save_current_history_on_exit() # 明示的に保存
-        # --- ★★★ ----------------------------------------------------------------- ★★★ ---
+        self._save_checked_states_to_project_settings() # ★ チェック状態を保存
+        # --- ★★★ --------------------------------------------- ★★★ ---
             
         old_project_dir_name = self.current_project_dir_name # 保存後に更新
         self.current_project_dir_name = new_project_dir_name
@@ -1921,17 +1951,18 @@ class MainWindow(QWidget):
 
     def closeEvent(self, event):
         """ウィンドウが閉じられる前に呼び出されるイベント。
-        現在のプロジェクト設定（メインプロンプト）とチャット履歴を保存します。
+        現在のプロジェクト設定（メインプロンプト、チェック状態）とチャット履歴を保存します。
         """
         print("--- MainWindow: Closing application ---")
         # メインシステムプロンプトの保存
         current_main_prompt_text = self.system_prompt_input_main.toPlainText()
         if self.current_project_settings.get("main_system_prompt") != current_main_prompt_text:
             self.current_project_settings["main_system_prompt"] = current_main_prompt_text
-            if save_project_settings(self.current_project_dir_name, self.current_project_settings):
-                print("  Main system prompt saved successfully on close.")
-            else:
-                print("  ERROR: Failed to save main system prompt on close.")
+            # save_project_settings は _save_checked_states_to_project_settings の中で行われるのでここでは不要
+
+        # --- ★★★ 現在のチェック状態を保存 ★★★ ---
+        self._save_checked_states_to_project_settings()
+        # --- ★★★ ----------------------------- ★★★ ---
 
         # 現在のチャット履歴を保存
         if self.chat_handler:
@@ -2136,6 +2167,46 @@ class MainWindow(QWidget):
         )
         dialog.exec_()
     # --- ★★★ ------------------------------------ ★★★ ---
+
+    # --- ★★★ 新しいヘルパーメソッド: チェック状態の保存 ★★★ ---
+    def _save_checked_states_to_project_settings(self):
+        """現在のサブプロンプトとデータアイテムのチェック状態を
+        現在のプロジェクトの project_settings.json に保存します。
+        """
+        if not self.current_project_dir_name:
+            print("Warning: Cannot save checked states, no current project directory name.")
+            return
+
+        # 1. サブプロンプトのチェック状態を取得・整形
+        # self.checked_subprompts は {カテゴリ名: set(サブプロンプト名)}
+        # 保存形式は {"カテゴリ名": ["サブプロンプト名1", ...]} にする
+        subprompts_to_save = {
+            cat: sorted(list(names)) for cat, names in self.checked_subprompts.items()
+        }
+        self.current_project_settings["checked_subprompts"] = subprompts_to_save
+        print(f"  Preparing to save checked subprompts: {subprompts_to_save}")
+
+        # 2. データアイテムのチェック状態を取得・整形 (DataManagementWidgetから)
+        if hasattr(self, 'data_management_widget') and self.data_management_widget:
+            # data_management_widget.get_checked_items() は {カテゴリ名: set(アイテムID)} を返す
+            # これもリスト形式で保存
+            checked_data_from_widget = self.data_management_widget.get_checked_items()
+            data_items_to_save = {
+                cat: sorted(list(ids)) for cat, ids in checked_data_from_widget.items()
+            }
+            self.current_project_settings["checked_data_items"] = data_items_to_save
+            print(f"  Preparing to save checked data items: {data_items_to_save}")
+        else:
+            print("  DataManagementWidget not found, cannot save data item checked states.")
+            # 存在しない場合はキーを削除するか、何もしないか (ここでは何もしない)
+
+        # 3. プロジェクト設定ファイルに保存
+        if save_project_settings(self.current_project_dir_name, self.current_project_settings):
+            print(f"  Checked states (subprompts and data items) saved to project settings for '{self.current_project_dir_name}'.")
+        else:
+            QMessageBox.warning(self, "保存エラー", "チェック状態のプロジェクト設定への保存に失敗しました。")
+            print(f"  ERROR: Failed to save checked states to project settings for '{self.current_project_dir_name}'.")
+    # --- ★★★ ------------------------------------------------ ★★★ ---
 
 if __name__ == '__main__':
     """MainWindowの基本的な表示・インタラクションテスト。"""
