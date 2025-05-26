@@ -1178,102 +1178,9 @@ class MainWindow(QWidget):
         user_text = self.user_input.toPlainText().strip()
         if not user_text: QMessageBox.information(self, "入力なし", "送信するメッセージを入力してください。"); return
         
-        # --- ★★★ UIへのユーザー入力の即時表示は _redisplay_chat_history に任せる ★★★ ---
-        # formatted_user_text_for_display = user_text.replace("\n", "<br>")
-        # self.response_display.append(f"<div style='color: blue;'><b>あなた:</b><br>{formatted_user_text_for_display}</div><br>") # ← これを削除
         self.user_input.clear(); QApplication.processEvents() # 入力欄クリアは維持
 
-        # --- 1. 一時的なコンテキスト情報を構築 ---
-        transient_context_parts = []
-        # (1-1) 選択されたサブプロンプト
-        active_subprompts_for_context = []
-        # subprompt_models_used = [] # モデル選択はチャットハンドラ初期化時に行う
-        for category, checked_names in self.checked_subprompts.items():
-            if category in self.subprompts:
-                for name in checked_names:
-                    if name in self.subprompts[category]:
-                        sub_data = self.subprompts[category][name]; prompt_content = sub_data.get("prompt", "")
-                        # sub_model = sub_data.get("model", "") # モデルはハンドラで一括管理
-                        # if sub_model: subprompt_models_used.append(sub_model)
-                        if prompt_content: active_subprompts_for_context.append(f"### サブプロンプト: {category} - {name}\n{prompt_content}")
-        if active_subprompts_for_context: transient_context_parts.append("\n## 現在の補助指示 (サブプロンプト):\n" + "\n\n".join(active_subprompts_for_context))
-        
-        # --- (1-2) 選択されたデータアイテムの情報 ---
-        checked_data_for_context = []
-        checked_item_ids_for_dedup = set() 
-        checked_data_from_widget = self.data_management_widget.get_checked_items()
-        for category, item_ids in checked_data_from_widget.items():
-            for item_id in item_ids:
-                item_detail = get_item(self.current_project_dir_name, category, item_id)
-                if item_detail:
-                    checked_item_ids_for_dedup.add(item_id)
-                    info_str_parts = [] # アイテム情報をパーツごとに収集
-                    info_str_parts.append(f"### データ参照 (直接選択): {category} - {item_detail.get('name', 'N/A')}")
-                    info_str_parts.append(f"  - 名前: {item_detail.get('name', 'N/A')}")
-                    info_str_parts.append(f"  - 説明/メモ: {item_detail.get('description', '')}")
-                    
-                    tags = item_detail.get('tags', [])
-                    if tags: 
-                        info_str_parts.append(f"  - タグ: {', '.join(tags)}")
-
-                    # --- ★★★ アイテムの履歴を指定された件数だけ含める ★★★ ---
-                    item_histories_full = item_detail.get("history", [])
-                    num_histories_to_include = self.item_history_length_for_prompt # スライダーの値
-                    
-                    if num_histories_to_include > 0 and item_histories_full:
-                        # 末尾から指定件数を取得
-                        sliced_item_histories = item_histories_full[-num_histories_to_include:]
-                        history_entries_text = []
-                        for h_entry in sliced_item_histories:
-                            # history_entry は {"id": ..., "timestamp": ..., "entry": ...} の形式
-                            entry_text = h_entry.get("entry", "")
-                            if entry_text: # 空の履歴エントリは無視
-                                history_entries_text.append(f"    - {entry_text.strip()}") # インデントと整形
-                        if history_entries_text:
-                            info_str_parts.append(f"  - 最新の履歴 ({len(sliced_item_histories)}件):")
-                            info_str_parts.extend(history_entries_text)
-                    elif num_histories_to_include == 0:
-                        info_str_parts.append("  - 履歴: (表示設定0件のため省略)")
-                    # else: 履歴なし、または履歴があっても表示設定が0より大きくない場合は何も追加しない
-                    # --- ★★★ -------------------------------------------- ★★★ ---
-                    
-                    checked_data_for_context.append("\n".join(info_str_parts))
-        
-        if checked_data_for_context: 
-            transient_context_parts.append("\n## 現在の参照データ (直接選択):\n" + "\n\n".join(checked_data_for_context)) # 各アイテム間は2重改行
-
-        # (1-3) タグによる関連情報 (サブプロンプト + データアイテム)
-        from core.data_manager import find_items_by_tags, ITEM_SUMMARY_KEYS, MAX_HISTORY_ENTRIES_IN_SUMMARY
-        reference_tags_from_subprompts = [] # ... (前回のコードと同様に収集)
-        for cat_sp, names_sp in self.checked_subprompts.items():
-            if cat_sp in self.subprompts:
-                for name_sp in names_sp:
-                    if name_sp in self.subprompts[cat_sp]:
-                        ref_tags_sp = self.subprompts[cat_sp][name_sp].get("reference_tags", [])
-                        if ref_tags_sp: reference_tags_from_subprompts.extend(ref_tags_sp)
-        reference_tags_from_data_items = [] # ... (前回のコードと同様に収集)
-        for cat_di, ids_di in self.data_management_widget.get_checked_items().items():
-            for id_di in ids_di:
-                item_detail_di = get_item(self.current_project_dir_name, cat_di, id_di)
-                if item_detail_di:
-                    ref_tags_di = item_detail_di.get("reference_tags", [])
-                    if ref_tags_di: reference_tags_from_data_items.extend(ref_tags_di)
-        
-        all_reference_tags = list(set(reference_tags_from_subprompts + reference_tags_from_data_items))
-        tagged_items_info_list = []
-        if all_reference_tags:
-            found_tagged_items = find_items_by_tags(self.current_project_dir_name, all_reference_tags)
-            if found_tagged_items:
-                tagged_info_str_parts = []
-                for item in found_tagged_items:
-                    if item.get("id") not in checked_item_ids_for_dedup: # 重複排除
-                        item_name = item.get("name", "N/A"); item_category = item.get("category", "不明"); item_desc = item.get("description", "(説明なし)")
-                        recent_hist = item.get("recent_history", []); hist_text = "\n  - " + "\n  - ".join(recent_hist) if recent_hist else ""
-                        tagged_info_str_parts.append(f"### タグ関連情報: {item_category} - {item_name}\n  - 説明/メモ: {item_desc}\n" + (f"  - 最新履歴:\n{hist_text}\n" if hist_text else ""))
-                if tagged_info_str_parts: transient_context_parts.append("\n## 現在のタグ関連情報:\n" + "\n".join(tagged_info_str_parts))
-        
-        final_transient_context = "\n\n".join(transient_context_parts).strip()
-        # --- ここまでで一時コンテキスト構築完了 ---
+        final_transient_context = self._build_transient_context_string()
 
         print("--- Transient Context for this turn ---")
         print(final_transient_context if final_transient_context else "(なし)")
@@ -2074,26 +1981,131 @@ class MainWindow(QWidget):
         self.item_history_slider_label.setText(f"アイテム履歴の送信数: {value} ")
     # --- ★★★ ----------------------------------------------------- ★★★ ---
 
-    # --- ★★★ 新しいヘルパーメソッド: プレビュー用の一時コンテキスト取得 ★★★ ---
-    def _get_combined_checked_subprompts_text(self) -> str:
-        """チェックされているサブプロンプトの内容を結合して単一の文字列として返します。"""
-        transient_context = ""
-        # カテゴリの表示順を固定するために、self.subpromptsのキーの順序で処理
-        sorted_categories = sorted(self.subprompts.keys())
+    # --- ★★★ 新しいヘルパーメソッド: 一時的コンテキスト文字列の構築 ★★★ ---
+    def _build_transient_context_string(self) -> str:
+        """現在の選択状態に基づいて、指定されたフォーマットの一時的コンテキスト文字列を構築します。"""
+        context_parts = []
 
-        for category in sorted_categories:
-            if category in self.checked_subprompts and category in self.subprompts:
-                # サブプロンプト名の表示順も固定するためにソート
-                sorted_names = sorted(list(self.checked_subprompts[category]))
-                for name in sorted_names:
-                    if name in self.subprompts[category]:
-                        prompt_data = self.subprompts[category][name]
-                        prompt_text = prompt_data.get("prompt", "")
-                        # prompt_model = prompt_data.get("model") # プレビューではモデル名は表示するが、結合時には考慮しない
-                        if prompt_text:
-                            transient_context += f"--- {category} / {name} ---\\n{prompt_text}\\n\\n"
-        return transient_context.strip()
-    # --- ★★★ ------------------------------------------------------- ★★★ ---
+        # --- 1. サブプロンプト --- 
+        active_subprompts_parts = []
+        # カテゴリやサブプロンプト名の順序をある程度固定するためソート
+        sorted_categories_sub = sorted(self.checked_subprompts.keys())
+        for category_name in sorted_categories_sub:
+            if category_name in self.subprompts:
+                sorted_subprompt_names = sorted(list(self.checked_subprompts[category_name]))
+                for sub_name in sorted_subprompt_names:
+                    if sub_name in self.subprompts[category_name]:
+                        sub_data = self.subprompts[category_name][sub_name]
+                        prompt_content = sub_data.get("prompt", "")
+                        if prompt_content:
+                            active_subprompts_parts.append(f"## {sub_name}\n{prompt_content}")
+        if active_subprompts_parts:
+            context_parts.append("# サブプロンプト\n\n" + "\n\n".join(active_subprompts_parts))
+
+        # --- 2. 選択されたデータアイテムの情報 --- 
+        checked_data_from_widget = self.data_management_widget.get_checked_items() # {cat: {id1, id2}}
+        sorted_categories_data = sorted(checked_data_from_widget.keys())
+        
+        selected_items_by_category_parts = []
+        for category_name in sorted_categories_data:
+            item_ids_in_category = checked_data_from_widget[category_name]
+            if not item_ids_in_category: continue
+
+            category_section_parts = [f"# {category_name}の情報"]
+            sorted_item_ids = sorted(list(item_ids_in_category))
+
+            for item_id in sorted_item_ids:
+                item_detail = get_item(self.current_project_dir_name, category_name, item_id)
+                if item_detail:
+                    item_name = item_detail.get("name", "N/A")
+                    item_desc = item_detail.get("description", "")
+                    item_info_str = f"## {item_name}\n{item_desc}"
+                    
+                    item_histories_full = item_detail.get("history", [])
+                    num_histories_to_include = self.item_history_length_for_prompt
+                    
+                    if num_histories_to_include > 0 and item_histories_full:
+                        sliced_item_histories = item_histories_full[-num_histories_to_include:]
+                        history_entries_text = []
+                        for h_entry in sliced_item_histories:
+                            entry_text = h_entry.get("entry", "")
+                            if entry_text:
+                                history_entries_text.append(entry_text.strip())
+                        if history_entries_text:
+                            item_info_str += f"\n\n### {item_name}の履歴情報\n" + "\n".join(history_entries_text)
+                    elif num_histories_to_include == 0 and item_histories_full:
+                         item_info_str += f"\n\n### {item_name}の履歴情報\n(履歴の送信数設定0件のため省略)"
+
+                    category_section_parts.append(item_info_str)
+            
+            if len(category_section_parts) > 1: # カテゴリヘッダー以外にアイテムがあれば追加
+                selected_items_by_category_parts.append("\n\n".join(category_section_parts))
+        
+        if selected_items_by_category_parts:
+            context_parts.append("\n\n".join(selected_items_by_category_parts)) # 各カテゴリセクション間も2重改行
+
+
+        # --- 3. タグによる関連情報 --- 
+        from core.data_manager import find_items_by_tags # 関数をインポート
+        
+        all_reference_tags_set = set()
+        # (3-1) チェックされたサブプロンプトからの参照タグ収集
+        for cat_sp, names_sp_set in self.checked_subprompts.items():
+            if cat_sp in self.subprompts:
+                for name_sp in names_sp_set:
+                    if name_sp in self.subprompts[cat_sp]:
+                        ref_tags_sp = self.subprompts[cat_sp][name_sp].get("reference_tags", [])
+                        if ref_tags_sp: all_reference_tags_set.update(ref_tags_sp)
+        
+        # (3-2) チェックされたデータアイテムからの参照タグ収集
+        for cat_di, ids_di_set in checked_data_from_widget.items(): # checked_data_from_widget を再利用
+            for id_di in ids_di_set:
+                item_detail_di = get_item(self.current_project_dir_name, cat_di, id_di)
+                if item_detail_di:
+                    ref_tags_di = item_detail_di.get("reference_tags", [])
+                    if ref_tags_di: all_reference_tags_set.update(ref_tags_di)
+        
+        sorted_unique_ref_tags = sorted(list(all_reference_tags_set))
+        tagged_items_by_tag_parts = []
+
+        if sorted_unique_ref_tags:
+            for tag_name in sorted_unique_ref_tags:
+                tag_section_parts = [f"# {tag_name}の関連情報"]
+                # find_items_by_tags はタグのリストを受け取るが、ここでは個別のタグで検索
+                found_tagged_items = find_items_by_tags(self.current_project_dir_name, [tag_name])
+                
+                items_for_this_tag_str = []
+                if found_tagged_items:
+                    # 重複排除: checked_data_from_widget を使って、既に「選択されたアイテム」として表示済みのものは除外
+                    # checked_data_from_widget は {category: {id1, id2}} の形式
+                    # find_items_by_tags は [{'id': ..., 'category': ..., ...}] のリストを返す
+                    for item in found_tagged_items:
+                        item_id_found = item.get("id")
+                        item_cat_found = item.get("category")
+                        # このアイテムが既に「選択されたアイテム」に含まれていないか確認
+                        if item_cat_found in checked_data_from_widget and item_id_found in checked_data_from_widget[item_cat_found]:
+                            continue # 既に表示済みなのでスキップ
+                        
+                        item_name = item.get("name", "N/A")
+                        item_desc = item.get("description", "(説明なし)")
+                        recent_hist_list = item.get("recent_history", []) # これは文字列のリスト
+                        
+                        tagged_item_info_str = f"## {item_name}（{item_cat_found}）\n{item_desc}"
+                        if recent_hist_list:
+                            tagged_item_info_str += "\n最新履歴：" + "\n".join(recent_hist_list)
+                        items_for_this_tag_str.append(tagged_item_info_str)
+                
+                if items_for_this_tag_str:
+                    tag_section_parts.append("\n\n".join(items_for_this_tag_str))
+                    tagged_items_by_tag_parts.append("\n\n".join(tag_section_parts))
+            
+        if tagged_items_by_tag_parts:
+            context_parts.append("\n\n".join(tagged_items_by_tag_parts))
+
+        print(context_parts)
+
+        return "\n\n\n".join(context_parts).strip() # 各大セクション間は3重改行
+    # --- ★★★ ---------------------------------------------------- ★★★ ---
 
     # --- ★★★ 新しいヘルパーメソッド: プレビュー用の履歴取得 ★★★ ---
     def _get_history_for_preview(self) -> List[Dict[str, any]]:
@@ -2126,8 +2138,8 @@ class MainWindow(QWidget):
             return
 
         model_name = self.chat_handler.model_name
-        system_prompt = self.system_prompt_input_main.toPlainText().strip() # これはモデル初期化時の参考
-        transient_context = self._get_combined_checked_subprompts_text()
+        system_prompt = self.system_prompt_input_main.toPlainText().strip()
+        transient_context = self._build_transient_context_string()
         user_input = self.user_input.toPlainText().strip()
         
         # ダイアログのAPIプレビューで表示する「メッセージ本体」のために結合しておく
