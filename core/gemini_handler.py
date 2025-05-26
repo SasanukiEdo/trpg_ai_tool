@@ -290,28 +290,20 @@ class GeminiChatHandler:
                                   transient_context: str,
                                   user_input: str,
                                   max_history_pairs_for_this_turn: Optional[int] = None
-                                  ) -> Tuple[Optional[str], Optional[str]]:
+                                  ) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]]:
         if not self._model:
             error_msg = "モデルが初期化されていません。"
             print(f"Error in send_message_with_context: {error_msg}")
-            return None, error_msg
+            return None, error_msg, None
         
-        # ChatSession を使用せず、都度 generate_content を呼び出す方式
-        # if not self._chat_session: # ChatSession を使わないのでこのチェックは不要
-        #      error_msg = "チャットセッションが初期化されていません。"
-        #      print(f"Error in send_message_with_context: {error_msg}")
-        #      return None, error_msg
-
         try:
             messages_for_api: List[Dict[str, Union[str, List[Dict[str, str]]]]] = []
 
             # 1. 実際の会話履歴 (_pure_chat_history を利用)
-            #    システム指示の擬似やり取りは _pure_chat_history に含めない方針。
             effective_history_pairs = max_history_pairs_for_this_turn if max_history_pairs_for_this_turn is not None else (len(self._pure_chat_history) // 2)
             history_to_send = []
             if self._pure_chat_history:
                 num_history_items_to_send = effective_history_pairs * 2
-                # _pure_chat_history の各要素が辞書であることを確認
                 temp_history = list(self._pure_chat_history[-num_history_items_to_send:])
                 for item in temp_history:
                     if not (
@@ -322,8 +314,9 @@ class GeminiChatHandler:
                     ):
                         print(f"Warning: Invalid history item format found and skipped: {item}")
                         continue
-                    history_to_send.append(item)
-            
+                    # item から "usage" を除外した新しい辞書を作成する
+                    item_to_send = {k: v for k, v in item.items() if k != "usage"}
+                    history_to_send.append(item_to_send)
             messages_for_api.extend(history_to_send)
 
             # 2. 一時的コンテキスト (user ロール)
@@ -332,16 +325,10 @@ class GeminiChatHandler:
                     "role": "user",
                     "parts": [{"text": transient_context.strip()}]
                 })
-                # 3. 一時的コンテキストへのAI応答ダミー (model ロール)
-                # messages_for_api.append({
-                #    "role": "model",
-                #    "parts": [{"text": "SystemMessage:指示通りに続きを出力します。"}] 
-                #})
 
-            # 4. 実際のユーザー入力 (user ロール)
+            # 3. 実際のユーザー入力 (user ロール)
             if not user_input or not user_input.strip():
-                return None, "ユーザー入力が空です。" # 空の入力は送信しない
-                
+                return None, "ユーザー入力が空です。", None
             messages_for_api.append({
                 "role": "user",
                 "parts": [{"text": user_input.strip()}]
@@ -355,36 +342,51 @@ class GeminiChatHandler:
             )
 
             ai_response_text = ""
+            usage_metadata_dict: Optional[Dict[str, int]] = None
+
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage_metadata_dict = {
+                    "input_tokens": response.usage_metadata.prompt_token_count,
+                    "output_tokens": response.usage_metadata.candidates_token_count,
+                    "total_token_count": response.usage_metadata.total_token_count
+                }
+                print(f"Usage metadata: {usage_metadata_dict}")
+
             if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
                 ai_response_text = response.candidates[0].content.parts[0].text
             elif response.prompt_feedback:
                 error_msg = f"プロンプトがブロックされました。Feedback: {response.prompt_feedback}"
-                print(f"Error in send_message_with_context: {error_msg}")
-                # BlockedPromptException の場合、中身をもう少し詳しく表示
                 if hasattr(response.prompt_feedback, 'block_reason'):
                     error_msg += f" Reason: {response.prompt_feedback.block_reason}"
                 if hasattr(response.prompt_feedback, 'safety_ratings'):
                      error_msg += f" SafetyRatings: {response.prompt_feedback.safety_ratings}"
-                return None, error_msg
-            else:
-                error_msg = f"AIからの応答が空または予期しない形式です。Response: {response}"
                 print(f"Error in send_message_with_context: {error_msg}")
-                return None, error_msg
+                return None, error_msg, usage_metadata_dict
+            else:
+                # 応答が空、または finish_reason が OTHER で parts がない場合など
+                finish_reason = "Unknown"
+                if response.candidates and hasattr(response.candidates[0], 'finish_reason'):
+                    finish_reason = str(response.candidates[0].finish_reason)
+                error_msg = f"AIからの応答が期待する形式ではありません (Finish reason: {finish_reason})。Response: {response}"
+                print(f"Error in send_message_with_context: {error_msg}")
+                return None, error_msg, usage_metadata_dict
 
-            # 実際の会話履歴には、ユーザーの真の入力とAIの真の応答のみを保存
             self._pure_chat_history.append({"role": "user", "parts": [{"text": user_input.strip()}]})
-            self._pure_chat_history.append({"role": "model", "parts": [{"text": ai_response_text}]})
+            model_entry = {"role": "model", "parts": [{"text": ai_response_text}]}
+            if usage_metadata_dict: # usage_metadata_dict があれば追加
+                model_entry["usage"] = usage_metadata_dict
+            self._pure_chat_history.append(model_entry)
             
             if self.project_dir_name:
                 self._save_history_to_file()
-            return ai_response_text, None
+            return ai_response_text, None, usage_metadata_dict
 
         except Exception as e:
             error_msg = f"メッセージ送信中にエラーが発生しました: {e}"
             print(f"Error in send_message_with_context: {error_msg}")
             import traceback
             traceback.print_exc()
-            return None, error_msg
+            return None, error_msg, None
 
 
     def get_pure_chat_history(self) -> List[Dict[str, Union[str, List[Dict[str, str]]]]]:

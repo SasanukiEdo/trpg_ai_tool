@@ -1252,31 +1252,36 @@ class MainWindow(QWidget):
         
         # --- 2. Chat Handler を使ってAIに応答を要求 ---
         # メインシステムプロンプトは Chat Handler 初期化時に設定済み
-        ai_response_text, error_message = self.chat_handler.send_message_with_context(
+        ai_response_text, error_message, usage_metadata = self.chat_handler.send_message_with_context( # 戻り値を3つに変更
             transient_context=final_transient_context,
             user_input=user_text, # 純粋なユーザー入力
-            max_history_pairs_for_this_turn=self.current_history_range_for_prompt # ★ スライダーの値を渡す
+            max_history_pairs_for_this_turn=self.current_history_range_for_prompt
         )
 
         # --- ★★★ UI表示は _redisplay_chat_history に一任 ★★★ ---
-        # 以前の append による個別表示処理は削除
         if error_message:
-            # エラーメッセージは従来通り append で表示しても良いし、
-            # あるいは _pure_chat_history にエラーを示す特別なエントリを追加して
-            # _redisplay_chat_history で表示するようにしても良い。
-            # ここでは、簡潔さのため、エラーは直接 append する。
             self.response_display.append(f"<div style='color: red;'><b>エラー:</b> {error_message}</div><br>")
-            # --- ★★★ 状態表示を更新: エラー発生 ★★★ ---
-            self.status_label.setText(f"<font color='red'>エラー: {error_message}</font>")
-            # --- ★★★ ----------------------------- ★★★ ---
+            status_text = f"<font color='red'>エラー: {error_message}</font>"
+            if usage_metadata: # エラー時でもusage_metadataがあれば表示試行
+                prompt_tokens = usage_metadata.get("input_tokens", "N/A") # prompt_token_count から変更
+                candidates_tokens = usage_metadata.get("output_tokens", "N/A") # candidates_token_count から変更
+                total_tokens = usage_metadata.get("total_token_count", "N/A")
+                status_text += f" (In: {prompt_tokens}, Cand: {candidates_tokens}, Total: {total_tokens})"
+            self.status_label.setText(status_text)
         else:
-            # --- ★★★ 状態表示を更新: 応答完了 ★★★ ---
-            self.status_label.setText("<font color='green'>応答を受信しました。</font>")
-            # --- ★★★ ----------------------------- ★★★ ---
+            # 正常応答の場合、_pure_chat_history は chat_handler 側で更新されている。
+            # chat_handler 側で usage_metadata を履歴に含めるように修正したので、
+            # MainWindow側での _pure_chat_history への usage 追加処理は不要。
+            
+            status_text = "<font color='green'>応答を受信しました。</font>"
+            if usage_metadata:
+                prompt_tokens = usage_metadata.get("input_tokens", "N/A") # prompt_token_count から変更
+                candidates_tokens = usage_metadata.get("output_tokens", "N/A") # candidates_token_count から変更
+                total_tokens = usage_metadata.get("total_token_count", "N/A")
+                status_text += f" (In: {prompt_tokens}, Cand: {candidates_tokens}, Total: {total_tokens})"
+            self.status_label.setText(status_text)
 
-        # 正常応答・エラーなし応答の場合、_pure_chat_history が更新されているので再表示
-        self._redisplay_chat_history() # ★★★ ここで全体を再描画 ★★★
-        # --- ★★★ --------------------------------------------- ★★★ ---
+        self._redisplay_chat_history()
 
     # 新規: 会話履歴を response_display に再表示するメソッド
     def _redisplay_chat_history(self):
