@@ -137,15 +137,20 @@ class PromptPreviewDialog(QDialog):
                 else:
                     api_contents_for_preview.append({"role": role, "parts": [{"text": self._format_text_for_display(text)}]})
         
-        combined_input_parts = []
-        if transient_context:
-            combined_input_parts.append(transient_context)
-        if user_input:
-            combined_input_parts.append(user_input)
-        final_user_content_text = full_prompt if full_prompt is not None else "\\\\n".join(combined_input_parts) 
-        current_user_message_text_for_api = self._format_text_for_display(final_user_content_text)
-        if current_user_message_text_for_api:
-            api_contents_for_preview.append({"role": "user", "parts": [{"text": current_user_message_text_for_api}]})
+        # 一時的コンテキストを "user" ロールとして追加
+        if transient_context and transient_context.strip():
+            api_contents_for_preview.append({
+                "role": "user", 
+                "parts": [{"text": self._format_text_for_display(transient_context.strip())}]
+            })
+            # ダミーのモデル応答は表示しない
+
+        # 実際のユーザー入力を "user" ロールとして追加
+        if user_input and user_input.strip():
+            api_contents_for_preview.append({
+                "role": "user", 
+                "parts": [{"text": self._format_text_for_display(user_input.strip())}]
+            })
         
         api_preview_dict["contents"] = api_contents_for_preview
 
