@@ -313,11 +313,12 @@ class DetailWindow(QWidget):
             QMessageBox.warning(self, "エラー", "説明フィールドのウィジェットが見つかりません。")
             return
         current_description = current_description_widget.toPlainText() # type: ignore
+        item_name = self.item_data.get("name")
 
         main_window = get_main_window_instance()
         prompt_template = """
 あなたはTRPGのデータ管理を行うアシスタントです。\n"
-以下の「現在の説明/メモ」に基づいて、現在の状況を考慮して新しい「説明/メモ」を作成してください。
+以下の「現在の説明/メモ」に基づいて、現在の状況を考慮して「{name_text}」の新しい「説明/メモ」を作成してください。
 元の情報で重要なものが失われないようにし、説明/メモ以外の余計な情報は出力しないようにしてください。
 
 現在の説明/メモ:
@@ -331,13 +332,13 @@ class DetailWindow(QWidget):
             ).get("item_description_edit", prompt_template)
 
         try:
-            initial_instruction = prompt_template.format(current_text=current_description)
+            initial_instruction = prompt_template.format(current_text=current_description, name_text=item_name)
         except KeyError as e:
             print(f"Prompt template formatting error: {e}. Using default template.")
             # initial_instruction = f"""現在の説明:\n{current_description}\n\n指示:\n[ここに具体的な指示を記述]\n\n上記を踏まえ、新しい説明文を生成してください。"""
             initial_instruction = (
                 f"あなたはTRPGのデータ管理を行うアシスタントです。\n"
-                f"以下の「現在の説明/メモ」に基づいて、現在の状況を考慮して新しい「説明/メモ」を作成してください。\n"
+                f"以下の「現在の説明/メモ」に基づいて、現在の状況を考慮して「{item_name}」の新しい「説明/メモ」を作成してください。\n"
                 f"元の情報で重要なものが失われないようにし、説明/メモ以外の余計な情報は出力しないようにしてください。\n\n"
                 f"現在の説明/メモ:\n"
                 f"--------------------\n"

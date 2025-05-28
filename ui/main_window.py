@@ -623,7 +623,7 @@ class MainWindow(QWidget):
         item_history_slider_layout = QHBoxLayout(item_history_slider_widget)
         item_history_slider_layout.setContentsMargins(0, 2, 0, 2) # 少しマージン調整
 
-        self.item_history_slider_label = QLabel(f"アイテム履歴の送信数: {self.item_history_length_for_prompt} ")
+        self.item_history_slider_label = QLabel(f"各データの履歴送信数: {self.item_history_length_for_prompt} ")
         item_history_slider_layout.addWidget(self.item_history_slider_label)
 
         self.item_history_slider = QSlider(Qt.Horizontal)
