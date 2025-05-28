@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QPixmap, QImageReader, QResizeEvent, QShowEvent
 from PyQt5.QtCore import Qt, pyqtSignal, QUrl, QTimer
+from typing import Optional
 
 
 
@@ -302,128 +303,131 @@ class DetailWindow(QWidget):
         spacer = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding); self.content_layout.addSpacerItem(spacer)
 
     def _on_ai_update_description_clicked(self):
-        """「AIで「説明/メモ」を編集支援」ボタンがクリックされたときの処理。
-        `AIAssistedEditDialog` を説明編集モードで開きます。
-        """
-        if not self.item_data: QMessageBox.warning(self, "エラー", "編集対象のアイテムがロードされていません。"); return
-        if self.ai_edit_dialog is not None and self.ai_edit_dialog.isVisible(): self.ai_edit_dialog.activateWindow(); return
-
-        current_description = self.detail_widgets.get('description').toPlainText()
-        # AIへの指示テンプレート (より高度なものは設定ファイルなどからロードする)
-        instruction_template = (
-            f"あなたはTRPGのデータ管理を行うアシスタントです。\n"
-            f"以下の「現在の説明/メモ」に基づいて、現在の状況を考慮して新しい「説明/メモ」を作成してください。\n"
-            f"元の情報で重要なものが失われないようにし、説明/メモ以外の余計な情報は出力しないようにしてください。\n\n"
-            f"現在の説明/メモ:\n"
-            f"--------------------\n"
-            f"{current_description}\n"
-            f"--------------------\n\n"
-        )
-        self.ai_edit_dialog_mode = "description" # モード設定
-
-        self.ai_edit_dialog = AIAssistedEditDialog(
-            initial_instruction_text=instruction_template,
-            current_item_description=current_description,
-            parent=self,
-            window_title="AIによる「説明/メモ」編集支援"
-        )
-        # AI提案依頼ボタンのクリックシグナルを接続
-        self.ai_edit_dialog.request_ai_button.clicked.connect(self._handle_ai_suggestion_request)
-
-        if self.ai_edit_dialog.exec_() == QDialog.Accepted: # ダイアログでOKが押された
-            final_edited_text = self.ai_edit_dialog.get_final_text()
-            update_payload = {'description': final_edited_text}
-
-            if not self.current_project_dir_name or not self.current_category or not self.current_item_id:
-                QMessageBox.warning(self, "エラー", "アイテムの更新に必要な情報が不足しています。")
-                self.ai_edit_dialog = None # ダイアログインスタンスをクリア
-                return
-
-            if update_item(self.current_project_dir_name, self.current_category, self.current_item_id, update_payload):
-                QMessageBox.information(self, "更新完了", "「説明/メモ」をAIの提案に基づいて更新しました。")
-                self.item_data['description'] = final_edited_text # ローカルデータも更新
-                if 'description' in self.detail_widgets:
-                    self.detail_widgets['description'].setPlainText(final_edited_text) # UIも更新
-                self.dataSaved.emit(self.current_category, self.current_item_id)
-            else: QMessageBox.warning(self, "保存エラー", "「説明/メモ」の更新内容の保存に失敗しました。")
-        else: print("AIによる説明編集はキャンセルされました。")
-        self.ai_edit_dialog = None; self.ai_edit_dialog_mode = None # クリア
-
-
-    def _handle_ai_suggestion_request(self):
-        """`AIAssistedEditDialog` からAI提案依頼があった場合の処理。
-        共有モジュール経由で MainWindow から直近の会話履歴を取得し、プロンプトに追加します。
-        """
-        if not self.ai_edit_dialog: return
-
-        instruction_text = self.ai_edit_dialog.get_instruction_text()
-        if not instruction_text.strip():
-            QMessageBox.warning(self.ai_edit_dialog, "入力エラー", "AIへの指示を入力してください。")
+        """AIを使用して「説明/メモ」フィールドを更新するためのダイアログを開きます。"""
+        if not self.item_data:
+            QMessageBox.warning(self, "情報なし", "編集対象のアイテムがロードされていません。")
             return
 
-        ai_model_to_use = self.main_config.get("ai_model_for_editing",
-                                               self.main_config.get("default_model", "gemini-1.5-flash"))
-        
-        print(f"DetailWindow: Requesting AI suggestion (Mode: {self.ai_edit_dialog_mode}) with model '{ai_model_to_use}'. Instruction length: {len(instruction_text)}")
-        self.ai_edit_dialog.show_processing_message(True)
+        current_description_widget = self.detail_widgets.get('description')
+        if not current_description_widget:
+            QMessageBox.warning(self, "エラー", "説明フィールドのウィジェットが見つかりません。")
+            return
+        current_description = current_description_widget.toPlainText() # type: ignore
 
-        ai_suggestion = None
-        error_msg = None
+        main_window = get_main_window_instance()
+        prompt_template = """
+あなたはTRPGのデータ管理を行うアシスタントです。\n"
+以下の「現在の説明/メモ」に基づいて、現在の状況を考慮して新しい「説明/メモ」を作成してください。
+元の情報で重要なものが失われないようにし、説明/メモ以外の余計な情報は出力しないようにしてください。
 
-        if not gemini_is_configured(): # API設定チェック
-            QMessageBox.critical(self.ai_edit_dialog, "APIエラー", "Gemini APIが設定されていません。"); self.ai_edit_dialog.show_processing_message(False); return
+現在の説明/メモ:
+--------------------
+{current_text}
+--------------------
+        """
+        if main_window and main_window.current_project_settings:
+            prompt_template = main_window.current_project_settings.get(
+                "prompt_templates", {}
+            ).get("item_description_edit", prompt_template)
 
-        # --- ★★★ 直近の会話履歴を取得し、プロンプトに結合 (共有モジュール経由) ★★★ ---
-        recent_history_str = ""
-        main_window_ref = get_main_window_instance() 
-        if main_window_ref and hasattr(main_window_ref, 'get_recent_chat_history_as_string') and \
-           hasattr(main_window_ref, 'current_history_range_for_prompt'): # メンバー変数の存在も確認
-            
-            # MainWindow のスライダーで設定された履歴の往復数を取得
-            num_history_pairs_from_main = main_window_ref.current_history_range_for_prompt
-            
-            print(f"  Using history range from MainWindow: {num_history_pairs_from_main} pairs.")
-            recent_history_str = main_window_ref.get_recent_chat_history_as_string(max_pairs=num_history_pairs_from_main) 
-            
-            if recent_history_str:
-                print(f"  Retrieved recent chat history (approx {len(recent_history_str)} chars) for AI editing prompt.")
-            else:
-                print(f"  No recent chat history available or retrieved (range: {num_history_pairs_from_main}).")
-        else:
-            print("  Warning: Could not get recent chat history (main_window_ref not available, method or history range attribute missing).")
-        # --- ★★★ ------------------------------------------------------- ★★★ ---
-
-        # プロンプトの組み立て (履歴 + アイテム情報 + 指示)        
-        prompt_to_ai = ""
-        if recent_history_str:
-            prompt_to_ai += "## 現在の会話の直近の履歴 (参考情報):\n" + recent_history_str + "\n\n"
-        prompt_to_ai += "## AIへの具体的な指示:\n" + instruction_text
-        print(f"  Final prompt for AI editing (length: {len(prompt_to_ai)} chars):\n---\n{prompt_to_ai[:500]}...\n---")
-
-        # 呼び出すAI処理 (generate_single_response は変更なし)
-        if self.ai_edit_dialog_mode == "description" or self.ai_edit_dialog_mode == "history":
-            ai_suggestion, error_msg = GeminiChatHandler.generate_single_response(
-                model_name=ai_model_to_use,
-                prompt_text=prompt_to_ai # ★ 履歴を含むプロンプトを使用
+        try:
+            initial_instruction = prompt_template.format(current_text=current_description)
+        except KeyError as e:
+            print(f"Prompt template formatting error: {e}. Using default template.")
+            # initial_instruction = f"""現在の説明:\n{current_description}\n\n指示:\n[ここに具体的な指示を記述]\n\n上記を踏まえ、新しい説明文を生成してください。"""
+            initial_instruction = (
+                f"あなたはTRPGのデータ管理を行うアシスタントです。\n"
+                f"以下の「現在の説明/メモ」に基づいて、現在の状況を考慮して新しい「説明/メモ」を作成してください。\n"
+                f"元の情報で重要なものが失われないようにし、説明/メモ以外の余計な情報は出力しないようにしてください。\n\n"
+                f"現在の説明/メモ:\n"
+                f"--------------------\n"
+                f"{current_description}\n"
+                f"--------------------\n\n"
             )
-        else:
-            error_msg = f"不明な編集モードです: {self.ai_edit_dialog_mode}"
+
+        self.ai_edit_dialog_mode = "description"
+        self.ai_edit_dialog = AIAssistedEditDialog(
+            initial_instruction_text=initial_instruction,
+            current_item_description=current_description,
+            parent=self,
+            window_title="AIで「説明/メモ」を編集"
+        )
+        self.ai_edit_dialog.request_ai_button.clicked.connect(self._handle_ai_suggestion_request)
+
+        if self.ai_edit_dialog.exec_() == QDialog.Accepted:
+            final_text = self.ai_edit_dialog.get_final_text()
+            current_description_widget.setPlainText(final_text)
+        self.ai_edit_dialog = None
+
+    def _handle_ai_suggestion_request(self):
+        """AI編集支援ダイアログからの提案依頼を処理します。
+        会話履歴とアイテムコンテキストを考慮してAIに応答を要求します。
+        """
+        if not self.ai_edit_dialog:
+            QMessageBox.warning(self, "エラー", "AI編集ダイアログが見つかりません。")
+            return
+
+        user_instruction_text = self.ai_edit_dialog.get_instruction_text()
+        if not user_instruction_text.strip():
+            QMessageBox.warning(self, "入力エラー", "AIへの指示が空です。")
+            return
+
+        main_window = get_main_window_instance()
+        if not main_window:
+            QMessageBox.critical(self, "エラー", "メインウィンドウの参照を取得できませんでした。")
+            if self.ai_edit_dialog: self.ai_edit_dialog.show_processing_message(False)
+            return
+
+        chat_handler = main_window.get_gemini_chat_handler()
+        if not chat_handler:
+            QMessageBox.critical(self, "エラー", "チャットハンドラが見つかりません。")
+            if self.ai_edit_dialog: self.ai_edit_dialog.show_processing_message(False)
+            return
+
+        if not gemini_is_configured():
+            QMessageBox.critical(self, "APIキー未設定",
+                                 "Gemini APIキーが設定されていません。メインメニューの「設定」からAPIキーを設定してください。")
+            if self.ai_edit_dialog: self.ai_edit_dialog.show_processing_message(False)
+            return
+
+        if self.ai_edit_dialog: self.ai_edit_dialog.show_processing_message(True)
+        QApplication.processEvents()
+
+        current_chat_history = main_window.get_current_chat_history()
+        
+        item_context_for_ai: Optional[str] = None
+        if self.ai_edit_dialog_mode == "description":
+            pass # プロンプトテンプレートで現在の説明を渡しているため、ここでは追加しない
+        elif self.ai_edit_dialog_mode == "history":
+            if self.item_data:
+                item_name = self.item_data.get("name", "")
+                item_desc = self.item_data.get("description", "")
+                item_context_for_ai = f"現在のアイテム名: {item_name}\n現在のアイテム説明: {item_desc}"
             
-        self.ai_edit_dialog.show_processing_message(False)
+        max_pairs = main_window.item_history_range_for_prompt if hasattr(main_window, 'item_history_range_for_prompt') else 5
 
-        if error_msg:
-            QMessageBox.warning(self.ai_edit_dialog, "AI提案エラー", f"AIからの提案取得に失敗しました:\n{error_msg}")
-        elif ai_suggestion is not None: # Noneでないことを確認 (空文字列は許容)
-            processed_suggestion = ai_suggestion
-            # if self.ai_edit_dialog_mode == "history": # 履歴モードなら1行に丸める（一先ず現状は無効）
-            #    processed_suggestion = ai_suggestion.splitlines()[0] if ai_suggestion.strip() else "" # 空の場合も考慮
-            
-            self.ai_edit_dialog.set_suggestion_text(processed_suggestion)
-            QMessageBox.information(self.ai_edit_dialog, "提案取得完了", "AIからの提案を取得しました。必要に応じて編集してください。")
-        else: # ai_suggestion が None (エラーなしで応答なし) の場合も考慮
-            QMessageBox.information(self.ai_edit_dialog, "提案なし", "AIから有効な提案がありませんでした。")
+        try:
+            ai_response, error_message, usage_data = chat_handler.generate_response_with_history_and_context(
+                user_instruction=user_instruction_text,
+                item_context=item_context_for_ai,
+                chat_history_to_include=current_chat_history,
+                max_history_pairs=max_pairs
+            )
 
+            if error_message:
+                QMessageBox.critical(self, "AI応答エラー", f"AIからの応答取得に失敗しました。\nエラー: {error_message}")
+            elif ai_response is not None and self.ai_edit_dialog:
+                self.ai_edit_dialog.set_suggestion_text(ai_response)
+            elif self.ai_edit_dialog: # ai_response が None の場合
+                QMessageBox.warning(self.ai_edit_dialog, "AI応答なし", "AIから有効な応答が得られませんでした。")
 
+        except Exception as e:
+            QMessageBox.critical(self, "AI処理エラー", f"AI処理中に予期せぬエラーが発生しました。\n{e}")
+            print(f"Error in _handle_ai_suggestion_request: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            if self.ai_edit_dialog: self.ai_edit_dialog.show_processing_message(False)
 
     def select_image_file(self):
         """「画像を選択」ボタンがクリックされたときの処理。
@@ -581,15 +585,24 @@ class DetailWindow(QWidget):
         if not recent_history_str: recent_history_str = "(まだ履歴はありません)"
 
         instruction_template_history = (
-            f"## 履歴自動追記支援\n\n"
-            f"以下の情報とユーザーの具体的な出来事の説明に基づいて、キャラクター「{item_name}」の履歴に1行で追記する簡潔なエントリーを作成してください。"
-            f"タイムスタンプは自動で付与されるため、エントリー内容のみを生成してください。\n\n"
-            f"### 現在のキャラクター「{item_name}」の情報:\n"
-            f"- 説明/メモ:\n{item_desc}\n"
-            f"- 直近の履歴:\n{recent_history_str}\n\n"
-            f"### ユーザーによる出来事の説明やAIへの指示:\n"
-            f"[ここに具体的な出来事や、どのような視点で記録してほしいかなどを記述します。例:「NPCエルダとの会話で、古代遺跡の場所を聞き出した」「ゴブリンとの戦闘に辛くも勝利し、左腕を負傷した」など]\n\n"
-            f"### 生成する履歴エントリーの提案 (1行):\n"
+            f"あなたはTRPGのデータ管理を行うアシスタントです。\n"
+            f"ユーザーの指示に従い、「{item_name}」の履歴情報に追加する簡潔なエントリーを作成してください。"
+            f"エントリー内容のみを生成し、余計な情報は出力しないようにしてください。\n\n"
+            f"## まとめて欲しい情報:\n"
+            f"[記述例]\n"
+            f"主人公と{item_name}の現在の関係性をまとめてください。\n"
+            f"{item_name}との会話内容をまとめてください。\n"
+            f"クエストの進行状況をまとめてください。\n"
+            f"現在階層のモンスター情報をまとめてください。\n\n"
+            f"### {item_name}」の参考情報:\n"
+            f"説明/メモ（ここに書かれている情報は固定情報として別途保存されているため、履歴に含める必要は無い）:\n"
+            f"--------------------\n"
+            f"{item_desc}\n"
+            f"--------------------\n\n"
+            f"直近の履歴:\n"
+            f"--------------------\n"
+            f"{recent_history_str}\n"
+            f"--------------------\n\n"
         )
         self.ai_edit_dialog_mode = "history" # モード設定
         self.ai_edit_dialog = AIAssistedEditDialog(

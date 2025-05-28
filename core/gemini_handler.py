@@ -526,6 +526,142 @@ class GeminiChatHandler:
         else:
             print("Project directory name not set, skipping history save on exit.")
 
+    def generate_response_with_history_and_context(
+        self,
+        user_instruction: str,
+        item_context: Optional[str] = None,
+        chat_history_to_include: Optional[List[Dict[str, Union[str, List[Dict[str, str]]]]]] = None,
+        max_history_pairs: Optional[int] = None
+    ) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]]:
+        """
+        指定された会話履歴とアイテムコンテキストを考慮して、単発の応答を生成します。
+        このメソッドは永続的なチャット履歴 (_pure_chat_history) を更新しません。
+        ハンドラに設定されている現在のモデル、システム指示、生成設定、安全設定を使用します。
+
+        Args:
+            user_instruction (str): ユーザーからの主要な指示。
+            item_context (Optional[str]): アイテムの説明など、追加のコンテキスト情報。
+            chat_history_to_include (Optional[List[Dict]]): 含める会話履歴。
+                                                            ハンドラの _pure_chat_history と同じ形式。
+            max_history_pairs (Optional[int]): 含める会話履歴の最大ペア数。
+                                               Noneの場合、chat_history_to_include の全てを使用。
+
+        Returns:
+            Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]]:
+                (AI応答テキスト, エラーメッセージ, 使用状況メタデータ)
+        """
+        if not self._model:
+            error_msg = "モデルが初期化されていません。"
+            print(f"Error in generate_response_with_history_and_context: {error_msg}")
+            return None, error_msg, None
+
+        if not is_configured(): # APIキー設定確認
+            error_msg = "Gemini APIが設定されていません。"
+            print(f"Error in generate_response_with_history_and_context: {error_msg}")
+            return None, error_msg, None
+
+        messages_for_api: List[Dict[str, Union[str, List[Dict[str, str]]]]] = [] # type: ignore
+
+        # 1. 会話履歴の準備
+        effective_chat_history = []
+        if chat_history_to_include:
+            source_history = list(chat_history_to_include) # コピーを使用
+            if max_history_pairs is not None and max_history_pairs >= 0:
+                num_messages_to_keep = max_history_pairs * 2
+                if len(source_history) > num_messages_to_keep:
+                    effective_chat_history = source_history[-num_messages_to_keep:]
+                    print(f"  generate_response_with_history_and_context: Using last {max_history_pairs} pairs ({len(effective_chat_history)} messages) from provided history.")
+                else:
+                    effective_chat_history = source_history
+            else:
+                effective_chat_history = source_history
+                print(f"  generate_response_with_history_and_context: Using all {len(effective_chat_history)} messages from provided history.")
+
+        cleaned_history_to_send = []
+        for item in effective_chat_history:
+            if isinstance(item, dict) and "usage" in item:
+                cleaned_item = {k: v for k, v in item.items() if k != "usage"}
+                cleaned_history_to_send.append(cleaned_item)
+            else:
+                cleaned_history_to_send.append(item)
+        messages_for_api.extend(cleaned_history_to_send)
+
+        # 2. アイテムコンテキストの追加 (userロール)
+        if item_context and item_context.strip():
+            messages_for_api.append({"role": "user", "parts": [{"text": item_context.strip()}]})
+            print(f"  generate_response_with_history_and_context: Added item context.")
+
+        # 3. ユーザー指示の追加 (userロール)
+        if user_instruction and user_instruction.strip():
+            messages_for_api.append({"role": "user", "parts": [{"text": user_instruction.strip()}]})
+            print(f"  generate_response_with_history_and_context: Added user instruction.")
+        else:
+            if not messages_for_api:
+                 error_msg = "送信するメッセージがありません (履歴、コンテキスト、指示が全て空です)。"
+                 print(f"Error in generate_response_with_history_and_context: {error_msg}")
+                 return None, error_msg, None
+            print("Warning: User instruction is empty in generate_response_with_history_and_context.")
+        
+        is_valid_user_message_present = False
+        for msg in messages_for_api:
+            if msg.get("role") == "user":
+                parts = msg.get("parts")
+                if isinstance(parts, list) and len(parts) > 0:
+                    first_part = parts[0]
+                    if isinstance(first_part, dict) and first_part.get("text", "").strip():
+                        is_valid_user_message_present = True
+                        break
+        
+        if not is_valid_user_message_present:
+            error_msg = "APIに送信する有効なユーザーメッセージがありません。"
+            print(f"Error in generate_response_with_history_and_context: {error_msg}")
+            return None, error_msg, None
+            
+        print(f"  generate_response_with_history_and_context: Total messages for API: {len(messages_for_api)}")
+
+        try:
+            response = self._model.generate_content(
+                contents=messages_for_api, # type: ignore
+                stream=False
+            )
+
+            ai_response_text: Optional[str] = None
+            usage_metadata_dict: Optional[Dict[str, int]] = None
+
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage_metadata_dict = {
+                    "input_tokens": response.usage_metadata.prompt_token_count,
+                    "output_tokens": response.usage_metadata.candidates_token_count,
+                    "total_token_count": response.usage_metadata.total_token_count
+                }
+                print(f"  generate_response_with_history_and_context: Usage metadata: {usage_metadata_dict}")
+
+            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+                ai_response_text = response.candidates[0].content.parts[0].text
+            elif response.prompt_feedback:
+                error_msg = f"プロンプトがブロックされました。Feedback: {response.prompt_feedback}"
+                if hasattr(response.prompt_feedback, 'block_reason'):
+                    error_msg += f" Reason: {response.prompt_feedback.block_reason}"
+                if hasattr(response.prompt_feedback, 'safety_ratings'):
+                     error_msg += f" SafetyRatings: {response.prompt_feedback.safety_ratings}"
+                print(f"Error in generate_response_with_history_and_context: {error_msg}")
+                return None, error_msg, usage_metadata_dict
+            else:
+                finish_reason = "Unknown"
+                if response.candidates and hasattr(response.candidates[0], 'finish_reason'):
+                    finish_reason = str(response.candidates[0].finish_reason)
+                error_msg = f"AIからの応答が期待する形式ではありません (Finish reason: {finish_reason})。Response: {response}"
+                print(f"Error in generate_response_with_history_and_context: {error_msg}")
+                return None, error_msg, usage_metadata_dict
+            
+            return ai_response_text, None, usage_metadata_dict
+
+        except Exception as e:
+            error_msg = f"メッセージ送信中にエラーが発生しました: {e}"
+            print(f"Error in generate_response_with_history_and_context: {error_msg}")
+            import traceback
+            traceback.print_exc()
+            return None, error_msg, None
 
     @staticmethod
     def generate_single_response(model_name: str, 

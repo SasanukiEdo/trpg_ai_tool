@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QUrl, QEvent # ★★★ QEvent を追加 ★★★
 import re # ディレクトリ名検証用
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Union # Union を追加
 
 # --- プロジェクトルートをパスに追加 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -198,6 +198,7 @@ class MainWindow(QWidget):
 
         # --- ★★★ 送信履歴範囲用のメンバー変数 ★★★ ---
         self.current_history_range_for_prompt: int = 25 # デフォルト25往復
+        self.item_history_range_for_prompt: int = 5 # アイテム履歴用はデフォルト5往復
         # --- ★★★ --------------------------------- ★★★ ---
 
         # --- ★★★ アイテム履歴の送信数設定用メンバー変数 ★★★ ---
@@ -2276,6 +2277,29 @@ class MainWindow(QWidget):
         status_text = f"プロジェクト: {project_name_display}  |  APIキー: <font color='{'green' if api_key_ok else 'red'}'>{'設定済み' if api_key_ok else '未設定/エラー'}</font>"
         self.status_label.setText(status_text)
         print(f"Status label updated: {status_text}")
+
+    def get_gemini_chat_handler(self) -> Optional[GeminiChatHandler]:
+        """現在のGeminiChatHandlerのインスタンスを返します。"""
+        return self.chat_handler
+
+    def get_current_chat_history(self) -> List[Dict[str, Union[str, List[Dict[str, str]]]]]:
+        """現在のプロジェクトのチャット履歴 (_pure_chat_history) のコピーを返します。"""
+        if self.chat_handler:
+            return self.chat_handler.get_pure_chat_history() # 既にコピーを返す想定
+        return []
+
+    def _initialize_configs_and_project(self):
+        """グローバル設定を読み込み、アクティブなプロジェクトのデータをロードします。"""
+        print("--- MainWindow: Initializing configurations and project data ---")
+        self.global_config = load_global_config()
+        # --- ★★★ 送信キーモードのデフォルト値をglobal_configに書き込む(初回起動時など) ★★★ ---
+        if "send_on_enter_mode" not in self.global_config:
+            self.global_config["send_on_enter_mode"] = True # デフォルト
+            save_global_config(self.global_config) # 保存
+        # --- ★★★ -------------------------------------------------------------- ★★★ ---
+        self.current_project_dir_name = self.global_config.get("active_project", "default_project")
+        print(f"  Active project directory name from global config: '{self.current_project_dir_name}'")
+        self._load_current_project_data() # 実際のデータ読み込み
 
 if __name__ == '__main__':
     """MainWindowの基本的な表示・インタラクションテスト。"""
