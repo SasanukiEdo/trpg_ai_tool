@@ -32,8 +32,20 @@ DEFAULT_GLOBAL_CONFIG = {
     "available_models": [                   # 利用可能なAIモデルのリスト
         "gemini-1.5-pro-latest",
         "gemini-1.5-flash-latest",
+        "gemini-pro",
+        "gemini-1.5-flash",
         "gemini-pro"
-    ]
+    ],
+    "generation_temperature": 0.7,
+    "generation_top_p": 0.95,
+    "generation_top_k": 40,
+    "generation_max_output_tokens": 2048,
+    "font_family": "MS Gothic",
+    "font_size": 10,
+    "font_color_user": "#0000FF",       # 青
+    "font_color_model": "#008000",      # 緑
+    "font_color_model_latest": "#FF0000", # 赤
+    "font_line_height": 1.5,
 }
 """dict: グローバル設定ファイルが存在しない場合や、キーが不足している場合に使用されるデフォルト値。"""
 

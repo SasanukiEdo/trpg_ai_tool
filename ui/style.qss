@@ -2,8 +2,7 @@
 
 /* 応答履歴表示エリア全体のスタイル */
 QTextBrowser#responseDisplay {
-    /* font-family: "游ゴシック体", YuGothic, "Yu Gothic", Meiryo, sans-serif; /* フォント指定 */
-    font-size: 11pt;
+    /* font-family と font-size は MainWindow側でインラインスタイルとして設定 */
     border: 1px solid #ccc; /* 枠線 (任意) */
     background-color: #fcfcfc; /* 背景色 (任意) */
 }
@@ -16,14 +15,14 @@ QTextBrowser#responseDisplay {
 
 /* ユーザーの発言エントリ */
 .user-entry {
-    color: #444444; /* 少し暗めの青 */
+    /* color は MainWindow側でインラインスタイルとして設定 */
     margin-right: 10px;
     margin-left: 10px;
 }
 
 /* AIの応答エントリ */
 .model-entry {
-    color:rgb(0, 85, 177);
+    /* color は MainWindow側でインラインスタイルとして設定 */
     margin-right: 10px;
     margin-left: 20px;
 }
@@ -49,11 +48,12 @@ QTextBrowser#responseDisplay {
 .name-container {
     font-weight: bold;
     margin-bottom: 10px;
+    text-decoration: none; /* アンダーラインを削除 */
+    text-align: left;
 }
 
 /* 応答部分のボックススタイル */
 .comment-container {
-    line-height: 150%;
     margin-bottom: 5px;
 }
 
@@ -63,11 +63,14 @@ QTextBrowser#responseDisplay {
 }
 
 /* 各履歴エントリ間の区切り線 */
-.history-entry hr.separator {
-    border: 0;
-    border-top: 1px solid #eeeeee; /* 少し薄めの区切り線 */
+.separator {
+    float: none;
+    /* border-top: 1px solid #000000; 少し薄めの区切り線 */
     margin-top: 0px;
     margin-bottom: 20px;
+    margin-left: 20px;
+    /* text-align: center; */
+    color: #aaaaaa;
 }
 
 /* (オプション) MainWindow全体のウィジェットスタイルなどもここに追加可能 */

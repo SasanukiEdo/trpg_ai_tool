@@ -16,6 +16,8 @@ from typing import List, Dict, Tuple, Optional, Union
 import os
 import json
 
+from core.config_manager import load_global_config # 追加
+
 # --- グローバル変数 (APIキーと設定済みフラグ) ---
 _API_KEY: Optional[str] = None
 _IS_CONFIGURED: bool = False
@@ -98,13 +100,14 @@ class GeminiChatHandler:
         self.project_dir_name: Optional[str] = project_dir_name
         self.model_name: str = model_name
         
-        # generation_config の初期化
+        # generation_config の初期化 (グローバル設定から読み込む)
         if generation_config is None:
+            g_config = load_global_config()
             self.generation_config: Optional[gtypes.GenerationConfigDict] = { # type: ignore
-                "temperature": 0.7,
-                "top_p": 1.0,
-                "top_k": 32,
-                "max_output_tokens": 2048,
+                "temperature": g_config.get("generation_temperature", 0.7),
+                "top_p": g_config.get("generation_top_p", 0.95),
+                "top_k": g_config.get("generation_top_k", 40),
+                "max_output_tokens": g_config.get("generation_max_output_tokens", 2048),
             }
         else:
             self.generation_config = generation_config
@@ -265,7 +268,15 @@ class GeminiChatHandler:
         
         # クリーニング処理: _pure_chat_history は常に正しい辞書形式であることを期待
         # ここでは、ChatSessionが期待する形式に変換する処理は不要（辞書のリストでOK）
-        history_for_session_start = source_history_to_use
+        cleaned_history_to_send = []
+        for item in source_history_to_use:
+            if isinstance(item, dict) and "usage" in item:
+                cleaned_item = {k: v for k, v in item.items() if k != "usage"}
+                cleaned_history_to_send.append(cleaned_item)
+            else:
+                cleaned_history_to_send.append(item)
+        
+        history_for_session_start = cleaned_history_to_send
         # --- 履歴クリーニング処理ここまで ---
 
         try:
@@ -297,48 +308,73 @@ class GeminiChatHandler:
             return None, error_msg, None
         
         try:
-            messages_for_api: List[Dict[str, Union[str, List[Dict[str, str]]]]] = []
+            messages_for_api = []
 
             # 1. 実際の会話履歴 (_pure_chat_history を利用)
-            effective_history_pairs = max_history_pairs_for_this_turn if max_history_pairs_for_this_turn is not None else (len(self._pure_chat_history) // 2)
+            #    max_history_pairs_for_this_turn に基づいて、直近の会話ペアを選択
             history_to_send = []
             if self._pure_chat_history:
-                num_history_items_to_send = effective_history_pairs * 2
-                temp_history = list(self._pure_chat_history[-num_history_items_to_send:])
-                for item in temp_history:
-                    if not (
-                        isinstance(item, dict) and
-                        isinstance(item.get("role"), str) and
-                        isinstance(item.get("parts"), list) and
-                        all(isinstance(part, dict) and isinstance(part.get("text"), str) for part in item["parts"])
-                    ):
-                        print(f"Warning: Invalid history item format found and skipped: {item}")
-                        continue
-                    # item から "usage" を除外した新しい辞書を作成する
-                    item_to_send = {k: v for k, v in item.items() if k != "usage"}
-                    history_to_send.append(item_to_send)
-            messages_for_api.extend(history_to_send)
-
-            # 2. 一時的コンテキスト (user ロール)
-            if transient_context and transient_context.strip(): 
-                messages_for_api.append({
-                    "role": "user",
-                    "parts": [{"text": transient_context.strip()}]
-                })
-
-            # 3. 実際のユーザー入力 (user ロール)
-            if not user_input or not user_input.strip():
-                return None, "ユーザー入力が空です。", None
-            messages_for_api.append({
-                "role": "user",
-                "parts": [{"text": user_input.strip()}]
-            })
-
-            print(f"GeminiChatHandler: Sending messages to API via generate_content ({len(messages_for_api)} entries). System instruction is set in model.")
+                if max_history_pairs_for_this_turn is not None and max_history_pairs_for_this_turn >= 0:
+                    num_pairs_to_take = max_history_pairs_for_this_turn
+                    # 履歴は [user, model, user, model, ...] の順なので、ペア数は *2 する
+                    num_entries_to_take = num_pairs_to_take * 2
+                    history_to_send = self._pure_chat_history[-num_entries_to_take:]
+                    print(f"  Sending last {len(history_to_send)} entries ({num_pairs_to_take} pairs) from chat history.")
+                else: # None または負の場合は全履歴
+                    history_to_send = self._pure_chat_history
+                    print(f"  Sending all {len(history_to_send)} entries from chat history.")
             
+            # API送信前に、history_to_send の各アイテムから "usage" キーを除外
+            cleaned_history_to_send = []
+            for item in history_to_send:
+                if isinstance(item, dict) and "usage" in item:
+                    cleaned_item = {k: v for k, v in item.items() if k != "usage"}
+                    cleaned_history_to_send.append(cleaned_item)
+                else:
+                    cleaned_history_to_send.append(item)
+            
+            messages_for_api.extend(cleaned_history_to_send) # クリーンアップされた履歴を追加
+
+            # 2. 一時的コンテキスト、空のmodel応答、ユーザー入力 の順で追加
+            if transient_context and transient_context.strip():
+                messages_for_api.append({"role": "user", "parts": [{"text": transient_context.strip()}]})
+                # 一時的コンテキストの後に、空のモデル応答を挟む
+                # messages_for_api.append({"role": "model", "parts": [{"text": ""}]}) 
+
+            if user_input and user_input.strip(): # ユーザー入力が空でない場合のみ追加
+                messages_for_api.append({"role": "user", "parts": [{"text": user_input.strip()}]})
+            else:
+                # ユーザー入力が空の場合、最後が空のmodelメッセージで終わってしまうため、
+                # それを削除するか、あるいはエラーとするか検討が必要。
+                # 現状では、ユーザー入力がない場合はエラーとして扱う（下部のチェックで捕捉）。
+                print("Warning: User input is empty. If transient_context was also empty, this might lead to an error or unexpected behavior.")
+
+            if not messages_for_api or not any(msg.get("role") == "user" and msg.get("parts") and msg["parts"][0].get("text", "").strip() for msg in messages_for_api):
+                print("Error: No messages to send to the API (history, context, and input are all empty or invalid).")
+                return None, "APIに送信するメッセージがありません。", None
+            
+            print(f"  Total messages being sent to API (including history): {len(messages_for_api)}")
+            # --- ★★★ デバッグ用に送信内容全体を表示 (本番ではコメントアウトまたは削除推奨) ★★★ ---
+            # print("  Full messages_for_api content:")
+            # for i, msg in enumerate(messages_for_api):
+            #     role = msg.get('role', 'N/A')
+            #     parts_content = ""
+            #     if 'parts' in msg and isinstance(msg['parts'], list) and msg['parts']:
+            #         if isinstance(msg['parts'][0], dict) and 'text' in msg['parts'][0]:
+            #             parts_content = msg['parts'][0]['text'][:100] + ('...' if len(msg['parts'][0]['text']) > 100 else '')
+            #         elif isinstance(msg['parts'][0], str): # 古い形式の履歴も考慮
+            #             parts_content = msg['parts'][0][:100] + ('...' if len(msg['parts'][0]) > 100 else '')
+            #     print(f"    [{i}] Role: {role}, Parts Preview: '{parts_content}'")
+            # --- ★★★ -------------------------------------------------------------- ★★★ ---
+
+            print(f"送信コンテキスト: {messages_for_api}")
+
+            # 3. API呼び出し (常に固定の safety_settings を使用)
             response = self._model.generate_content(
                 contents=messages_for_api, # type: ignore
-                generation_config=self.generation_config,
+                # safety_settings はモデル初期化時に設定済みのため、ここでは渡さない
+                # generation_config もモデル初期化時に設定済み
+                stream=False 
             )
 
             ai_response_text = ""
@@ -419,12 +455,34 @@ class GeminiChatHandler:
                                          new_generation_config: Optional[gtypes.GenerationConfigDict] = None,
                                          new_safety_settings: Optional[List[gtypes.SafetySettingDict]] = None # この引数は無視される
                                          ):
-        """設定を更新し、チャットセッションを再起動します。
-        プロジェクトディレクトリやシステム指示、モデル名、履歴の最大ペア数、生成設定を更新できます。
-        安全性設定は常にBLOCK_NONEに固定されているため、このメソッドからは変更できません。
+        """モデル名、システム指示、プロジェクト、生成設定などを更新し、チャットセッションを再開します。
+        変更がない場合は現在の設定を維持します。
+        safety_settings は常に固定値が使用され、この引数からの変更は無視されます。
+        generation_config がNoneで渡された場合は、グローバル設定から再読み込みします。
         """
-        print("GeminiChatHandler: Updating settings and restarting chat session...")
+        print("GeminiChatHandler: Updating settings and restarting chat...")
         
+        if new_model_name:
+            self.model_name = new_model_name
+            print(f"  Model name updated to: {self.model_name}")
+
+        if new_generation_config is not None:
+            self.generation_config = new_generation_config
+            print(f"  Generation config explicitly updated.")
+        else: # new_generation_configがNoneの場合、グローバル設定から再読み込み
+            g_config = load_global_config()
+            self.generation_config = { # type: ignore
+                "temperature": g_config.get("generation_temperature", 0.7),
+                "top_p": g_config.get("generation_top_p", 0.95),
+                "top_k": g_config.get("generation_top_k", 40),
+                "max_output_tokens": g_config.get("generation_max_output_tokens", 2048),
+            }
+            print(f"  Generation config reloaded from global settings.")
+
+        # safety_settings は常に固定 (引数は無視)
+        self.safety_settings = FIXED_SAFETY_SETTINGS # type: ignore
+        print(f"  Safety settings remain fixed to BLOCK_NONE.")
+
         if new_project_dir_name is not None and self.project_dir_name != new_project_dir_name:
             if self.project_dir_name is not None: # 既存のプロジェクトがあれば履歴を保存
                 self._save_history_to_file()
@@ -433,24 +491,9 @@ class GeminiChatHandler:
             self._load_history_from_file() # 新しいプロジェクトから履歴を読み込む
             print(f"  Project directory changed to: {self.project_dir_name}")
 
-        if new_model_name is not None and self.model_name != new_model_name:
-            self.model_name = new_model_name
-            print(f"  Model name changed to: {self.model_name}")
-            # モデル名が変更されたら、システム指示も合わせてモデルを再初期化する必要がある
-            self._initialize_model(system_instruction_text=new_system_instruction if new_system_instruction is not None else self._system_instruction_text)
+        if new_system_instruction is not None:
+            self._system_instruction_text = new_system_instruction.strip() if new_system_instruction and new_system_instruction.strip() else None
         
-        if new_generation_config is not None:
-            self.generation_config = new_generation_config
-            print(f"  Generation config updated.")
-            # generation_configが変更された場合、モデル再初期化が必要か確認 (通常は再初期化)
-            # ただし、システム指示やモデル名が変わらない場合、start_new_chat_sessionでモデルが再利用されることを期待する
-            if not (new_model_name or new_system_instruction):
-                 self._initialize_model(system_instruction_text=self._system_instruction_text)
-
-        # 安全設定は固定なので、new_safety_settings は無視する
-        if new_safety_settings is not None:
-            print("  Note: Safety settings are fixed and cannot be changed via this method.")
-
         # 新しいシステム指示があれば、それを使ってチャットを再開
         # モデルの再初期化は start_new_chat_session 内でシステム指示の変更を検知して行われる
         self.start_new_chat_session(
@@ -491,33 +534,58 @@ class GeminiChatHandler:
                                  generation_config: Optional[gtypes.GenerationConfigDict] = None,
                                  safety_settings: Optional[List[gtypes.SafetySettingDict]] = None # この引数は無視される
                                  ) -> Tuple[Optional[str], Optional[str]]:
-        """単一のプロンプトに対する応答を生成します。
-        チャット履歴は考慮されません。
-        safety_settings はAPIに送信しません。
+        """チャット履歴に依存しない単発のプロンプト応答を生成します。
+        safety_settings は常に固定値が使用され、この引数からの変更は無視されます。
+        generation_config がNoneで渡された場合は、グローバル設定から読み込みます。
         """
         if not is_configured():
             return None, "Error: Gemini API is not configured."
-        
+
+        final_generation_config: Optional[gtypes.GenerationConfigDict] # type: ignore
+        if generation_config is None:
+            g_config = load_global_config() 
+            final_generation_config = { # type: ignore
+                "temperature": g_config.get("generation_temperature", 0.7),
+                "top_p": g_config.get("generation_top_p", 0.95),
+                "top_k": g_config.get("generation_top_k", 40),
+                "max_output_tokens": g_config.get("generation_max_output_tokens", 2048),
+            }
+            print(f"generate_single_response: Using generation config from global settings.")
+        else:
+            final_generation_config = generation_config
+            print(f"generate_single_response: Using provided generation config.")
+
+        # 安全設定は常に固定 (引数は無視)
+        final_safety_settings = FIXED_SAFETY_SETTINGS # type: ignore
+        # print(f"generate_single_response: Safety settings are fixed to BLOCK_NONE.") # 詳細ログはコメントアウト
+
         try:
-            # 安全設定をAPI送信から除外
-            # effective_safety_settings = FIXED_SAFETY_SETTINGS # 参照しない
-            
             model_args = {"model_name": model_name}
             if system_instruction:
                 model_args["system_instruction"] = system_instruction
-            if generation_config:
-                model_args["generation_config"] = generation_config
-            # model_args["safety_settings"] = effective_safety_settings # type: ignore # safety_settings をAPI送信から除外
-
-            print(f"Generating single response with model: {model_name}, safety_settings: NOT SENT TO API (using SDK/API defaults)")
-            model = genai.GenerativeModel(**model_args) # type: ignore
-            response = model.generate_content(prompt_text)
+            if final_generation_config:
+                 model_args["generation_config"] = final_generation_config # type: ignore
+            # model_args["safety_settings"] = final_safety_settings # API送信時には含めない方針
             
-            if response and response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
-                return response.candidates[0].content.parts[0].text, None
-            elif response and response.prompt_feedback:
-                return None, f"Error: Prompt was blocked. Feedback: {response.prompt_feedback}"
-            else:
-                return None, "Error: No content in response or response was empty."
+            # print(f"generate_single_response: Initializing model {model_name} with system_instruction: {'provided' if system_instruction else 'None'}, generation_config: {'provided' if final_generation_config else 'None'}, safety_settings: NOT SENT")
+            model = genai.GenerativeModel(**model_args) # type: ignore
+
+            # print(f"generate_single_response: Sending prompt: '{prompt_text[:100]}...'") # 詳細ログはコメントアウト
+            response = model.generate_content(prompt_text)
+
+            if not response.candidates:
+                # print("generate_single_response: No candidates in response.") # 詳細ログはコメントアウト
+                feedback = response.prompt_feedback
+                block_reason = feedback.block_reason if feedback else "Unknown"
+                # print(f"generate_single_response: Prompt feedback - block_reason: {block_reason}") # 詳細ログはコメントアウト
+                return None, f"AIからの応答がありませんでした。ブロック理由: {block_reason}"
+            
+            # print(f"generate_single_response: Response received.") # 詳細ログはコメントアウト
+            # print(f"generate_single_response: Response text: '{response.text[:100]}...'") # 詳細ログはコメントアウト
+            return response.text, None
         except Exception as e:
-            return None, f"Error generating single response: {e}"
+            print(f"Error in generate_single_response: {e}")
+            # スタックトレースを出力したい場合は以下を有効化
+            # import traceback
+            # traceback.print_exc()
+            return None, f"AI応答の生成中にエラーが発生しました: {e}"

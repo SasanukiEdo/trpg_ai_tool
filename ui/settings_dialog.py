@@ -16,9 +16,11 @@
 
 from PyQt5.QtWidgets import (
     QDialog, QLineEdit, QFormLayout, QDialogButtonBox, QTextEdit, QComboBox,
-    QPushButton, QLabel, QMessageBox, QHBoxLayout, QFrame, QWidget # QFrame を追加 (区切り線用)
+    QPushButton, QLabel, QMessageBox, QHBoxLayout, QFrame, QWidget, QDoubleSpinBox, QSpinBox,
+    QFontComboBox, QSpinBox, QPushButton, QColorDialog # ★ 追加: QFontComboBox, QSpinBox, QPushButton, QColorDialog
 )
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QFont # ★ 追加: QFont
 
 # --- coreモジュールインポート ---
 import sys
@@ -144,6 +146,111 @@ class SettingsDialog(QDialog):
             self.global_default_model_combo.setCurrentIndex(0)
         layout.addRow("新規プロジェクト用デフォルトモデル:", self.global_default_model_combo)
 
+        # --- 生成制御パラメータ (グローバル) ---
+        generation_settings_label = QLabel("<b>AI応答生成の制御 (全体設定)</b>")
+        layout.addRow(generation_settings_label)
+
+        gen_params_layout = QHBoxLayout()
+        self.temperature_spinbox = QDoubleSpinBox()
+        self.temperature_spinbox.setRange(0.0, 2.0)
+        self.temperature_spinbox.setSingleStep(0.1)
+        self.temperature_spinbox.setValue(self.global_config_edit.get("generation_temperature", DEFAULT_GLOBAL_CONFIG.get("generation_temperature")))
+        gen_params_layout.addWidget(QLabel("Temperature:"))
+        gen_params_layout.addWidget(self.temperature_spinbox)
+        gen_params_layout.addSpacing(15)
+
+        self.top_p_spinbox = QDoubleSpinBox()
+        self.top_p_spinbox.setRange(0.0, 1.0)
+        self.top_p_spinbox.setSingleStep(0.01)
+        self.top_p_spinbox.setValue(self.global_config_edit.get("generation_top_p", DEFAULT_GLOBAL_CONFIG.get("generation_top_p")))
+        gen_params_layout.addWidget(QLabel("Top-P:"))
+        gen_params_layout.addWidget(self.top_p_spinbox)
+        gen_params_layout.addSpacing(15)
+
+        self.top_k_spinbox = QSpinBox()
+        self.top_k_spinbox.setRange(1, 100)
+        self.top_k_spinbox.setValue(self.global_config_edit.get("generation_top_k", DEFAULT_GLOBAL_CONFIG.get("generation_top_k")))
+        gen_params_layout.addWidget(QLabel("Top-K:"))
+        gen_params_layout.addWidget(self.top_k_spinbox)
+        gen_params_layout.addSpacing(15)
+
+        self.max_tokens_spinbox = QSpinBox()
+        self.max_tokens_spinbox.setRange(1, 8192)
+        self.max_tokens_spinbox.setSuffix(" トークン")
+        self.max_tokens_spinbox.setValue(self.global_config_edit.get("generation_max_output_tokens", DEFAULT_GLOBAL_CONFIG.get("generation_max_output_tokens")))
+        gen_params_layout.addWidget(QLabel("最大トークン:")) # ラベル短縮
+        gen_params_layout.addWidget(self.max_tokens_spinbox)
+        gen_params_layout.addStretch()
+        layout.addRow(gen_params_layout) # 1行でまとめて追加
+
+        # --- フォント設定 (グローバル) ---
+        layout.addRow(self._create_separator_line())
+        font_settings_label = QLabel("<b>AI応答履歴のフォント設定 (全体設定)</b>")
+        layout.addRow(font_settings_label)
+
+        font_type_size_layout = QHBoxLayout()
+        self.font_family_combo = QFontComboBox()
+        current_font_family = self.global_config_edit.get("font_family", DEFAULT_GLOBAL_CONFIG.get("font_family"))
+        self.font_family_combo.setCurrentFont(QFont(current_font_family))
+        font_type_size_layout.addWidget(QLabel("フォント種類:"))
+        font_type_size_layout.addWidget(self.font_family_combo)
+        font_type_size_layout.addSpacing(15)
+
+        self.font_size_spinbox = QSpinBox()
+        self.font_size_spinbox.setRange(6, 72)
+        self.font_size_spinbox.setValue(self.global_config_edit.get("font_size", DEFAULT_GLOBAL_CONFIG.get("font_size")))
+        self.font_size_spinbox.setSuffix(" pt")
+        font_type_size_layout.addWidget(QLabel("サイズ:"))
+        font_type_size_layout.addWidget(self.font_size_spinbox)
+        font_type_size_layout.addSpacing(15) # ★★★ サイズと行間の間にスペーシング ★★★
+
+        # --- ★★★ 行間設定を追加 ★★★ ---
+        self.font_line_height_spinbox = QDoubleSpinBox()
+        self.font_line_height_spinbox.setRange(0.5, 3.0) # 適切な範囲に調整
+        self.font_line_height_spinbox.setSingleStep(0.1)
+        self.font_line_height_spinbox.setDecimals(1) # 小数点以下1桁
+        self.font_line_height_spinbox.setValue(
+            self.global_config_edit.get("font_line_height", DEFAULT_GLOBAL_CONFIG.get("font_line_height", 1.5))
+        )
+        font_type_size_layout.addWidget(QLabel("行間:"))
+        font_type_size_layout.addWidget(self.font_line_height_spinbox)
+        # --- ★★★ ------------------- ★★★ ---
+
+        font_type_size_layout.addStretch()
+        layout.addRow(font_type_size_layout) # 1行でまとめて追加
+        
+        font_colors_layout = QHBoxLayout()
+        # ユーザー発言の文字色
+        self.font_color_user_button = QPushButton("ユーザー色") # ラベル短縮
+        self.font_color_user_button.setToolTip("ユーザー発言の文字色を選択")
+        self.font_color_user_button.clicked.connect(lambda: self._pick_color("font_color_user", self.font_color_user_preview))
+        self.font_color_user_preview = QLabel()
+        self._update_color_preview(self.font_color_user_preview, self.global_config_edit.get("font_color_user", DEFAULT_GLOBAL_CONFIG.get("font_color_user")))
+        font_colors_layout.addWidget(self.font_color_user_button)
+        font_colors_layout.addWidget(self.font_color_user_preview)
+        font_colors_layout.addSpacing(10)
+
+        # AI応答の文字色
+        self.font_color_model_button = QPushButton("AI応答色") # ラベル短縮
+        self.font_color_model_button.setToolTip("AI応答の文字色を選択")
+        self.font_color_model_button.clicked.connect(lambda: self._pick_color("font_color_model", self.font_color_model_preview))
+        self.font_color_model_preview = QLabel()
+        self._update_color_preview(self.font_color_model_preview, self.global_config_edit.get("font_color_model", DEFAULT_GLOBAL_CONFIG.get("font_color_model")))
+        font_colors_layout.addWidget(self.font_color_model_button)
+        font_colors_layout.addWidget(self.font_color_model_preview)
+        font_colors_layout.addSpacing(10)
+
+        # AI最新応答の文字色
+        self.font_color_model_latest_button = QPushButton("AI最新応答色") # ラベル短縮
+        self.font_color_model_latest_button.setToolTip("AIの最新の応答の文字色を選択")
+        self.font_color_model_latest_button.clicked.connect(lambda: self._pick_color("font_color_model_latest", self.font_color_model_latest_preview))
+        self.font_color_model_latest_preview = QLabel()
+        self._update_color_preview(self.font_color_model_latest_preview, self.global_config_edit.get("font_color_model_latest", DEFAULT_GLOBAL_CONFIG.get("font_color_model_latest")))
+        font_colors_layout.addWidget(self.font_color_model_latest_button)
+        font_colors_layout.addWidget(self.font_color_model_latest_preview)
+        font_colors_layout.addStretch()
+        layout.addRow("文字色設定:", font_colors_layout) # ラベルをつけて1行で追加
+
         # --- OK / Cancel ボタン ---
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
@@ -151,7 +258,7 @@ class SettingsDialog(QDialog):
         layout.addRow(button_box)
 
         self.setMinimumWidth(800) # ダイアログの最小幅
-        self.setMinimumHeight(550) # ★★★ 最小高さを設定 ★★★
+        self.setMinimumHeight(700) # ★★★ 最小高さを設定 ★★★
 
     def _create_separator_line(self) -> QFrame:
         """設定セクション間の区切り線を作成して返します。"""
@@ -207,6 +314,34 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, "APIキー削除完了", msg)
             self.update_api_key_status_label() # 削除後の状態を再表示
 
+    def _pick_color(self, config_key: str, preview_label: QLabel):
+        """カラーピッカーダイアログを開き、選択された色を設定とプレビューに反映します。"""
+        initial_color_hex = self.global_config_edit.get(config_key, DEFAULT_GLOBAL_CONFIG.get(config_key))
+        initial_color = QColor(initial_color_hex)
+        color = QColorDialog.getColor(initial_color, self, "色を選択")
+        if color.isValid():
+            color_hex = color.name()
+            self.global_config_edit[config_key] = color_hex
+            self._update_color_preview(preview_label, color_hex)
+
+    def _update_color_preview(self, label: QLabel, color_hex: str):
+        """指定されたラベルの背景色とテキストを更新して色のプレビューを表示します。"""
+        label.setText(color_hex)
+        label.setStyleSheet(f"background-color: {color_hex}; color: {self._get_contrasting_text_color(color_hex)}; padding: 2px;")
+        label.setFixedWidth(100) # プレビューの幅を固定
+
+    def _get_contrasting_text_color(self, bg_hex_color: str) -> str:
+        """背景色に対して見やすい文字色 (黒または白) を返します。"""
+        try:
+            color = QColor(bg_hex_color)
+            # 輝度を計算 (簡易的な方法)
+            # Y = 0.299*R + 0.587*G + 0.114*B (ITU-R BT.601)
+            # 0-255の範囲なので、128を閾値とする
+            brightness = (color.red() * 299 + color.green() * 587 + color.blue() * 114) / 1000
+            return "#000000" if brightness > 128 else "#FFFFFF"
+        except:
+            return "#000000" # エラー時は黒
+
     def accept(self):
         """OKボタンが押されたときの処理。編集された設定を内部変数に格納します。
 
@@ -215,6 +350,15 @@ class SettingsDialog(QDialog):
         """
         # グローバル設定の編集結果を格納
         self.global_config_edit["default_model"] = self.global_default_model_combo.currentText()
+        self.global_config_edit["generation_temperature"] = self.temperature_spinbox.value()
+        self.global_config_edit["generation_top_p"] = self.top_p_spinbox.value()
+        self.global_config_edit["generation_top_k"] = self.top_k_spinbox.value()
+        self.global_config_edit["generation_max_output_tokens"] = self.max_tokens_spinbox.value()
+        # フォント設定の保存
+        self.global_config_edit["font_family"] = self.font_family_combo.currentFont().family()
+        self.global_config_edit["font_size"] = self.font_size_spinbox.value()
+        self.global_config_edit["font_line_height"] = self.font_line_height_spinbox.value() # ★★★ 行間を保存 ★★★
+        # カラーは _pick_color で self.global_config_edit に直接保存済み
         # active_project はこのダイアログでは編集不可 (MainWindowが管理)
 
         # プロジェクト設定の編集結果を格納

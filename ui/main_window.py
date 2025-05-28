@@ -248,6 +248,7 @@ class MainWindow(QWidget):
         if self.chat_handler and is_configured(): # API設定済みでハンドラがあれば
             self._redisplay_chat_history()
         # --- ★★★ ------------------------------------------ ★★★ ---
+        self.update_status_label() # ★★★ 追加: 起動時にステータス更新 ★★★
 
     def _initialize_chat_handler(self, model_name: str, project_dir_name: str, system_instruction: Optional[str] = None): # ★ project_dir_name を必須引数に
         """GeminiChatHandlerを初期化または再初期化します。
@@ -421,7 +422,7 @@ class MainWindow(QWidget):
     def init_ui(self):
         """メインウィンドウのユーザーインターフェースを構築します。"""
         self.setWindowTitle(f"TRPG AI Tool - 初期化中...")
-        self.setGeometry(200, 200, 1300, 1000)
+        self.setGeometry(200, 200, 1400, 1000)
 
         main_layout = QHBoxLayout(self)
 
@@ -890,6 +891,7 @@ class MainWindow(QWidget):
             self.project_selector_combo.blockSignals(False)
 
         print(f"--- MainWindow: Project switched successfully to '{new_project_dir_name}' ---")
+        self.update_status_label() # ★★★ 追加: プロジェクト切り替え時にステータス更新 ★★★
 
 
     # --- プロジェクト作成・削除関連メソッド ---
@@ -1054,6 +1056,7 @@ class MainWindow(QWidget):
                     self.project_selector_combo.addItem("(プロジェクトがありません)") # 再度表示
                     self.project_selector_combo.setEnabled(False)
                     self.delete_project_button.setEnabled(False) # 削除ボタンも無効化
+                    self.update_status_label() # ★★★ 追加: プロジェクトなしの時にステータス更新 ★★★
                 # else: next_active_project_dir_name が None で _projects_list_for_combo が空でないケースは
                 # _populate_project_selector 内で処理されるはず
 
@@ -1077,6 +1080,7 @@ class MainWindow(QWidget):
             QMessageBox.information(self, "APIキー未設定",
                                     "Gemini APIキーがOSの資格情報に保存されていません。\n"
                                     "「設定」メニューからAPIキーを保存してください。")
+        self.update_status_label() # ★★★ configure_gemini_api の結果に関わらずステータス更新 ★★★
         
         if config_success:
             # --- ★★★ API設定が成功した場合にハンドラを初期化または更新 ★★★ ---
@@ -1115,43 +1119,64 @@ class MainWindow(QWidget):
              print("MainWindow: API configuration failed. Chat handler model invalidated.")
 
     def open_settings_dialog(self):
-        """設定ダイアログを開き、結果を適用します。
-        Chat Handler も必要に応じて再初期化します。
-        送信キーモードのUIも更新します。
-        """
-        dialog = SettingsDialog(self.global_config, self.current_project_settings, parent=self)
+        """設定ダイアログを開き、変更があれば適用・保存します。"""
+        dialog = SettingsDialog(self.global_config, self.current_project_settings, self)
         if dialog.exec_() == QDialog.Accepted:
-            updated_g_conf, updated_p_conf = dialog.get_updated_configs()
-
-            global_settings_changed = self.global_config != updated_g_conf # 更新前に比較
-            project_settings_changed = self.current_project_settings != updated_p_conf
-
-            if global_settings_changed:
-                self.global_config = updated_g_conf
-                save_global_config(self.global_config)
+            updated_global_config, updated_project_settings = dialog.get_updated_configs()
+            
+            # グローバル設定の保存と適用
+            if self.global_config != updated_global_config:
+                save_global_config(updated_global_config)
+                self.global_config = updated_global_config # MainWindowの内部状態も更新
                 print("グローバル設定が更新・保存されました。")
-                # --- ★★★ グローバル設定変更時に送信キーモードUIを更新 ★★★ ---
-                self.send_on_enter_mode = self.global_config.get("send_on_enter_mode", True)
-                self.radio_send_on_enter.setChecked(self.send_on_enter_mode)
-                self.radio_send_on_shift_enter.setChecked(not self.send_on_enter_mode)
-                # --- ★★★ ------------------------------------------------- ★★★ ---
+                self.send_on_enter_mode = self.global_config.get("send_on_enter_mode", True) 
+                
+                # ★★★フォント設定変更を反映するために履歴を再表示★★★
+                self._redisplay_chat_history()
 
+                # GeminiChatHandler に新しい生成設定を適用
+                if self.chat_handler:
+                    new_gen_config = { # type: ignore
+                        "temperature": self.global_config.get("generation_temperature"),
+                        "top_p": self.global_config.get("generation_top_p"),
+                        "top_k": self.global_config.get("generation_top_k"),
+                        "max_output_tokens": self.global_config.get("generation_max_output_tokens"),
+                    }
+                    # Noneの可能性のあるキーを除外
+                    new_gen_config = {k: v for k, v in new_gen_config.items() if v is not None}
+                    
+                    self.chat_handler.update_settings_and_restart_chat(
+                        new_generation_config=new_gen_config if new_gen_config else None
+                    )
+                    print("Chat Handlerの生成設定がグローバル設定に基づいて更新されました。")
 
-            if project_settings_changed:
-                self.current_project_settings = updated_p_conf; save_project_settings(self.current_project_dir_name, self.current_project_settings)
-                print(f"プロジェクト '{self.current_project_dir_name}' の設定が更新・保存されました。")
+            # プロジェクト固有設定の保存
+            if self.current_project_settings != updated_project_settings and self.current_project_dir_name:
+                save_project_settings(self.current_project_dir_name, updated_project_settings)
+                self.current_project_settings = updated_project_settings # MainWindowの内部状態も更新
+                print(f"プロジェクト「{self.current_project_dir_name}」の設定が更新・保存されました。")
+                # プロジェクト設定に依存するUI (メインプロンプト、ウィンドウタイトル等) を更新
+                self.setWindowTitle(f"TRPG AI Tool - {self.current_project_settings.get('project_display_name', self.current_project_dir_name)}")
+                if self.system_prompt_input_main:
+                    self.system_prompt_input_main.setPlainText(self.current_project_settings.get("main_system_prompt", ""))
+                
+                # プロジェクトのモデル変更があればチャットハンドラも更新
+                if self.chat_handler and self.chat_handler.model_name != self.current_project_settings.get("model"):
+                    self.chat_handler.update_settings_and_restart_chat(
+                        new_model_name=self.current_project_settings.get("model"),
+                        new_system_instruction=self.current_project_settings.get("main_system_prompt")
+                        # ここでは generation_config は明示的に渡さない (グローバル設定が優先されるため)
+                    )
+                    print("Chat Handlerのモデルとシステム指示がプロジェクト設定に基づいて更新されました。")
             
-            # UI更新
-            self.system_prompt_input_main.setPlainText(self.current_project_settings.get("main_system_prompt", ""))
-            display_name = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
-            self.setWindowTitle(f"TRPG AI Tool - {display_name}")
-            self._populate_project_selector() 
+            # APIキー設定が変更された可能性があるため、Gemini APIクライアントを再設定
+            # (SettingsDialog内でAPIキー自体はOSに保存済み)
+            self.configure_gemini_and_chat_handler() 
+            self.update_status_label() # ステータスラベルも更新
             
-            # --- ★★★ Chat Handler を設定変更に応じて再初期化 ★★★ ---
-            # APIキーの再設定と、モデル名またはシステム指示が変更された場合にハンドラを更新
-            self.configure_gemini_and_chat_handler() # この中でモデル名とシステム指示の変更を検知して再初期化
-            # --- ★★★ -------------------------------------------- ★★★ ---
-            print("設定ダイアログの変更が適用されました。")
+            QMessageBox.information(self, "設定完了", "設定が適用されました。")
+        else:
+            print("設定変更はキャンセルされました。")
 
     def on_send_button_clicked(self):
         """ユーザー入力と選択されたコンテキスト情報を元に、AIにメッセージを送信し、応答を表示します。
@@ -1228,66 +1253,59 @@ class MainWindow(QWidget):
         表示前に現在の内容はクリアされます。
         """
         if not hasattr(self, 'response_display') or not self.response_display:
-            return
-        if not self.chat_handler:
-            self.response_display.clear()
+            print("Warning: response_display is not initialized. Skipping chat history redisplay.")
             return
 
         self.response_display.clear()
-        
-        history_to_display = self.chat_handler.get_pure_chat_history()
-        if not history_to_display: print("MainWindow: No chat history to display."); return
-        print(f"MainWindow: Redisplaying {len(history_to_display)} entries from chat history using formatted HTML.")
-        
-        html_parts = []
+        if self.chat_handler:
+            history = self.chat_handler.get_pure_chat_history()
+            if not history:
+                # self.response_display.append("<p style='color: gray;'>(まだ会話履歴はありません)</p>")
+                # グローバルフォント設定を読み込み
+                font_family = self.global_config.get("font_family", "MS Gothic")
+                font_size = self.global_config.get("font_size", 10)
+                self.response_display.append(f"<p style='font-family: {font_family}; font-size: {font_size}pt; color: gray;'>(まだ会話履歴はありません)</p>")
+                return
 
-        for index, message_dict in enumerate(history_to_display): # ★★★ 変数名を message_dict に変更 ★★★
-            role = message_dict.get("role") # ★★★ message_dict から取得 ★★★
-            text_content = ""
-            # ★★★ message_dict から parts を取得 ★★★
-            if message_dict.get("parts") and isinstance(message_dict["parts"], list) and len(message_dict["parts"]) > 0:
-                part = message_dict["parts"][0]
-                if isinstance(part, dict) and "text" in part:
-                    text_content = part["text"]
-                elif isinstance(part, str):
-                    text_content = part
+            # 最後のモデル応答を特定するための準備
+            last_model_entry_index = -1
+            for i in range(len(history) - 1, -1, -1):
+                if history[i]['role'] == 'model':
+                    last_model_entry_index = i
+                    break
             
-            if not text_content and role != 'model': # modelロールはusageだけでも表示する可能性があるのでスキップしない
-                 if not (role == 'model' and message_dict.get('usage')):
-                      continue
-
-            model_name_for_entry = None
-            if role == "model" and self.chat_handler:
-                model_name_for_entry = self.chat_handler.model_name 
-            
-            # ★★★ _format_history_entry_to_html に message_dict 全体を渡す ★★★
-            entry_html = self._format_history_entry_to_html(
-                index, message_dict, model_name_for_entry 
-            )
-            html_parts.append(entry_html)
-        
-        self.response_display.setHtml("".join(html_parts))
-        
-        scroll_bar = self.response_display.verticalScrollBar()
-        scroll_bar.setValue(scroll_bar.maximum())
-    
+            for i, entry_data in enumerate(history):
+                # ★★★ model_name を渡すように変更 ★★★
+                # プロジェクト設定から現在のモデル名を取得 (なければグローバルデフォルト)
+                current_model_for_display = self.current_project_settings.get("model", self.global_config.get("default_model", "Unknown Model"))
+                is_latest_model_entry = (entry_data['role'] == 'model' and i == last_model_entry_index)
+                html_entry = self._format_history_entry_to_html(i, entry_data, current_model_for_display, is_latest_model_entry)
+                self.response_display.append(html_entry)
+        else:
+            self.response_display.append("<p style='color: red;'>エラー: チャットハンドラが初期化されていません。</p>")
+        self.response_display.ensureCursorVisible() # スクロールを一番下に
+        # self._scroll_history_to_bottom() # こちらの方が確実かも
 
     # --- ★★★ 新規: 履歴エントリをHTMLに整形するヘルパー関数 ★★★ ---
     # ★★★ 引数を変更: text_content の代わりに message_dict を受け取る ★★★
-    def _format_history_entry_to_html(self, index: int, message_data: dict, model_name: Optional[str] = None) -> str:
+    def _format_history_entry_to_html(self, index: int, message_data: dict, model_name: Optional[str] = None, is_latest_model_entry: bool = False) -> str:
         """指定された履歴エントリの情報を、編集・削除リンク付きのHTML文字列に整形します。
         スタイルは外部CSSファイルで定義されたクラスに依存します。
         AI応答の場合、トークン情報も表示します。
+        フォント設定は self.global_config から読み込み、インラインスタイルとして適用します。
 
         Args:
             index (int): 履歴リスト内でのインデックス。
             message_data (dict): 履歴エントリの辞書データ。
                                  ('role', 'parts', オプションで 'usage' を含む)
             model_name (str, optional): AIの応答の場合、使用されたモデル名。
+            is_latest_model_entry (bool): このエントリがAIの最新の応答であるかを示すフラグ。
 
         Returns:
             str: 整形されたHTML文字列。
         """
+        from core.config_manager import DEFAULT_GLOBAL_CONFIG # デフォルト値取得のため
+
         role = message_data.get("role")
         text_content = ""
         if message_data.get("parts") and isinstance(message_data["parts"], list) and len(message_data["parts"]) > 0:
@@ -1299,38 +1317,58 @@ class MainWindow(QWidget):
 
         escaped_text = text_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
 
+        # --- フォント設定の取得 ---
+        font_family = self.global_config.get("font_family", DEFAULT_GLOBAL_CONFIG.get("font_family", "MS Gothic"))
+        font_size_pt = self.global_config.get("font_size", DEFAULT_GLOBAL_CONFIG.get("font_size", 10))
+        font_line_height = self.global_config.get("font_line_height", DEFAULT_GLOBAL_CONFIG.get("font_line_height", 1.5)) # ★★★ 行間を取得 ★★★
+        
+        user_color = self.global_config.get("font_color_user", DEFAULT_GLOBAL_CONFIG.get("font_color_user", "#444444"))
+        model_color_default = self.global_config.get("font_color_model", DEFAULT_GLOBAL_CONFIG.get("font_color_model", "rgb(0, 85, 177)"))
+        model_color_latest = self.global_config.get("font_color_model_latest", DEFAULT_GLOBAL_CONFIG.get("font_color_model_latest", "rgb(0, 100, 200)"))
+
+        # --- スタイル文字列の構築 ---
+        base_font_style = f"font-family: '{font_family}'; font-size: {font_size_pt}pt;"
+        entry_specific_color_style = ""
+        comment_container_style = f"line-height: {font_line_height};" # ★★★ コメントコンテナのスタイル ★★★
+        name_container_style = "text-decoration: none !important;" # ★★★ アンダーライン強制削除 ★★★
+
         edit_link = f'<a class="action-link" href="edit:{index}:{role}">[編集]</a>'
         delete_link = f'<a class="action-link" href="delete:{index}:{role}">[削除]</a>'
         actions_span = f'{edit_link} {delete_link}'
 
         entry_class = "history-entry "
         display_role_name = ""
-        token_info_html = "" # ★★★ トークン情報用HTML ★★★
+        token_info_html = ""
 
         if role == "user":
             entry_class += "user-entry"
             display_role_name = f"あなた ({index + 1})"
+            entry_specific_color_style = f"color: {user_color};"
         elif role == "model":
             entry_class += "model-entry"
             model_name_display = model_name if model_name else (self.chat_handler.model_name if self.chat_handler else "AI")
             display_role_name = f"Gemini ({model_name_display}, {index + 1})"
-            # --- ★★★ トークン情報を取得してHTMLに追加 ★★★ ---
+            current_model_color = model_color_latest if is_latest_model_entry else model_color_default
+            entry_specific_color_style = f"color: {current_model_color};"
+            
             usage_data = message_data.get("usage")
             if isinstance(usage_data, dict):
                 input_tokens = usage_data.get("input_tokens", 0)
                 output_tokens = usage_data.get("output_tokens", 0)
-                if input_tokens is not None and output_tokens is not None: # 両方ある場合のみ表示
+                if input_tokens is not None and output_tokens is not None:
                     token_info_html = f'<span class="token-info">(In: {input_tokens}, Out: {output_tokens} トークン)</span>'
-            # --- ★★★ ------------------------------------ ★★★ ---
         else:
             display_role_name = f"{role or '不明'} ({index + 1})"
+            entry_specific_color_style = f"color: {user_color};" # 不明な場合はユーザーカラーなど
 
-        html_output = f'<div class="{entry_class}">'
-        # ★★★ 表示ロール名とトークン情報を横並びにする ★★★
-        html_output += f'<div class="name-container">{display_role_name} {token_info_html}</div>' 
-        html_output += f'<div class="comment-container">{escaped_text}</div>'
+        # --- HTML出力の構成 ---
+        
+        html_output = f'<div class="{entry_class}" style="{base_font_style} {entry_specific_color_style}">'
+        html_output += f'<div class="name-container" style="{name_container_style}">{display_role_name} {token_info_html}</div>'
+        html_output += f'<div class="comment-container" style="{comment_container_style}">{escaped_text}</div>'
         html_output += f'<div class="actions-container">{actions_span}</div>'
-        html_output += '<hr class="separator">'; html_output += '</div>'
+        html_output += '</div>'
+        html_output += '<div class="separator">――――――――――――――――――――――――――――――――――――――――――――――――――――――</div>'
         
         return html_output
     # --- ★★★ ---------------------------------------------------- ★★★ ---
@@ -1986,6 +2024,9 @@ class MainWindow(QWidget):
         """現在の選択状態に基づいて、指定されたフォーマットの一時的コンテキスト文字列を構築します。"""
         context_parts = []
 
+        context_parts.append("これはロールプレイの指示及びロールプレイに必要な情報です\n")
+        context_parts.append("---------------------------------------------------\n")
+
         # --- 1. サブプロンプト --- 
         active_subprompts_parts = []
         # カテゴリやサブプロンプト名の順序をある程度固定するためソート
@@ -2103,6 +2144,8 @@ class MainWindow(QWidget):
             context_parts.append("\n\n".join(tagged_items_by_tag_parts))
 
         # print(context_parts)
+        context_parts.append("---------------------------------------------------\n")
+        context_parts.append("次に入力されているメッセージがユーザーのセリフおよび行動です。")
 
         return "\n\n\n".join(context_parts).strip() # 各大セクション間は3重改行
     # --- ★★★ ---------------------------------------------------- ★★★ ---
@@ -2219,6 +2262,20 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, "保存エラー", "チェック状態のプロジェクト設定への保存に失敗しました。")
             print(f"  ERROR: Failed to save checked states to project settings for '{self.current_project_dir_name}'.")
     # --- ★★★ ------------------------------------------------ ★★★ ---
+
+    def update_status_label(self):
+        """APIキーの状態と現在のプロジェクト名に基づいてステータスラベルを更新します。"""
+        if not hasattr(self, 'status_label'): # UI初期化前は実行しない
+            return
+
+        api_key_ok = is_configured()
+        project_name_display = "(プロジェクトなし)"
+        if self.current_project_dir_name and self.current_project_settings:
+            project_name_display = self.current_project_settings.get("project_display_name", self.current_project_dir_name)
+
+        status_text = f"プロジェクト: {project_name_display}  |  APIキー: <font color='{'green' if api_key_ok else 'red'}'>{'設定済み' if api_key_ok else '未設定/エラー'}</font>"
+        self.status_label.setText(status_text)
+        print(f"Status label updated: {status_text}")
 
 if __name__ == '__main__':
     """MainWindowの基本的な表示・インタラクションテスト。"""

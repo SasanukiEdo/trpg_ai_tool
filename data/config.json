@@ -10,5 +10,15 @@
         "gemini-1.5-pro-latest",
         "gemini-1.5-flash-latest"
     ],
-    "send_on_enter_mode": true
+    "send_on_enter_mode": true,
+    "generation_temperature": 1.0,
+    "generation_top_p": 0.95,
+    "generation_top_k": 40,
+    "generation_max_output_tokens": 5000,
+    "font_family": "ＭＳ ゴシック",
+    "font_size": 11,
+    "font_color_user": "#3e3e3e",
+    "font_color_model": "#1e1b79",
+    "font_color_model_latest": "#581515",
+    "font_line_height": 1.4
 }
