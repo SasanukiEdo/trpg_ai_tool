@@ -53,7 +53,8 @@ DEFAULT_GLOBAL_CONFIG = {
 DEFAULT_PROJECT_SETTINGS = {
     "project_display_name": "デフォルトプロジェクト", # プロジェクトの表示名 (UI用)
     "main_system_prompt": "あなたは優秀なAIアシスタントです。", # プロジェクトのメインシステムプロンプト
-    "model": "gemini-1.5-pro-latest"              # プロジェクトで使用するAIモデル
+    "model": "gemini-1.5-pro-latest",              # プロジェクトで使用するAIモデル
+    "ai_edit_model_name": ""                       # AI編集支援機能で使用するモデル名 (空白時はプロジェクトモデルを使用)
 }
 """dict: プロジェクト設定ファイルが存在しない場合や、キーが不足している場合に使用されるデフォルト値。"""
 
@@ -182,6 +183,9 @@ def load_project_settings(project_dir_name: str) -> dict | None:
         for key, default_value in DEFAULT_PROJECT_SETTINGS.items():
             if key not in settings:
                 settings[key] = default_value
+        # ai_edit_model_nameが古い設定ファイルに存在しない場合の互換性処理
+        if "ai_edit_model_name" not in settings:
+            settings["ai_edit_model_name"] = DEFAULT_PROJECT_SETTINGS["ai_edit_model_name"]
         print(f"プロジェクト設定を読み込みました: {project_settings_file}")
         return settings
     except Exception as e:

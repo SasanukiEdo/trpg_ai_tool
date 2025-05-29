@@ -123,6 +123,21 @@ class SettingsDialog(QDialog):
             self.project_model_combo.setCurrentIndex(0)
         layout.addRow("プロジェクト使用モデル:", self.project_model_combo)
 
+        # --- AI編集支援用モデル設定 ---
+        self.project_ai_edit_model_combo = QComboBox()
+        # 選択肢の先頭に「プロジェクト使用モデルに同じ」を追加
+        self.ai_edit_model_placeholder = "（プロジェクト使用モデルに同じ）"
+        ai_edit_models_for_combo = [self.ai_edit_model_placeholder] + self.available_models
+        self.project_ai_edit_model_combo.addItems(ai_edit_models_for_combo)
+
+        current_ai_edit_model = self.project_settings_edit.get("ai_edit_model_name", "")
+        if current_ai_edit_model and current_ai_edit_model in self.available_models:
+            self.project_ai_edit_model_combo.setCurrentText(current_ai_edit_model)
+        else: # 空白時またはリストにない場合はプレースホルダーを選択
+            self.project_ai_edit_model_combo.setCurrentText(self.ai_edit_model_placeholder)
+        layout.addRow("AI編集支援用モデル:", self.project_ai_edit_model_combo)
+        # --- -------------------- ---
+
         self.project_system_prompt_input = QTextEdit() # まずインスタンスを作成
         self.project_system_prompt_input.setPlainText(
             self.project_settings_edit.get("main_system_prompt",
@@ -364,6 +379,11 @@ class SettingsDialog(QDialog):
         # プロジェクト設定の編集結果を格納
         self.project_settings_edit["project_display_name"] = self.project_display_name_input.text().strip()
         self.project_settings_edit["model"] = self.project_model_combo.currentText()
+        selected_ai_edit_model = self.project_ai_edit_model_combo.currentText()
+        if selected_ai_edit_model == self.ai_edit_model_placeholder:
+            self.project_settings_edit["ai_edit_model_name"] = "" # プレースホルダー選択時は空文字で保存
+        else:
+            self.project_settings_edit["ai_edit_model_name"] = selected_ai_edit_model
         self.project_settings_edit["main_system_prompt"] = self.project_system_prompt_input.toPlainText().strip()
 
         super().accept() # QDialog.Accepted を発行

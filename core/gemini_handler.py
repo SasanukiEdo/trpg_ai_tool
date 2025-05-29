@@ -531,12 +531,16 @@ class GeminiChatHandler:
         user_instruction: str,
         item_context: Optional[str] = None,
         chat_history_to_include: Optional[List[Dict[str, Union[str, List[Dict[str, str]]]]]] = None,
-        max_history_pairs: Optional[int] = None
+        max_history_pairs: Optional[int] = None,
+        override_model_name: Optional[str] = None
     ) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]]:
         """
         指定された会話履歴とアイテムコンテキストを考慮して、単発の応答を生成します。
         このメソッドは永続的なチャット履歴 (_pure_chat_history) を更新しません。
-        ハンドラに設定されている現在のモデル、システム指示、生成設定、安全設定を使用します。
+        override_model_name が指定されない場合は、ハンドラに設定されている現在のモデル、
+        システム指示、生成設定、安全設定を使用します。
+        override_model_name が指定された場合は、そのモデルを使用し、システム指示と生成設定は
+        現在のハンドラの設定が適用されます。
 
         Args:
             user_instruction (str): ユーザーからの主要な指示。
@@ -545,16 +549,13 @@ class GeminiChatHandler:
                                                             ハンドラの _pure_chat_history と同じ形式。
             max_history_pairs (Optional[int]): 含める会話履歴の最大ペア数。
                                                Noneの場合、chat_history_to_include の全てを使用。
+            override_model_name (Optional[str]): この呼び出しで使用するモデル名。
+                                                 Noneの場合、self.model_name を使用。
 
         Returns:
             Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]]:
                 (AI応答テキスト, エラーメッセージ, 使用状況メタデータ)
         """
-        if not self._model:
-            error_msg = "モデルが初期化されていません。"
-            print(f"Error in generate_response_with_history_and_context: {error_msg}")
-            return None, error_msg, None
-
         if not is_configured(): # APIキー設定確認
             error_msg = "Gemini APIが設定されていません。"
             print(f"Error in generate_response_with_history_and_context: {error_msg}")
@@ -619,9 +620,40 @@ class GeminiChatHandler:
             
         print(f"  generate_response_with_history_and_context: Total messages for API: {len(messages_for_api)}")
 
+        # --- モデルの選択と初期化 ---
+        active_model_instance: Optional[genai.GenerativeModel] = None
+        model_to_use = override_model_name if override_model_name and override_model_name.strip() else self.model_name
+
+        if not model_to_use:
+            error_msg = "使用するAIモデル名が特定できませんでした。"
+            print(f"Error in generate_response_with_history_and_context: {error_msg}")
+            return None, error_msg, None
+
         try:
-            response = self._model.generate_content(
+            model_args_for_call = {"model_name": model_to_use}
+            if self._system_instruction_text: # ハンドラのシステム指示を使用
+                model_args_for_call["system_instruction"] = self._system_instruction_text
+            if self.generation_config: # ハンドラの生成設定を使用
+                model_args_for_call["generation_config"] = self.generation_config
+            # safety_settings はAPI送信時には含めない方針 (FIXED_SAFETY_SETTINGS を generate_content で使用)
+            
+            active_model_instance = genai.GenerativeModel(**model_args_for_call) # type: ignore
+            print(f"  generate_response_with_history_and_context: Using model '{model_to_use}' for this call.")
+        except Exception as e:
+            error_msg = f"モデル '{model_to_use}' の初期化中にエラー: {e}"
+            print(f"Error in generate_response_with_history_and_context: {error_msg}")
+            return None, error_msg, None
+
+        if not active_model_instance:
+             error_msg = f"モデル '{model_to_use}' のインスタンス作成に失敗しました。"
+             print(f"Error in generate_response_with_history_and_context: {error_msg}")
+             return None, error_msg, None
+        # --- ------------------- ---
+
+        try:
+            response = active_model_instance.generate_content(
                 contents=messages_for_api, # type: ignore
+                safety_settings=FIXED_SAFETY_SETTINGS, # ここで安全設定を渡す
                 stream=False
             )
 
@@ -639,11 +671,9 @@ class GeminiChatHandler:
             if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
                 ai_response_text = response.candidates[0].content.parts[0].text
             elif response.prompt_feedback:
-                error_msg = f"プロンプトがブロックされました。Feedback: {response.prompt_feedback}"
-                if hasattr(response.prompt_feedback, 'block_reason'):
-                    error_msg += f" Reason: {response.prompt_feedback.block_reason}"
-                if hasattr(response.prompt_feedback, 'safety_ratings'):
-                     error_msg += f" SafetyRatings: {response.prompt_feedback.safety_ratings}"
+                error_msg = f"プロンプトがAIによってブロックされました。理由: {response.prompt_feedback.block_reason.name if response.prompt_feedback.block_reason else '不明'}. "
+                if response.prompt_feedback.safety_ratings:
+                    error_msg += f"安全性評価: {[(rating.category.name, rating.probability.name) for rating in response.prompt_feedback.safety_ratings]}"
                 print(f"Error in generate_response_with_history_and_context: {error_msg}")
                 return None, error_msg, usage_metadata_dict
             else:
@@ -668,60 +698,108 @@ class GeminiChatHandler:
                                  prompt_text: str,
                                  system_instruction: Optional[str] = None,
                                  generation_config: Optional[gtypes.GenerationConfigDict] = None,
-                                 safety_settings: Optional[List[gtypes.SafetySettingDict]] = None # この引数は無視される
-                                 ) -> Tuple[Optional[str], Optional[str]]:
-        """チャット履歴に依存しない単発のプロンプト応答を生成します。
-        safety_settings は常に固定値が使用され、この引数からの変更は無視されます。
-        generation_config がNoneで渡された場合は、グローバル設定から読み込みます。
+                                 safety_settings: Optional[List[gtypes.SafetySettingDict]] = None, # この引数は無視される
+                                 project_settings: Optional[dict] = None
+                                 ) -> Tuple[Optional[str], Optional[str]]: # 戻り値は変更なし
+        """履歴や既存のチャットセッションに影響を与えずに、単発の応答を生成します。
+        APIキーが設定されている必要があります。
+        safety_settings は常に固定値 (BLOCK_NONE) が使用されます。
+        project_settings が提供された場合、AI編集支援用モデル設定を優先し、
+        未設定の場合はプロジェクトモデルを、それもなければ引数の model_name を使用します。
+
+        Args:
+            model_name (str): フォールバックとして使用するGeminiモデルの名前。
+            prompt_text (str): AIへの指示プロンプト。
+            system_instruction (str, optional): この呼び出し専用のシステム指示。デフォルトはNone。
+            generation_config (gtypes.GenerationConfigDict, optional): 生成制御パラメータ。
+                                                                  Noneの場合、グローバル設定が使用される。
+            safety_settings (List[gtypes.SafetySettingDict], optional): 無視されます。
+            project_settings (dict, optional): プロジェクト設定の辞書。AI編集支援モデルとデフォルトモデルを含む。
+
+        Returns:
+            Tuple[Optional[str], Optional[str]]: (成功した場合は生成されたテキスト, エラーメッセージまたはNone)。
         """
         if not is_configured():
-            return None, "Error: Gemini API is not configured."
+            return None, "APIキーが設定されていません。"
 
-        final_generation_config: Optional[gtypes.GenerationConfigDict] # type: ignore
-        if generation_config is None:
-            g_config = load_global_config() 
-            final_generation_config = { # type: ignore
+        actual_model_name = model_name # デフォルトは引数の model_name
+
+        if project_settings:
+            ai_edit_model = project_settings.get("ai_edit_model_name", "")
+            project_default_model = project_settings.get("model", model_name) # フォールバック先も引数 model_name を考慮
+            if ai_edit_model and ai_edit_model.strip():
+                actual_model_name = ai_edit_model.strip()
+                print(f"generate_single_response: Using AI edit model: {actual_model_name}")
+            else:
+                actual_model_name = project_default_model
+                print(f"generate_single_response: AI edit model not set, using project model: {actual_model_name}")
+        else:
+            print(f"generate_single_response: project_settings not provided, using model_name argument: {actual_model_name}")
+
+        # generation_config がNoneの場合、グローバル設定から取得
+        current_generation_config = generation_config
+        if current_generation_config is None:
+            g_config = load_global_config()
+            current_generation_config = { # type: ignore
                 "temperature": g_config.get("generation_temperature", 0.7),
                 "top_p": g_config.get("generation_top_p", 0.95),
                 "top_k": g_config.get("generation_top_k", 40),
                 "max_output_tokens": g_config.get("generation_max_output_tokens", 2048),
             }
-            print(f"generate_single_response: Using generation config from global settings.")
+            print(f"generate_single_response: Using global generation config for model {actual_model_name}")
         else:
-            final_generation_config = generation_config
-            print(f"generate_single_response: Using provided generation config.")
+            print(f"generate_single_response: Using provided generation config for model {actual_model_name}")
 
-        # 安全設定は常に固定 (引数は無視)
-        final_safety_settings = FIXED_SAFETY_SETTINGS # type: ignore
-        # print(f"generate_single_response: Safety settings are fixed to BLOCK_NONE.") # 詳細ログはコメントアウト
+        # safety_settings は常に固定値を使用
+        current_safety_settings = FIXED_SAFETY_SETTINGS
+        # print(f"generate_single_response: Safety settings for model {actual_model_name} are fixed to BLOCK_NONE.")
 
         try:
-            model_args = {"model_name": model_name}
+            model_args = {"model_name": actual_model_name}
             if system_instruction:
                 model_args["system_instruction"] = system_instruction
-            if final_generation_config:
-                 model_args["generation_config"] = final_generation_config # type: ignore
-            # model_args["safety_settings"] = final_safety_settings # API送信時には含めない方針
+            if current_generation_config: # current_generation_config を使用
+                model_args["generation_config"] = current_generation_config
+            # safety_settings はAPI送信時に含めない方針
+            # if current_safety_settings:
+            #     model_args["safety_settings"] = current_safety_settings
             
-            # print(f"generate_single_response: Initializing model {model_name} with system_instruction: {'provided' if system_instruction else 'None'}, generation_config: {'provided' if final_generation_config else 'None'}, safety_settings: NOT SENT")
+            print(f"generate_single_response: Initializing model {actual_model_name} with system_instruction: {'Yes' if system_instruction else 'No'}, generation_config: {'Yes' if current_generation_config else 'No'}")
             model = genai.GenerativeModel(**model_args) # type: ignore
-
-            # print(f"generate_single_response: Sending prompt: '{prompt_text[:100]}...'") # 詳細ログはコメントアウト
-            response = model.generate_content(prompt_text)
-
-            if not response.candidates:
-                # print("generate_single_response: No candidates in response.") # 詳細ログはコメントアウト
-                feedback = response.prompt_feedback
-                block_reason = feedback.block_reason if feedback else "Unknown"
-                # print(f"generate_single_response: Prompt feedback - block_reason: {block_reason}") # 詳細ログはコメントアウト
-                return None, f"AIからの応答がありませんでした。ブロック理由: {block_reason}"
             
-            # print(f"generate_single_response: Response received.") # 詳細ログはコメントアウト
-            # print(f"generate_single_response: Response text: '{response.text[:100]}...'") # 詳細ログはコメントアウト
-            return response.text, None
+            print(f"generate_single_response: Sending prompt to {actual_model_name}: '{prompt_text[:50]}...'")
+            response = model.generate_content(prompt_text, safety_settings=current_safety_settings) # ここでsafety_settingsを渡す
+
+            # --- レスポンスの検証とテキスト抽出 (より堅牢に) ---
+            if response and response.parts:
+                # Multi-candidate responseの場合も考慮 (candidates リストの最初の要素を見る)
+                candidate = response.candidates[0] if response.candidates else None
+                if candidate and candidate.content and candidate.content.parts:
+                    full_text = "".join(part.text for part in candidate.content.parts if hasattr(part, 'text'))
+                    # print(f"generate_single_response: Received response from {actual_model_name}: '{full_text[:100]}...'")
+                    return full_text, None
+                else:
+                    error_message = "AIからの応答に有効なコンテンツが含まれていません。"
+                    if candidate and candidate.finish_reason:
+                         error_message += f" 終了理由: {candidate.finish_reason.name}"
+                    if candidate and candidate.safety_ratings:
+                        error_message += f" 安全性評価: {[(rating.category.name, rating.probability.name) for rating in candidate.safety_ratings]}"
+                    # print(f"generate_single_response: Error - {error_message} (Model: {actual_model_name})")
+                    return None, error_message
+            elif response and response.prompt_feedback:
+                # ブロックされた場合など
+                feedback = response.prompt_feedback
+                error_message = f"プロンプトがAIによってブロックされました。理由: {feedback.block_reason.name if feedback.block_reason else '不明'}. "
+                if feedback.safety_ratings:
+                    error_message += f"安全性評価: {[(rating.category.name, rating.probability.name) for rating in feedback.safety_ratings]}"
+                # print(f"generate_single_response: Error - {error_message} (Model: {actual_model_name})")
+                return None, error_message
+            else:
+                # print(f"generate_single_response: Error - AIからの予期しない応答形式です。 (Model: {actual_model_name})")
+                return None, "AIからの予期しない応答形式です。"
+            # --- ------------------------------------ ---
+
         except Exception as e:
-            print(f"Error in generate_single_response: {e}")
-            # スタックトレースを出力したい場合は以下を有効化
-            # import traceback
-            # traceback.print_exc()
-            return None, f"AI応答の生成中にエラーが発生しました: {e}"
+            error_msg = f"AI応答の生成中にエラーが発生しました ({actual_model_name}): {e}"
+            print(f"generate_single_response: {error_msg}")
+            return None, error_msg
