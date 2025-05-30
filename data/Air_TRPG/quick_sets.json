@@ -1,14 +1,14 @@
 {
   "slot_0": {
-    "name": "基本セット",
+    "name": "基本に戻す",
     "message_template": "",
     "subprompts": [
       "一般:基本ルール・制限事項"
     ],
     "data_items": {
       "キャラクター": [
-        "e0a35e4e-5f69-4b0d-a8a6-667ea648aa79",
-        "a3f7b82d-5846-483c-8155-80c5a1833a7f"
+        "a3f7b82d-5846-483c-8155-80c5a1833a7f",
+        "e0a35e4e-5f69-4b0d-a8a6-667ea648aa79"
       ]
     }
   },
@@ -59,7 +59,7 @@
   },
   "slot_4": {
     "name": "娼館に行く",
-    "message_template": "娼館に行く",
+    "message_template": "",
     "subprompts": [
       "一般:エッチシーン",
       "一般:基本ルール・制限事項",
@@ -67,8 +67,9 @@
     ],
     "data_items": {
       "キャラクター": [
-        "e0a35e4e-5f69-4b0d-a8a6-667ea648aa79",
-        "a3f7b82d-5846-483c-8155-80c5a1833a7f"
+        "a3f7b82d-5846-483c-8155-80c5a1833a7f",
+        "199cad7b-d4f4-4fa8-9c78-2723e2ebdae2",
+        "e0a35e4e-5f69-4b0d-a8a6-667ea648aa79"
       ]
     }
   },

@@ -28,24 +28,26 @@ PROJECT_SETTINGS_FILENAME = "project_settings.json"
 # --- グローバル設定のデフォルト値 ---
 DEFAULT_GLOBAL_CONFIG = {
     "active_project": "default_project",    # 現在アクティブなプロジェクトのディレクトリ名
-    "default_model": "gemini-1.5-pro-latest", # 新規プロジェクト作成時のデフォルトモデル
+    "default_model": "gemini-1.5-flash-latest", # 新規プロジェクト作成時のデフォルトモデル
     "available_models": [                   # 利用可能なAIモデルのリスト
         "gemini-1.5-pro-latest",
         "gemini-1.5-flash-latest",
-        "gemini-pro",
-        "gemini-1.5-flash",
-        "gemini-pro"
+        "gemini-1.0-pro-latest", # 古いモデルも例として残す
+        # "gemini-ultra-latest" # 必要に応じて追加
     ],
+    "send_on_enter_mode": True, # TrueならEnterで送信、FalseならCtrl+Enterで送信
     "generation_temperature": 0.7,
     "generation_top_p": 0.95,
     "generation_top_k": 40,
     "generation_max_output_tokens": 2048,
     "font_family": "MS Gothic",
     "font_size": 10,
-    "font_color_user": "#0000FF",       # 青
-    "font_color_model": "#008000",      # 緑
-    "font_color_model_latest": "#FF0000", # 赤
+    "font_color_user": "#444444",       # ユーザー発言のデフォルト文字色
+    "font_color_model": "rgb(0, 85, 177)", # AI応答のデフォルト文字色
+    "font_color_model_latest": "rgb(0, 100, 200)", # 最新のAI応答のデフォルト文字色
     "font_line_height": 1.5,
+    "history_range_for_prompt": 25, # ★ 追加: 送信履歴範囲のデフォルト値
+    "enable_streaming": True        # ★ 追加: ストリーミング有効化のデフォルト値
 }
 """dict: グローバル設定ファイルが存在しない場合や、キーが不足している場合に使用されるデフォルト値。"""
 

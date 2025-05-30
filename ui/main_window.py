@@ -21,7 +21,8 @@ from PyQt5.QtWidgets import (
     QSizePolicy, QStyle, qApp, QInputDialog, QComboBox, QLineEdit,QDialogButtonBox, QSlider, QGroupBox, QTreeWidgetItemIterator,
     QRadioButton # ★★★ QRadioButton を追加 ★★★
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QUrl, QEvent # ★★★ QEvent を追加 ★★★
+from PyQt5.QtGui import QTextCursor # ★★★ QTextCursor を QtGui からインポート ★★★
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QUrl, QEvent, QThread, QDateTime # ★★★ QEvent を追加 ★★★, QThread を追加, QDateTime を追加
 import re # ディレクトリ名検証用
 from typing import Optional, List, Dict, Tuple, Union # Union を追加
 
@@ -37,7 +38,8 @@ from core.config_manager import (
     list_project_dir_names,
     DEFAULT_PROJECT_SETTINGS,
     get_project_dir_path,
-    delete_project_directory
+    delete_project_directory,
+    DEFAULT_GLOBAL_CONFIG # ★ 追加
 )
 from core.subprompt_manager import load_subprompts, save_subprompts, DEFAULT_SUBPROMPTS_DATA # 新規作成時用
 from core.data_manager import get_project_gamedata_path, create_category, get_item  # 新規作成時用
@@ -51,6 +53,201 @@ from ui.prompt_preview_dialog import PromptPreviewDialog # ★ 追加
 
 # --- Gemini API ハンドラー ---
 from core.gemini_handler import GeminiChatHandler, configure_gemini_api, is_configured # クラスと関数をインポート
+import google.generativeai as genai # for BlockReason
+
+
+# ==============================================================================
+# ストリーミング処理用ワーカースレッド
+# ==============================================================================
+class StreamingWorker(QThread):
+    """AIからのストリーミング応答をバックグラウンドで処理するワーカースレッド。"""
+    chunk_received = pyqtSignal(str)  # 逐次受信するテキストチャンク
+    streaming_started = pyqtSignal(str, str) # AI名, モデル名
+    streaming_finished = pyqtSignal(str, dict, str)  # 最終的な完全なテキスト, usage_metadata, モデル名
+    streaming_error = pyqtSignal(str)  # エラーメッセージ
+
+    def __init__(self, chat_handler: GeminiChatHandler,
+                 user_instruction: str,
+                 item_context: Optional[str],
+                 chat_history_to_include: Optional[List[Dict]],
+                 max_history_pairs: Optional[int],
+                 override_model_name: Optional[str],
+                 stream: bool, # ★ stream パラメータを追加
+                 parent=None):
+        super().__init__(parent)
+        self.chat_handler = chat_handler
+        self.user_instruction = user_instruction
+        self.item_context = item_context
+        self.chat_history_to_include = chat_history_to_include
+        self.max_history_pairs = max_history_pairs
+        self.override_model_name = override_model_name
+        self.stream = stream # ★ インスタンス変数に保存
+        self._raw_chunks_for_full_text = []
+
+    def run(self):
+        try:
+            if not self.chat_handler:
+                self.streaming_error.emit("Chat handler is not available.")
+                return
+
+            active_model_name = self.override_model_name if self.override_model_name else self.chat_handler.model_name
+            # self.streaming_started.emit("AI", active_model_name) # ★ stream=Falseの場合は開始シグナルを遅延または変更検討
+
+            self._raw_chunks_for_full_text = []
+            
+            response_data = self.chat_handler.generate_response_with_history_and_context(
+                user_instruction=self.user_instruction,
+                item_context=self.item_context,
+                chat_history_to_include=self.chat_history_to_include,
+                max_history_pairs=self.max_history_pairs,
+                override_model_name=self.override_model_name,
+                stream=self.stream
+            )
+
+            if not self.stream:
+                # --- 非ストリーミングの場合の処理 ---
+                self.streaming_started.emit("AI", active_model_name) # ★ここで開始通知
+                if isinstance(response_data, tuple) and len(response_data) == 3:
+                    full_response_text, error_msg, usage_metadata = response_data
+                    if error_msg:
+                        self.streaming_error.emit(error_msg)
+                    elif full_response_text is not None: # 応答テキストがNoneでないことを確認
+                        self.streaming_finished.emit(full_response_text, usage_metadata or {}, active_model_name)
+                    else: # テキストもエラーもない場合は、何らかの問題があったと見なす
+                        self.streaming_error.emit("AIからの応答が空でした（非ストリーミング）。")
+                else:
+                    # 予期しない形式のレスポンス
+                    self.streaming_error.emit(f"AIからの応答が予期しない形式です（非ストリーミング）。Data: {str(response_data)[:100]}")
+                return # 非ストリーミングの場合はここで終了
+
+            # --- ストリーミングの場合の処理 (ここから下は self.stream が True の場合のみ実行) ---
+            self.streaming_started.emit("AI", active_model_name) # ★ ストリーミングの場合もここで開始通知
+            response_stream_iterable = response_data # stream=True の場合、response_data はイテラブル
+
+            full_response_text = "" # この変数はストリーミングでは不要になった
+            usage_metadata = {} 
+            
+            first_chunk_processed = False
+            stream_had_error_flag = False
+
+            for chunk in response_stream_iterable: # type: ignore
+                if not first_chunk_processed:
+                    first_chunk_processed = True
+                    # ストリームの最初の要素がエラーメッセージ文字列かどうかを確認
+                    if isinstance(chunk, str) and (chunk.startswith("Error: ") or chunk.startswith("GENERATE_CONTENT_ERROR_STREAM:")):
+                        print(f"StreamingWorker: Detected error string in the stream: {chunk}")
+                        self.streaming_error.emit(chunk)
+                        stream_had_error_flag = True
+                        # エラーが検出されたら、ジェネレータの残りを消費して正しく終了させる
+                        for _ in response_stream_iterable: pass
+                        break # エラーループから抜ける
+
+                    # 最初のチャンクが genai.types.GenerateContentResponse の一部であるか基本的なチェック
+                    # (本格的なチャンク処理は次で行う)
+                    if not hasattr(chunk, 'text') and not hasattr(chunk, 'parts'): # GeminiのChunkは通常textかpartsを持つ
+                        error_msg = f"ストリーミングエラー: 最初のチャンクが予期しない形式です。Type: {type(chunk)}"
+                        if isinstance(chunk, str): error_msg += f", Content: {chunk[:100]}"
+                        print(f"StreamingWorker: {error_msg}")
+                        self.streaming_error.emit(error_msg)
+                        stream_had_error_flag = True
+                        for _ in response_stream_iterable: pass
+                        break
+
+
+                if stream_had_error_flag: # 上でエラーが検出されたら、以降のチャンク処理はスキップ
+                    continue
+
+                # --- 通常のチャンク処理 ---
+                text_part = ""
+                try:
+                    # まず parts からテキストを取得試行
+                    if hasattr(chunk, 'parts') and chunk.parts and hasattr(chunk.parts[0], 'text') and chunk.parts[0].text:
+                        text_part = chunk.parts[0].text
+                    # parts にテキストがない場合、次に chunk.text を試行 (これがエラーの原因だった箇所)
+                    elif hasattr(chunk, 'text') and chunk.text: # ここで ValueError が発生する可能性
+                        text_part = chunk.text
+                    
+                    # 取得したテキストパートがあれば処理
+                    if text_part:
+                        self._raw_chunks_for_full_text.append(text_part)
+                        self.chunk_received.emit(text_part)
+
+                except ValueError as e:
+                    # chunk.text アクセス時に ValueError が発生した場合 (finish_reason が RECITATION など)
+                    print(f"StreamingWorker: ValueError accessing chunk.text: {e}")
+                    # finish_reason を確認
+                    finish_reason_val = None
+                    reason_name = "UNKNOWN"
+                    if hasattr(chunk, 'candidates') and chunk.candidates and hasattr(chunk.candidates[0], 'finish_reason'):
+                        finish_reason_val = chunk.candidates[0].finish_reason
+                        # finish_reason はenumなので、名前を取得する試み (genai.types.Candidate.FinishReason にアクセスできるか不明)
+                        try:
+                            # genai.types.Candidate.FinishReason は直接アクセスできない可能性があるため、汎用的に
+                            reason_name = finish_reason_val.name if hasattr(finish_reason_val, 'name') else str(finish_reason_val)
+                        except Exception:
+                            reason_name = str(finish_reason_val) # 最悪、数値で表示
+
+                    error_msg_detail = f"AIの応答チャンク取得中にエラー。理由: {reason_name} ({e})"
+                    if finish_reason_val == 5: # FINISH_REASON_RECITATION
+                        error_msg_detail = f"AIが広範囲の引用を検出したため応答を停止しました (理由: RECITATION)。"
+                    elif finish_reason_val == 2: # FINISH_REASON_SAFETY
+                         error_msg_detail = f"AIが安全でない可能性のあるコンテンツを検出したため応答を停止しました (理由: SAFETY)。"
+                if hasattr(chunk, 'text') and chunk.text:
+                    text_part = chunk.text
+                    self._raw_chunks_for_full_text.append(text_part)
+                    self.chunk_received.emit(text_part)
+                    # full_response_text += text_part # 下でjoinするので不要
+
+                # usage_metadata は通常、最後のチャンクまたは response オブジェクト自体に含まれる
+                if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
+                    try:
+                        usage_metadata = {
+                            "prompt_token_count": chunk.usage_metadata.prompt_token_count,
+                            "candidates_token_count": chunk.usage_metadata.candidates_token_count,
+                            "total_token_count": chunk.usage_metadata.total_token_count,
+                        }
+                    except AttributeError:
+                        pass 
+            
+            if stream_had_error_flag: # エラーでループを抜けた場合はここで終了
+                return
+
+            # ストリーミング完了後、GenerateContentResponseオブジェクトから直接usage_metadataを取得試行
+            # (response_stream_iterable が GenerateContentResponse の場合)
+            if not usage_metadata and hasattr(response_stream_iterable, 'usage_metadata') and response_stream_iterable.usage_metadata: # type: ignore
+                try:
+                    final_usage = response_stream_iterable.usage_metadata # type: ignore
+                    usage_metadata = {
+                        "prompt_token_count": final_usage.prompt_token_count,
+                        "candidates_token_count": final_usage.candidates_token_count, # Geminiのドキュメントではこれ
+                        "total_token_count": final_usage.total_token_count,
+                    }
+                except Exception as e_meta_final:
+                    print(f"Could not get final usage_metadata from GenerateContentResponse object: {e_meta_final}")
+            
+            # prompt_feedbackでエラーを確認 (GenerateContentResponseオブジェクトから)
+            if hasattr(response_stream_iterable, 'prompt_feedback') and \
+               response_stream_iterable.prompt_feedback and \
+               response_stream_iterable.prompt_feedback.block_reason != genai.types.BlockReason.BLOCK_REASON_UNSPECIFIED: # type: ignore
+                error_msg = f"ストリーミング応答がブロックされました。理由: {response_stream_iterable.prompt_feedback.block_reason.name}" # type: ignore
+                self.streaming_error.emit(error_msg)
+                return
+
+            if not first_chunk_processed and not self._raw_chunks_for_full_text:
+                 # チャンクが一つも処理されなかった場合（空のストリームだった場合など）
+                 # これをエラーとして扱うか、空の成功として扱うかは要件による
+                 # ここでは、空の成功として扱い、空のテキストで完了とする
+                 print("StreamingWorker: Stream was empty or yielded no processable chunks, but no explicit error was caught. Completing with empty text.")
+
+
+            final_text = "".join(self._raw_chunks_for_full_text)
+            self.streaming_finished.emit(final_text, usage_metadata, active_model_name)
+
+        except Exception as e:
+            import traceback
+            error_details = f"StreamingWorker error: {e}\\n{traceback.format_exc()}"
+            print(error_details)
+            self.streaming_error.emit(f"ストリーミング処理中に予期せぬエラーが発生しました: {e}")
 
 
 # ==============================================================================
@@ -183,29 +380,29 @@ class MainWindow(QWidget):
         self.checked_subprompts: dict[str, set[str]] = {}
         # self.gemini_configured: bool = False # is_configured() で確認するので不要かも
         self._projects_list_for_combo: list[tuple[str, str]] = []
+
+        # self.enable_streaming = True # ★ 初期化タイミングを global_config 確定後に変更
+        self.streaming_checkbox: Optional[QCheckBox] = None # ★ チェックボックスのインスタンス (init_uiで作成)
         
         # --- ★★★ GeminiChatHandler のインスタンスを初期化 (プロジェクト名も渡す) ★★★ ---
         # current_project_dir_name は _initialize_configs_and_project の前に必要
         # まずグローバル設定からアクティブプロジェクト名を取得
-        temp_global_config_for_init = load_global_config()
+        temp_global_config_for_init = load_global_config() # _initialize_configs_and_project より前に呼ぶ必要あり
         self.current_project_dir_name = temp_global_config_for_init.get("active_project", "default_project")
         
-        initial_model_name = temp_global_config_for_init.get(
-            "default_model", 
-            DEFAULT_PROJECT_SETTINGS.get("model", "gemini-1.5-flash") # フォールバック
-        )
+        # initial_model_name は self.global_config 確定後に設定
         self.chat_handler: Optional[GeminiChatHandler] = None
 
-        # --- ★★★ 送信履歴範囲用のメンバー変数 ★★★ ---
-        self.current_history_range_for_prompt: int = 25 # デフォルト25往復
+        # --- 送信履歴範囲用のメンバー変数 (初期値は self.global_config 確定後に設定) ---
+        self.current_history_range_for_prompt: int = 25 # 一時的なデフォルト値
         self.item_history_range_for_prompt: int = 5 # アイテム履歴用はデフォルト5往復
-        # --- ★★★ --------------------------------- ★★★ ---
+        # --- --------------------------------- ---
 
-        # --- ★★★ アイテム履歴の送信数設定用メンバー変数 ★★★ ---
+        # --- アイテム履歴の送信数設定用メンバー変数 ---
         self.item_history_length_for_prompt: int = 10 # デフォルト10件
-        # --- ★★★ ----------------------------------------- ★★★ ---
+        # --- ----------------------------------------- ---
 
-        # --- ★★★ クイックセット関連のメンバー変数 ★★★ ---
+        # --- クイックセット関連のメンバー変数 ---
         from core.config_manager import NUM_QUICK_SET_SLOTS # スロット数をインポート
         self.num_quick_set_slots = NUM_QUICK_SET_SLOTS
         self.quick_sets_data: Dict[str, Optional[Dict]] = {} # ロードしたクイックセットデータ
@@ -215,32 +412,48 @@ class MainWindow(QWidget):
         self.quick_set_send_buttons: List[QPushButton] = []
         self.quick_set_save_buttons: List[QPushButton] = []
         self.quick_set_clear_buttons: List[QPushButton] = []
-        # --- ★★★ ------------------------------------ ★★★ ---
+        # --- ------------------------------------ ---
         
-        # --- ★★★ 送信キーモード用のメンバー変数 ★★★ ---
-        self.send_on_enter_mode: bool = True # デフォルトはEnterで送信
-        # --- ★★★ --------------------------------- ★★★ ---
+        # --- 送信キーモード用のメンバー変数 (初期値は self.global_config 確定後に設定) ---
+        self.send_on_enter_mode: bool = True # 一時的なデフォルト値
+        # --- --------------------------------- ---
 
-        # --- ★★★ 状態表示ラベルを追加 ★★★ ---
+        # --- 状態表示ラベルを追加 ---
         self.status_label = QLabel() # 状態表示用ラベル
-        # --- ★★★ ----------------------- ★★★ ---
+        # --- ----------------------- ---
+        
+        # --- ストリーミング有効状態 (初期値は self.global_config 確定後に設定) ---
+        self.enable_streaming = True # 一時的なデフォルト値
+        # --- ---------------------------------------------------- ---
 
-        # --- ★★★ 送信内容確認ボタン ★★★ ---
+        # --- 送信内容確認ボタン ---
         self.preview_prompt_button = QPushButton("送信内容確認")
         self.preview_prompt_button.setToolTip("送信するプロンプトの最終形や設定を確認します。")
         self.preview_prompt_button.clicked.connect(self._show_prompt_preview_dialog)
-        # --- ★★★ ----------------------- ★★★ ---
+        # --- ----------------------- ---
+
+        # --- リトライボタン ---
+        self.retry_button = QPushButton("リトライ")
+        self.retry_button.setToolTip("直前のAIの応答を削除し、同じメッセージを再送信します。")
+        self.retry_button.clicked.connect(self._on_retry_button_clicked)
+        self.retry_button.setEnabled(False) # 初期状態は無効
+        # --- ----------------- ---
 
         self._initialize_configs_and_project()
         self.configure_gemini_and_chat_handler()  # APIキー設定、必要ならハンドラ再設定
         
-        # --- ★★★ 送信キーモードをグローバル設定から読み込み ★★★ ---
-        self.send_on_enter_mode = self.global_config.get("send_on_enter_mode", True)
-        # --- ★★★ --------------------------------------------- ★★★ ---
+        # --- ★★★ 各種設定値を self.global_config から読み込み、インスタンス変数に最終設定 ★★★ ---
+        self.send_on_enter_mode = self.global_config.get("send_on_enter_mode", DEFAULT_GLOBAL_CONFIG.get("send_on_enter_mode", True))
+        self.current_history_range_for_prompt = self.global_config.get("history_range_for_prompt", DEFAULT_GLOBAL_CONFIG.get("history_range_for_prompt", 25))
+        self.enable_streaming = self.global_config.get("enable_streaming", DEFAULT_GLOBAL_CONFIG.get("enable_streaming", True))
+        # --- ★★★ -------------------------------------------------------------------------- ★★★ ---
 
-        final_initial_model = self.current_project_settings.get("model", initial_model_name)
+        initial_model_name = self.global_config.get(
+            "default_model", 
+            DEFAULT_PROJECT_SETTINGS.get("model", "gemini-1.5-flash") # フォールバック
+        )
         initial_system_prompt = self.current_project_settings.get("main_system_prompt", "")
-        self._initialize_chat_handler(model_name=final_initial_model, project_dir_name=self.current_project_dir_name, system_instruction=initial_system_prompt)
+        self._initialize_chat_handler(model_name=initial_model_name, project_dir_name=self.current_project_dir_name, system_instruction=initial_system_prompt)
         
         self.init_ui() # ★★★ UI初期化を chat_handler 初期化後に移動 ★★★
                         # _redisplay_chat_history が self.response_display を使うため
@@ -251,31 +464,110 @@ class MainWindow(QWidget):
         # --- ★★★ ------------------------------------------ ★★★ ---
         self.update_status_label() # ★★★ 追加: 起動時にステータス更新 ★★★
 
-    def _initialize_chat_handler(self, model_name: str, project_dir_name: str, system_instruction: Optional[str] = None): # ★ project_dir_name を必須引数に
-        """GeminiChatHandlerを初期化または再初期化します。
-        指定されたプロジェクトの履歴をロードし、システム指示も設定します。
-        送信履歴範囲も適用します。
+        self.is_streaming = False # ストリーミング状態フラグ
+        self._current_streaming_ai_message_id: Optional[str] = None # ストリーミング中のAIメッセージブロックのID
+        self._current_streaming_content_element_id: Optional[str] = None # ストリーミング中のAIメッセージ本文のID
 
-        Args:
-            model_name (str): 使用するモデル名。
-            project_dir_name (str): 対象のプロジェクトディレクトリ名。
-            system_instruction (str, optional): システム指示。Noneの場合は空文字列。
-        """
+    def _initialize_chat_handler(self, model_name: str, project_dir_name: str, system_instruction: Optional[str] = None): # ★ project_dir_name を必須引数に
         if not project_dir_name:
-            print("MainWindow Error: Cannot initialize chat handler without project_dir_name.")
+            QMessageBox.critical(self, "致命的なエラー", "チャットハンドラの初期化にプロジェクト名が指定されませんでした。")
             self.chat_handler = None
             return
 
-        print(f"MainWindow: Initializing chat handler for project '{project_dir_name}' with model '{model_name}'.")
-        self.chat_handler = GeminiChatHandler(model_name=model_name, project_dir_name=project_dir_name)
+        # 既存のハンドラがあれば終了処理を試みる (ファイル保存など)
+        if self.chat_handler:
+            self.chat_handler.save_current_history_on_exit()
+
+        # --- ★★★ global_config を使用して生成パラメータを設定 ★★★ ---
+        gen_conf_from_global = {
+            "temperature": self.global_config.get("generation_temperature", DEFAULT_PROJECT_SETTINGS.get("model_temperature", 0.7)), # プロジェクト設定も考慮
+            "top_p": self.global_config.get("generation_top_p", DEFAULT_PROJECT_SETTINGS.get("model_top_p", 0.95)),
+            "top_k": self.global_config.get("generation_top_k", DEFAULT_PROJECT_SETTINGS.get("model_top_k", 40)),
+            "max_output_tokens": self.global_config.get("generation_max_output_tokens", DEFAULT_PROJECT_SETTINGS.get("model_max_tokens", 2048)),
+        }
+        # プロジェクト設定に specific な生成パラメータがあればそれで上書き
+        # current_project_settings は _initialize_configs_and_project で設定される
+        # ここでは、それが呼ばれる前なので、global のみで初期化し、プロジェクトロード後に update_chat_handler_settings で更新する
+        # ↑ このコメントは古い。このメソッドは self.global_config 確定後に呼ばれる想定。
         
-        # --- ★★★ start_new_chat_session に送信履歴範囲を渡す ★★★ ---
-        self.chat_handler.start_new_chat_session(
-            keep_history=True, 
-            system_instruction_text=system_instruction if system_instruction is not None else "",
-            load_from_file_if_empty=False, # コンストラクタでロード済みのため
-            max_history_pairs=self.current_history_range_for_prompt # ★ スライダーの値を渡す
+        effective_system_instruction = system_instruction
+        if not effective_system_instruction and self.current_project_settings: # current_project_settings が利用可能なら
+             effective_system_instruction = self.current_project_settings.get("main_system_prompt", "")
+
+
+        print(f"Initializing GeminiChatHandler with model: {model_name}, project: {project_dir_name}, system_instr: {'Yes' if effective_system_instruction else 'No'}")
+        self.chat_handler = GeminiChatHandler(
+            model_name=model_name,
+            project_dir_name=project_dir_name, # 必須
+            generation_config=gen_conf_from_global # type: ignore
+            # safety_settings はハンドラ内部で固定
         )
+        # システム指示は start_new_chat_session で設定されるので、ここでは直接設定しないか、
+        # あるいは start_new_chat_session をこの直後に呼ぶことを徹底する。
+        # ここでは、直接 _initialize_model を呼んで設定を試みる
+        if self.chat_handler:
+            self.chat_handler._initialize_model(system_instruction_text=effective_system_instruction)
+            # 履歴の再読み込みも必要に応じて行う。start_new_chat_sessionが良い。
+            self.chat_handler.start_new_chat_session(keep_history=True, system_instruction_text=effective_system_instruction, load_from_file_if_empty=True)
+
+
+    def _set_ui_for_streaming(self, is_streaming: bool):
+        """ストリーミング状態に応じてUI要素の有効/無効を切り替える。"""
+        self.is_streaming = is_streaming
+        enable = not is_streaming
+
+        # 1. 送信ボタン
+        if hasattr(self, 'send_button'):
+            self.send_button.setEnabled(enable)
+        
+        # 2. リトライボタン
+        if hasattr(self, 'retry_button'):
+            can_retry = enable and (self.chat_handler and len(self.chat_handler.get_pure_chat_history()) >= 2)
+            self.retry_button.setEnabled(can_retry)
+
+        # 3. チャット履歴の各エントリーの「編集」「削除」ボタン
+        #    _handle_history_link_clicked で self.is_streaming をチェックして対応済
+
+        # 4. プロジェクト切り替えメニュー (QComboBoxとして実装されている)
+        if hasattr(self, 'project_selector_combo'):
+             self.project_selector_combo.setEnabled(enable)
+        
+        # プロジェクト関連ボタンも無効化
+        if hasattr(self, 'new_project_button'):
+            self.new_project_button.setEnabled(enable)
+        if hasattr(self, 'delete_project_button'): # delete_project_button の有効無効はプロジェクト選択状態にも依存する
+            is_deletable_project = self.current_project_dir_name != "default_project" and self.current_project_dir_name is not None
+            self.delete_project_button.setEnabled(enable and is_deletable_project)
+
+
+        # 5. クイックセット機能の送信ボタン (self.quick_set_send_buttons)
+        if hasattr(self, 'quick_set_send_buttons'):
+            for btn in self.quick_set_send_buttons:
+                btn.setEnabled(enable)
+        
+        # メッセージ入力欄も無効化
+        if hasattr(self, 'user_input'):
+            self.user_input.setEnabled(enable)
+        
+        # システムプロンプト入力欄も無効化
+        if hasattr(self, 'system_prompt_input_main'):
+            self.system_prompt_input_main.setReadOnly(is_streaming)
+
+        # 設定ボタンも無効化
+        if hasattr(self, 'settings_button'):
+            self.settings_button.setEnabled(enable)
+
+        # サブプロンプトタブの操作も無効化 (タブ切り替えは許可し、中身の操作を制限するか、タブ自体を無効化)
+        if hasattr(self, 'subprompt_tab_widget'):
+            self.subprompt_tab_widget.setEnabled(enable) # タブウィジェット自体を無効化
+
+        # データ管理ウィジェットも無効化
+        if hasattr(self, 'data_management_widget'):
+            self.data_management_widget.setEnabled(enable)
+
+
+        QApplication.processEvents() # UIの更新を即時反映
+
 
     def _initialize_configs_and_project(self):
         """グローバル設定を読み込み、アクティブなプロジェクトのデータをロードします。"""
@@ -483,24 +775,24 @@ class MainWindow(QWidget):
         left_layout.addWidget(self.status_label) # response_display の下に配置
         # --- ★★★ ---------------------------------- ★★★ ---
 
-        # --- メッセージ入力エリアと送信ボタン (元のシンプルな形に戻す) ---
-        input_area_layout = QHBoxLayout() # 水平レイアウトで入力と送信ボタンを横並び
+        # --- メッセージ入力エリアと送信ボタン ---
+        input_area_with_send_button_layout = QHBoxLayout()
         self.user_input = QTextEdit()
         self.user_input.setPlaceholderText("ここにメッセージを入力...")
         self.user_input.setAcceptRichText(False) # リッチテキストは無効
         self.user_input.setFixedHeight(100) # 高さを固定
         self.user_input.installEventFilter(self) # イベントフィルターでEnterキー処理
-        input_area_layout.addWidget(self.user_input)
+        input_area_with_send_button_layout.addWidget(self.user_input, 1) # ユーザー入力欄がスペースを優先的に使用
 
         self.send_button = QPushButton("送信")
         self.send_button.clicked.connect(self.on_send_button_clicked)
-        self.send_button.setFixedHeight(self.user_input.height()) # 入力欄の高さに合わせる
-        input_area_layout.addWidget(self.send_button)
-        left_layout.addLayout(input_area_layout) # 左側メインレイアウトに直接追加
+        self.send_button.setFixedHeight(self.user_input.height()) # ★ 入力欄の高さに合わせる
+        input_area_with_send_button_layout.addWidget(self.send_button)
+        left_layout.addLayout(input_area_with_send_button_layout)
+        # --- ★★★ --------------------------- ★★★ ---
 
-
-        # --- 送信履歴範囲、送信キーモード、送信内容確認ボタンをまとめるレイアウト ---
-        bottom_controls_layout = QHBoxLayout()
+        # --- フッターコントロール群 (送信履歴範囲、送信キーモード、リトライ、確認ボタン) ---
+        footer_controls_layout = QHBoxLayout()
 
         # --- 送信履歴範囲設定スライダー --- 
         history_slider_container = QWidget()
@@ -515,7 +807,7 @@ class MainWindow(QWidget):
         self.history_slider.setFixedWidth(200)
         history_slider_layout.addWidget(self.history_slider)
         self.history_slider.valueChanged.connect(self._on_history_slider_changed)
-        bottom_controls_layout.addWidget(history_slider_container)
+        footer_controls_layout.addWidget(history_slider_container)
 
         # --- 送信キーモード選択ラジオボタン --- 
         send_key_mode_group = QGroupBox() # グループボックスのタイトルは不要なので削除
@@ -527,13 +819,21 @@ class MainWindow(QWidget):
         self.radio_send_on_shift_enter = QRadioButton("Shift+Enterで送信 (Enterで改行)")
         self.radio_send_on_shift_enter.setChecked(not self.send_on_enter_mode)
         send_key_mode_layout.addWidget(self.radio_send_on_shift_enter)
-        bottom_controls_layout.addWidget(send_key_mode_group)
-        
-        # --- 送信内容確認ボタンを右端に追加 ---
-        bottom_controls_layout.addStretch(1) # ★ 確認ボタンの前にスペーサーを配置して右寄せ
-        bottom_controls_layout.addWidget(self.preview_prompt_button) # ★ 確認ボタンをここに追加
+        footer_controls_layout.addWidget(send_key_mode_group)
 
-        left_layout.addLayout(bottom_controls_layout) # このコントロール群を左側メインレイアウトに追加
+        footer_controls_layout.addStretch(1) # ボタン群を右に寄せるためのスペーサー
+        footer_controls_layout.addWidget(self.retry_button) # リトライボタン
+        footer_controls_layout.addWidget(self.preview_prompt_button) # 送信内容確認ボタン
+
+        # --- ★★★ ストリーミング有効化チェックボックスを追加 ★★★ ---
+        self.streaming_checkbox = QCheckBox("ストリーミング応答")
+        self.streaming_checkbox.setChecked(self.enable_streaming)
+        self.streaming_checkbox.setToolTip("AIの応答を逐次表示するかどうかを切り替えます。")
+        self.streaming_checkbox.stateChanged.connect(self._on_streaming_checkbox_changed)
+        footer_controls_layout.addWidget(self.streaming_checkbox)
+        # --- ★★★ ------------------------------------------ ★★★ ---
+
+        left_layout.addLayout(footer_controls_layout) # 新しいフッターコントロールレイアウトをメインに追加
         # --- ★★★ --------------------------------------------------------- ★★★ ---
 
         # --- 右側エリア (設定ボタン、サブプロンプト、データ管理) ---
@@ -549,7 +849,7 @@ class MainWindow(QWidget):
         self.new_project_button.clicked.connect(self._on_new_project_button_clicked)
         project_management_header_layout.addWidget(self.new_project_button)
         self.delete_project_button = QPushButton("削除")
-        self.delete_project_button.setToolTip("現在選択されているプロジェクトを削除します。")
+        self.delete_project_button.setToolTip("現在アクティブなプロジェクトを削除します。")
         self.delete_project_button.clicked.connect(self._on_delete_project_button_clicked)
         project_management_header_layout.addWidget(self.delete_project_button)
         self.settings_button = QPushButton("設定")
@@ -1121,130 +1421,159 @@ class MainWindow(QWidget):
 
     def open_settings_dialog(self):
         """設定ダイアログを開き、変更があれば適用・保存します。"""
+        if self.is_streaming:
+            QMessageBox.information(self, "処理中", "AI応答生成中です。設定は変更できません。")
+            return
         dialog = SettingsDialog(self.global_config, self.current_project_settings, self)
-        if dialog.exec_() == QDialog.Accepted:
-            updated_global_config, updated_project_settings = dialog.get_updated_configs()
-            
-            # グローバル設定の保存と適用
-            if self.global_config != updated_global_config:
-                save_global_config(updated_global_config)
-                self.global_config = updated_global_config # MainWindowの内部状態も更新
-                print("グローバル設定が更新・保存されました。")
-                self.send_on_enter_mode = self.global_config.get("send_on_enter_mode", True) 
-                
-                # ★★★フォント設定変更を反映するために履歴を再表示★★★
-                self._redisplay_chat_history()
+        if dialog.exec_():
+            updated_global_config, new_project_settings = dialog.get_updated_configs() # ★ 修正: メソッド名と受け取り方
+            self.global_config = updated_global_config # ★ 修正
+            save_global_config(self.global_config)
 
-                # GeminiChatHandler に新しい生成設定を適用
+            # --- ★★★ 送信キーモードをグローバル設定から読み込み ★★★ ---
+            self.send_on_enter_mode = self.global_config.get("send_on_enter_mode", True)
+            # ★★★ UI要素の存在チェックを追加 (init_ui完了前に呼ばれる可能性を考慮) ★★★
+            if hasattr(self, 'radio_send_on_enter') and hasattr(self, 'radio_send_on_shift_enter'):
+                self.radio_send_on_enter.setChecked(self.send_on_enter_mode)
+                self.radio_send_on_shift_enter.setChecked(not self.send_on_enter_mode)
+            # --- ★★★ ----------------------------------------------------------- ★★★ ---
+
+            if self.current_project_settings != new_project_settings:
+                self.current_project_settings = new_project_settings
+                save_project_settings(self.current_project_dir_name, self.current_project_settings)
+                QMessageBox.information(self, "設定保存", f"プロジェクト「{self.current_project_settings.get('project_display_name', self.current_project_dir_name)}」の設定を保存しました。")
+                # チャットハンドラの設定も更新
                 if self.chat_handler:
-                    new_gen_config = { # type: ignore
-                        "temperature": self.global_config.get("generation_temperature"),
-                        "top_p": self.global_config.get("generation_top_p"),
-                        "top_k": self.global_config.get("generation_top_k"),
-                        "max_output_tokens": self.global_config.get("generation_max_output_tokens"),
-                    }
-                    # Noneの可能性のあるキーを除外
-                    new_gen_config = {k: v for k, v in new_gen_config.items() if v is not None}
-                    
-                    self.chat_handler.update_settings_and_restart_chat(
-                        new_generation_config=new_gen_config if new_gen_config else None
-                    )
-                    print("Chat Handlerの生成設定がグローバル設定に基づいて更新されました。")
-
-            # プロジェクト固有設定の保存
-            if self.current_project_settings != updated_project_settings and self.current_project_dir_name:
-                save_project_settings(self.current_project_dir_name, updated_project_settings)
-                self.current_project_settings = updated_project_settings # MainWindowの内部状態も更新
-                print(f"プロジェクト「{self.current_project_dir_name}」の設定が更新・保存されました。")
-                # プロジェクト設定に依存するUI (メインプロンプト、ウィンドウタイトル等) を更新
-                self.setWindowTitle(f"TRPG AI Tool - {self.current_project_settings.get('project_display_name', self.current_project_dir_name)}")
-                if self.system_prompt_input_main:
-                    self.system_prompt_input_main.setPlainText(self.current_project_settings.get("main_system_prompt", ""))
-                
-                # プロジェクトのモデル変更があればチャットハンドラも更新
-                if self.chat_handler and self.chat_handler.model_name != self.current_project_settings.get("model"):
                     self.chat_handler.update_settings_and_restart_chat(
                         new_model_name=self.current_project_settings.get("model"),
-                        new_system_instruction=self.current_project_settings.get("main_system_prompt")
-                        # ここでは generation_config は明示的に渡さない (グローバル設定が優先されるため)
+                        new_system_instruction=self.current_project_settings.get("main_system_prompt"),
+                        new_project_dir_name=self.current_project_dir_name, # プロジェクト名は変わらない
+                        new_generation_config=self.current_project_settings.get("generation_config"), # settings_dialog で生成設定も編集できるようにする場合
+                        max_history_pairs_for_restart=self.current_history_range_for_prompt
                     )
-                    print("Chat Handlerのモデルとシステム指示がプロジェクト設定に基づいて更新されました。")
+                    # システムプロンプトのUIも更新
+                    self.system_prompt_input_main.setPlainText(self.current_project_settings.get("main_system_prompt", ""))
+                    self._redisplay_chat_history() # モデルやシステム指示が変わった可能性があるので履歴再表示が良いか検討
             
-            # APIキー設定が変更された可能性があるため、Gemini APIクライアントを再設定
-            # (SettingsDialog内でAPIキー自体はOSに保存済み)
-            self.configure_gemini_and_chat_handler() 
-            self.update_status_label() # ステータスラベルも更新
-            
-            QMessageBox.information(self, "設定完了", "設定が適用されました。")
-        else:
-            print("設定変更はキャンセルされました。")
+            # APIキーの再設定もここで行う
+            self.configure_gemini_and_chat_handler()
+            self.update_status_label()
 
     def on_send_button_clicked(self):
         """ユーザー入力と選択されたコンテキスト情報を元に、AIにメッセージを送信し、応答を表示します。
         送信前にAPIキーの確認とChat Handlerの初期化を行います。
         応答やエラーは response_display に追記・表示されます。
         """
-        print("--- MainWindow: Send button clicked ---")
-        
-        # --- ★★★ 状態表示を更新: 処理開始 ★★★ ---
-        self.status_label.setText("AI応答を待っています...")
-        QApplication.processEvents() # UIの更新を即座に反映
-        # --- ★★★ ----------------------------- ★★★ ---
+        if self.is_streaming:
+            QMessageBox.information(self, "処理中", "AIが応答を生成中です。")
+            return
 
-        # APIキーが設定されているか、再度確認
         if not is_configured():
-            QMessageBox.warning(self, "API未設定", "Gemini APIが設定されていません。「設定」を確認してください。")
+            QMessageBox.warning(self, "APIキー未設定", "Gemini APIキーが設定されていません。設定画面でキーを登録してください。")
             return
 
-        # Chat Handlerが初期化されているか、再度確認
         if not self.chat_handler:
-            QMessageBox.warning(self, "Chat Handler未初期化", "Chat Handlerが初期化されていません。「設定」を確認してください。")
+            QMessageBox.critical(self, "エラー", "チャットハンドラが初期化されていません。アプリケーションを再起動してください。")
             return
 
-        user_text = self.user_input.toPlainText().strip()
-        if not user_text: QMessageBox.information(self, "入力なし", "送信するメッセージを入力してください。"); return
-        
-        self.user_input.clear(); QApplication.processEvents() # 入力欄クリアは維持
+        user_input_text = self.user_input.toPlainText().strip()
+        if not user_input_text:
+            QMessageBox.warning(self, "入力なし", "送信するメッセージを入力してください。")
+            return
 
-        final_transient_context = self._build_transient_context_string()
-
-        print("--- Transient Context for this turn ---")
-        print(final_transient_context if final_transient_context else "(なし)")
-        print("---------------------------------------")
-        print(f"--- User Input for this turn: '{user_text}' ---")
+        current_timestamp = QDateTime.currentDateTime().toString(Qt.ISODate)
+        self.chat_handler.add_user_message_to_history(user_input_text, timestamp=current_timestamp)
         
-        # --- 2. Chat Handler を使ってAIに応答を要求 ---
-        # メインシステムプロンプトは Chat Handler 初期化時に設定済み
-        ai_response_text, error_message, usage_metadata = self.chat_handler.send_message_with_context( # 戻り値を3つに変更
-            transient_context=final_transient_context,
-            user_input=user_text, # 純粋なユーザー入力
-            max_history_pairs_for_this_turn=self.current_history_range_for_prompt
+        self._append_message_to_display({
+            'role': 'user',
+            'parts': [{'text': user_input_text}],
+            'timestamp': current_timestamp
+        })
+        # self._scroll_history_to_bottom() # _append_message_to_display に含まれる
+
+        transient_context = self._build_transient_context_string()
+        
+        num_history_entries_to_take = self.current_history_range_for_prompt * 2 
+        # add_user_message_to_history で追加された最新のユーザーメッセージも含めてAPIに送る
+        history_for_api_call = self.chat_handler._pure_chat_history[-num_history_entries_to_take:] if num_history_entries_to_take > 0 else []
+        
+        effective_model = self.current_project_settings.get("model", self.chat_handler.model_name)
+
+        self.user_input.clear() 
+        self.update_status_label() 
+
+        self._initialize_streaming_worker_and_connections(
+            user_instruction=user_input_text, 
+            transient_context=transient_context, 
+            history_to_send=history_for_api_call, 
+            max_history=None, 
+            effective_model=effective_model,
+            stream=self.enable_streaming # ★ ストリーミング設定を渡す
         )
 
-        # --- ★★★ UI表示は _redisplay_chat_history に一任 ★★★ ---
-        if error_message:
-            self.response_display.append(f"<div style='color: red;'><b>エラー:</b> {error_message}</div><br>")
-            status_text = f"<font color='red'>エラー: {error_message}</font>"
-            if usage_metadata: # エラー時でもusage_metadataがあれば表示試行
-                prompt_tokens = usage_metadata.get("input_tokens", "N/A") # prompt_token_count から変更
-                candidates_tokens = usage_metadata.get("output_tokens", "N/A") # candidates_token_count から変更
-                total_tokens = usage_metadata.get("total_token_count", "N/A")
-                status_text += f" (In: {prompt_tokens}, Cand: {candidates_tokens}, Total: {total_tokens})"
-            self.status_label.setText(status_text)
-        else:
-            # 正常応答の場合、_pure_chat_history は chat_handler 側で更新されている。
-            # chat_handler 側で usage_metadata を履歴に含めるように修正したので、
-            # MainWindow側での _pure_chat_history への usage 追加処理は不要。
-            
-            status_text = "<font color='green'>応答を受信しました。</font>"
-            if usage_metadata:
-                prompt_tokens = usage_metadata.get("input_tokens", "N/A") # prompt_token_count から変更
-                candidates_tokens = usage_metadata.get("output_tokens", "N/A") # candidates_token_count から変更
-                total_tokens = usage_metadata.get("total_token_count", "N/A")
-                status_text += f" (In: {prompt_tokens}, Cand: {candidates_tokens}, Total: {total_tokens})"
-            self.status_label.setText(status_text)
+    def _append_message_to_display(self, message_data: dict, model_name_override: Optional[str] = None):
+        """指定されたメッセージデータをresponse_displayの末尾に追加するヘルパー。"""
+        # 既存の履歴表示フォーマット関数を利用
+        # is_latest_model_entry は、これがモデルからの最後の応答である場合に編集・削除リンクを制御するために使うが、
+        # ユーザーメッセージの場合はFalseでよい。
+        # 実際の履歴リストのインデックスではなく、表示用のtimestampを使う方が安定するかも
+        html_content = self._format_history_entry_to_html(
+            index=len(self.chat_handler._pure_chat_history) -1 if self.chat_handler else -1, # 最新のインデックス
+            message_data=message_data,
+            model_name=model_name_override if message_data.get('role') == 'model' else None,
+            is_latest_model_entry= (message_data.get('role') == 'model') # ストリーミング完了時にも呼ばれる想定
+        )
+        self.response_display.append(html_content)
+        self._scroll_history_to_bottom_if_at_bottom()
 
-        self._redisplay_chat_history()
+
+    def _on_retry_button_clicked(self):
+        """リトライボタンがクリックされたときの処理。"""
+        if self.is_streaming:
+            QMessageBox.information(self, "処理中", "AIが応答を生成中です。")
+            return
+
+        if not self.chat_handler:
+            QMessageBox.warning(self, "エラー", "チャットハンドラが利用できません。")
+            return
+
+        last_user_message_text = self.chat_handler.delete_last_exchange_and_get_user_message()
+
+        if last_user_message_text is None:
+            QMessageBox.information(self, "リトライ不可", "リトライ可能な直前のメッセージ交換が見つかりません。")
+            self._update_retry_button_state()
+            return
+
+        self._redisplay_chat_history() # 履歴から削除された状態をUIに反映
+        self.update_status_label()
+        QMessageBox.information(self, "リトライ実行", f"直前のAI応答を削除し、メッセージ「{last_user_message_text[:50]}...」を再送信します。")
+
+        transient_context = self._build_transient_context_string()
+        
+        # APIに送る履歴 (delete_last_exchange_and_get_user_message 実行後の履歴)
+        num_history_entries_to_take = self.current_history_range_for_prompt * 2
+        history_for_api_call_before_re_add = self.chat_handler._pure_chat_history[-num_history_entries_to_take:] if num_history_entries_to_take > 0 else []
+        
+        effective_model = self.current_project_settings.get("model", self.chat_handler.model_name)
+        
+        # 削除されたユーザーメッセージを再度、現在のタイムスタンプで履歴とUIに追加
+        current_timestamp = QDateTime.currentDateTime().toString(Qt.ISODate)
+        self.chat_handler.add_user_message_to_history(last_user_message_text, timestamp=current_timestamp)
+        self._append_message_to_display({
+            'role': 'user',
+            'parts': [{'text': last_user_message_text}],
+            'timestamp': current_timestamp
+        })
+        # self._scroll_history_to_bottom() # _append_message_to_display に含まれる
+
+        self._initialize_streaming_worker_and_connections(
+            user_instruction=last_user_message_text, 
+            transient_context=transient_context, 
+            history_to_send=history_for_api_call_before_re_add, # ユーザーメッセージ再追加前の履歴を送る
+            max_history=None, 
+            effective_model=effective_model,
+            stream=self.enable_streaming # ★ ストリーミング設定を渡す
+        )
 
     # 新規: 会話履歴を response_display に再表示するメソッド
     def _redisplay_chat_history(self):
@@ -1354,10 +1683,20 @@ class MainWindow(QWidget):
             
             usage_data = message_data.get("usage")
             if isinstance(usage_data, dict):
-                input_tokens = usage_data.get("input_tokens", 0)
-                output_tokens = usage_data.get("output_tokens", 0)
-                if input_tokens is not None and output_tokens is not None:
-                    token_info_html = f'<span class="token-info">(In: {input_tokens}, Out: {output_tokens} トークン)</span>'
+                prompt_tokens = usage_data.get("prompt_token_count", 0)
+                candidates_tokens = usage_data.get("candidates_token_count", 0)
+                total_tokens = usage_data.get("total_token_count", 0)
+
+                token_parts = []
+                if prompt_tokens is not None: # 0の場合も表示
+                    token_parts.append(f"In: {prompt_tokens}")
+                if candidates_tokens is not None:
+                    token_parts.append(f"Out: {candidates_tokens}")
+                if total_tokens is not None:
+                    token_parts.append(f"Total: {total_tokens}")
+                
+                if token_parts:
+                    token_info_html = f'<span class="token-info">({", ".join(token_parts)} トークン)</span>'
         else:
             display_role_name = f"{role or '不明'} ({index + 1})"
             entry_specific_color_style = f"color: {user_color};" # 不明な場合はユーザーカラーなど
@@ -1385,6 +1724,10 @@ class MainWindow(QWidget):
                         カスタムスキーマ "action:index:role" を期待します。
                         例: "edit:0:user", "delete:1:model"
         """
+        if self.is_streaming: # ストリーミング中は履歴操作を無視
+            QMessageBox.information(self, "処理中", "AIが応答を生成中です。完了するまでお待ちください。")
+            return
+
         if not self.chat_handler: return
 
         url_str = url.toString()
@@ -1999,13 +2342,17 @@ class MainWindow(QWidget):
     def _on_history_slider_changed(self, value: int):
         """送信履歴範囲スライダーの値が変更されたときに呼び出されます。
         ラベル表示と内部変数を更新します。
+        グローバル設定にも保存します。
 
         Args:
             value (int): スライダーの新しい値。
         """
         self.current_history_range_for_prompt = value
         self.history_slider_label.setText(f"送信履歴範囲: {value} ")
-        # 将来的には、この値をプロジェクト設定に保存する処理をここに追加しても良い
+        # グローバル設定を更新して保存
+        self.global_config["history_range_for_prompt"] = value
+        if not save_global_config(self.global_config):
+            QMessageBox.warning(self, "設定保存エラー", "送信履歴範囲の設定保存に失敗しました。")
     # --- ★★★ -------------------------------------------------- ★★★ ---
 
     # --- ★★★ 新規: アイテム履歴数スライダーの値変更時のスロット ★★★ ---
@@ -2300,6 +2647,302 @@ class MainWindow(QWidget):
         self.current_project_dir_name = self.global_config.get("active_project", "default_project")
         print(f"  Active project directory name from global config: '{self.current_project_dir_name}'")
         self._load_current_project_data() # 実際のデータ読み込み
+
+    def _on_retry_button_clicked(self):
+        """「リトライ」ボタンがクリックされたときの処理。"""
+        if not self.chat_handler:
+            QMessageBox.warning(self, "エラー", "チャットハンドラが初期化されていません。")
+            return
+
+        user_message_to_retry = self.chat_handler.delete_last_exchange_and_get_user_message()
+
+        if user_message_to_retry is not None:
+            self.user_input.setPlainText(user_message_to_retry)
+            self.on_send_button_clicked() # メッセージを再送信
+            # 履歴の再表示とボタン状態更新は on_send_button_clicked 内で行われる
+        else:
+            QMessageBox.information(self, "リトライ不可", "リトライ可能な直前のやり取りが見つかりませんでした。")
+            self._update_retry_button_state() # リトライできなかった場合もボタン状態を更新
+
+    def _update_retry_button_state(self):
+        """リトライボタンの有効/無効状態を更新します。"""
+        if self.chat_handler and self.chat_handler._pure_chat_history:
+            history = self.chat_handler._pure_chat_history
+            if len(history) >= 1 and history[-1].get("role") == "model":
+                 # 最後のメッセージがAIの応答であればリトライ可能
+                # (delete_last_exchange_and_get_user_messageが履歴2件以上を要求するので、
+                #  厳密には len(history) >= 2 でないとリトライは成功しないが、
+                #  ボタンの有効化は最後のメッセージが model かどうかで判定する)
+                self.retry_button.setEnabled(True)
+                return
+        self.retry_button.setEnabled(False)
+
+    def _initialize_streaming_worker_and_connections(self, user_instruction: str, transient_context: str, history_to_send: List[Dict], max_history: Optional[int], effective_model: str, stream: bool): # ★ stream パラメータ追加
+        """ストリーミングワーカーを初期化し、シグナルを接続して開始します。"""
+        if not self.chat_handler:
+            QMessageBox.warning(self, "エラー", "チャットハンドラが初期化されていません。")
+            self._set_ui_for_streaming(False)
+            return
+
+        self.streaming_worker = StreamingWorker(
+            chat_handler=self.chat_handler,
+            user_instruction=user_instruction,
+            item_context=transient_context,
+            chat_history_to_include=history_to_send,
+            max_history_pairs=max_history,
+            override_model_name=effective_model if effective_model != self.chat_handler.model_name else None,
+            stream=stream # ★ stream パラメータを渡す
+        )
+        self.streaming_worker.streaming_started.connect(self._handle_streaming_started)
+        self.streaming_worker.chunk_received.connect(self._handle_chunk_received)
+        self.streaming_worker.streaming_finished.connect(self._handle_streaming_finished)
+        self.streaming_worker.streaming_error.connect(self._handle_streaming_error)
+        self.streaming_worker.finished.connect(self._on_worker_finished) # QThread終了シグナル
+
+        self._set_ui_for_streaming(True)
+        self.streaming_worker.start()
+
+    def _on_worker_finished(self):
+        """ワーカースレッドが完全に終了した後にUIを確実に戻す処理。"""
+        # ストリーミングが正常終了したかエラー終了したかに関わらず、
+        # _handle_streaming_finished や _handle_streaming_error で is_streaming は False になっているはずだが、念のため。
+        if self.is_streaming: # まだTrueなら、予期せぬ終了
+            print("Warning: Worker finished but is_streaming was still True. Resetting UI.")
+            self._handle_streaming_error("ストリーミング処理が予期せず終了しました。") # エラーとして扱う
+        # self.streaming_worker = None # 必要に応じてワーカーインスタンスをクリア
+
+    def _handle_streaming_started(self, ai_name: str, model_name: str):
+        """ストリーミング開始時の処理。AI応答ヘッダーを表示。"""
+        timestamp = QDateTime.currentDateTime().toString(Qt.ISODate)
+        self._current_streaming_ai_message_id = f"ai_message_stream_{timestamp.replace(':', '-').replace('.', '-')}"
+        self._current_streaming_content_element_id = f"ai_content_stream_{timestamp.replace(':', '-').replace('.', '-')}"
+
+        from core.config_manager import DEFAULT_GLOBAL_CONFIG
+        font_family = self.global_config.get("font_family", DEFAULT_GLOBAL_CONFIG.get("font_family", "MS Gothic"))
+        font_size_pt = self.global_config.get("font_size", DEFAULT_GLOBAL_CONFIG.get("font_size", 10))
+        font_line_height = self.global_config.get("font_line_height", DEFAULT_GLOBAL_CONFIG.get("font_line_height", 1.5))
+        model_color = self.global_config.get("font_color_model_latest", DEFAULT_GLOBAL_CONFIG.get("font_color_model_latest", "rgb(0, 100, 200)"))
+
+        base_font_style = f"font-family: '{font_family}'; font-size: {font_size_pt}pt;"
+        entry_specific_color_style = f"color: {model_color};"
+        comment_container_style = f"line-height: {font_line_height};" 
+        name_container_style = "text-decoration: none !important;"
+
+        # ストリーミング中はヘッダーと本文用コンテナのみ表示。フッターとセパレーターは表示しない。
+        header_html = f'''
+        <div id="{self._current_streaming_ai_message_id}" class="history-entry model-entry" style="{base_font_style} {entry_specific_color_style}" data-timestamp="{timestamp}">
+            <div class="name-container" style="{name_container_style}">
+                {ai_name} ({model_name}) 
+                <span class="timestamp-display" style="font-size: {font_size_pt-2}pt; color: gray;">{QDateTime.currentDateTime().toString("yyyy/MM/dd HH:mm:ss")}</span>
+            </div>
+            <div class="comment-container" style="{comment_container_style}">
+                <div id="{self._current_streaming_content_element_id}" class="message-text ai-message-text">
+                </div>
+            </div>
+        </div>
+        '''
+        self.response_display.append(header_html)
+        self._scroll_history_to_bottom_if_at_bottom() 
+
+    def _get_streaming_placeholder_footer_html(self) -> str:
+        """ストリーミング中に表示するフッターのプレースホルダーHTMLを返します。(今回は使用されない想定)"""
+        return "" # ストリーミング中はフッターを表示しないので空文字列を返す
+
+    def _handle_chunk_received(self, chunk_text: str):
+        """受信したテキストチャンクを追記。"""
+        # ストリーミング開始時にカーソルが本文用DIVの末尾にあると仮定し、そこにプレーンテキストを挿入。
+        # _handle_streaming_started で追加したHTML要素の後にそのまま追加される形になる。
+        self.response_display.moveCursor(QTextCursor.End) 
+        self.response_display.insertPlainText(chunk_text) 
+        self._scroll_history_to_bottom_if_at_bottom()
+
+    def _handle_streaming_finished(self, full_text: str, usage_metadata: dict, model_name: str):
+        """ストリーミング完了時の処理。フッター更新、履歴保存。"""
+        if not self._current_streaming_ai_message_id: # ストリーミングIDがない場合はエラーとして扱うか、何もしない
+            print("Error: Streaming finished but _current_streaming_ai_message_id is not set.")
+            self._set_ui_for_streaming(False)
+            self._update_retry_button_state()
+            return
+
+        # JavaScriptでのDOM操作は行わない。
+        # ストリーミング開始時に表示されたヘッダー部分の更新は行わず、
+        # 完了したメッセージとして、整形されたHTML全体を新たに追加する。
+        # ただし、これだとヘッダーと本文が分離してしまう。
+        # より良い方法は、ストリーミング開始時のプレースホルダーを削除し、
+        # 完成したHTMLを追記するか、MainWindowレベルでメッセージのID管理と置換を行うこと。
+
+        # ここでは、_current_streaming_ai_message_id を使って表示されたプレースホルダーを
+        # 削除し、完成したメッセージを _append_message_to_display で表示する方針を試みる。
+        
+        # 1. 古いプレースホルダーを削除する (QTextBrowserではID指定での直接削除が困難なため、限定的な対応)
+        #    ここでは単純に、最後に表示されたものがプレースホルダーだったと仮定して処理するのではなく、
+        #    _redisplay_chat_history と同様のロジックで、メッセージを履歴に追加した後、
+        #    全体を再表示するアプローチを取るのが最も安全かもしれない。
+        #    しかし、それはUXとして望ましくない。
+
+        #    今回の修正では、プレーンテキストで追記された内容が response_display に残っている状態。
+        #    これを一度クリアし、整形されたメッセージを追記する。
+        #    ただし、_current_streaming_ai_message_id を使って表示したヘッダーは残る。
+        #    理想的には、そのヘッダーに対応する本文とフッターを更新したい。
+
+        #    最も簡単な対処: 逐次表示されたプレーンテキストはそのままに、フッター情報などを追記する。
+        #    または、ストリーミング開始時のヘッダーを削除し、完全なメッセージをappendする。
+
+        #    今回は、ストリーミング開始時に表示した初期ブロック (_current_streaming_ai_message_id) を
+        #    見つけて、その内容を完成版で更新する試みはQTextBrowserでは困難なので、
+        #    チャット履歴に保存し、UIを更新する(_redisplay_chat_history と同様の処理を最後に行う)。
+        #    ストリーミング中の逐次表示は insertPlainText で行い、完了時に完全な履歴を再描画する。
+
+        timestamp_str = self.response_display.find(self._current_streaming_ai_message_id) # このIDはHTML要素のID
+        # timestamp_str は QDateTime.currentDateTime().toString(Qt.ISODate) 形式だったはず
+        # HTML要素から取得するのは困難なので、_handle_streaming_started で保存したタイムスタンプを使うべき。
+        # しかし、そのタイムスタンプは streaming_worker からは直接渡されていない。
+
+        # 暫定対応: 最後に表示されたメッセージがストリーミング中のものだったとして、それを更新する試みはせず、
+        # 新たに完全なメッセージとして履歴に追加し、UIに表示する。
+        # ユーザーメッセージ -> [AIヘッダー表示] -> [AI本文(逐次)] -> [AIフッター+完成本文(新規)] のような流れを避けるため、
+        # _append_message_to_display を使う。
+
+        current_timestamp_for_storage = QDateTime.currentDateTime().toString(Qt.ISODate) # 新しいタイムスタンプ
+
+        # 履歴に保存するデータを作成
+        history_entry = {
+            'role': 'model',
+            'parts': [{'text': full_text}],
+            'model_name': model_name,
+            'timestamp': current_timestamp_for_storage, # ストリーミング完了時のタイムスタンプ
+            'usage': usage_metadata if usage_metadata else {}
+        }
+
+        if self.chat_handler:
+            self.chat_handler._pure_chat_history.append(history_entry)
+            self.chat_handler._save_history_to_file()
+
+        # ストリーミング開始時に表示したプレースホルダー的な表示は、
+        # この _redisplay_chat_history によって上書きされる（消える）。
+        self._redisplay_chat_history() # これにより、全ての履歴が正しく整形されて表示される
+
+        self._set_ui_for_streaming(False)
+        self._update_retry_button_state()
+        self._scroll_history_to_bottom_if_at_bottom() # 再表示後にスクロール
+        self._current_streaming_ai_message_id = None
+        self._current_streaming_content_element_id = None
+        self.update_status_label()
+
+    def _get_completed_footer_html(self, timestamp: str, usage: Optional[Dict[str, int]]) -> str:
+        """ストリーミング完了後に表示するフッターHTMLを生成します。"""
+        token_info_parts = []
+        if usage:
+            if "prompt_token_count" in usage: # Gemini API のキー名
+                token_info_parts.append(f"In: {usage['prompt_token_count']}")
+            if "candidates_token_count" in usage:
+                token_info_parts.append(f"Out: {usage['candidates_token_count']}")
+            if "total_token_count" in usage:
+                token_info_parts.append(f"Total: {usage['total_token_count']}")
+        token_info_str = " | ".join(token_info_parts) if token_info_parts else "N/A"
+        
+        # 履歴内のインデックスを見つける必要がある。ここでは単純化のためtimestampを使う
+        # 実際には _redisplay_chat_history のようにインデックスを渡せるようにするべき
+        # ここでは timestamp を使った仮のリンク
+        edit_action = f'edit_history_item:{timestamp}'
+        delete_action = f'delete_history_item:{timestamp}'
+
+        return f'''
+        <div class="message-footer">
+            <span class="token-info">Tokens: {token_info_str}</span>
+            <span class="actions">
+                <a href="{edit_action}" class="action-link">編集</a>
+                <a href="{delete_action}" class="action-link">削除</a>
+            </span>
+        </div>
+        '''
+
+    def _handle_streaming_error(self, error_message: str):
+        """ストリーミングエラー発生時の処理。"""
+        if self._current_streaming_ai_message_id:
+            # 既存のストリーミング表示ブロックがあれば、そこにエラーメッセージを追記・更新
+            # JavaScriptでの細かいDOM操作はQTextBrowserでは難しいため、エラーは新しい行として表示する方針に変更
+            error_html_display = f'<div style="color: red;">AI応答生成中にエラー（ストリームID: {self._current_streaming_ai_message_id}）: {error_message}</div>'
+            self.response_display.append(error_html_display)
+            # 元のJavaScriptでのフッター更新処理は、ここでは実行できないためコメントアウトまたは削除
+            # escaped_error_html_for_js = error_html.replace("`", "\\`") # バックスラッシュをエスケープ
+            # script = f'''
+            #     var element = document.getElementById("{self._current_streaming_content_element_id}");
+            #     if (element) {{
+            #         element.innerHTML += `{escaped_error_html_for_js}`;
+            #     }}
+            #     var footer = document.querySelector("#{self._current_streaming_ai_message_id} .streaming-placeholder-footer .token-info");
+            #     if (footer) {{ footer.textContent = "エラー発生"; footer.style.color = "red"; }}
+            # '''
+            # self.response_display.page().runJavaScript(script) # この行がAttributeErrorの原因
+        else:
+            # まだ何も表示していなければ、新しいエラーブロックとして表示
+            self.response_display.append(f'<div class="message-container error-message-container"><p style="color: red;">ストリーミングエラー: {error_message}</p></div>')
+        
+        QMessageBox.warning(self, "ストリーミングエラー", error_message)
+        self._set_ui_for_streaming(False)
+        self._update_retry_button_state()
+        self._current_streaming_ai_message_id = None
+        self._current_streaming_content_element_id = None
+        self.update_status_label() # ステータス更新
+
+    def _scroll_history_to_bottom_if_at_bottom(self):
+        """応答表示エリアが最下部にある場合のみ、最下部にスクロールする。"""
+        scrollbar = self.response_display.verticalScrollBar()
+        # スクロールバーが一番下にあるか、あるいはスクロール可能な範囲が非常に小さい場合に自動スクロール
+        # (コンテンツが少ない初期状態では maximum が minimum と同じか非常に近くなるため)
+        at_bottom = scrollbar.value() >= (scrollbar.maximum() - 5) # 少しの誤差を許容
+        if at_bottom:
+            scrollbar.setValue(scrollbar.maximum()) # 最下部にスクロール
+
+    def _convert_markdown_to_html_for_display(self, markdown_text: str) -> str:
+        """MarkdownテキストをHTMLに変換して表示用に整形する (既存の処理を参考に実装)。
+           ひとまず簡易的な実装として、改行を <br> に、コードブロックを <pre> にする程度。
+           実際には、 _format_history_entry_to_html のようなリッチな変換が必要。
+        """
+        if not hasattr(self, '_md_parser'): # Markdownパーサーをキャッシュ
+            try:
+                from markdown import Markdown
+                self._md_parser = Markdown(extensions=[
+                    'fenced_code', # ```code```
+                    'codehilite',  # シンタックスハイライト (Pygmentsが必要)
+                    'tables',      # テーブル
+                    'nl2br'        # 改行を<br>に
+                ])
+                print("Markdown parser initialized with extensions.")
+            except ImportError:
+                self._md_parser = None
+                print("Markdown library not found. Basic Markdown conversion will be used.")
+
+        if self._md_parser:
+            # HTMLエスケープ文字が混ざっていると二重エスケープされる可能性があるので注意
+            # full_text は純粋なテキストであることを期待
+            html = self._md_parser.convert(markdown_text)
+        else:
+            html = markdown_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            html = html.replace("\n", "<br>")
+            # Very basic code block ``` ... ``` (DOTALL makes . match newline)
+            # html = re.sub(r"```(.*?)```", r"<pre><code>\1</code></pre>", html, flags=re.DOTALL) # Linter error source, temporarily commented out
+            # html = re.sub(r"`([^`]+)`", r"<code>\1</code>", html)
+            # Fallback without complex regex for now if markdown library is not present
+            if "```" in html:
+                html = html.replace("```", "<pre>", 1) # Opening ```
+                html = html.replace("```", "</pre>")   # Closing ``` (assumes only one block or simple cases)
+            if "`" in html:
+                 html = re.sub(r"`([^`]+)`", r"<code>\1</code>", html) # Inline code still uses regex
+
+        return html
+
+    # --- ★★★ 新規: ストリーミングチェックボックスの状態変更スロット ★★★ ---
+    def _on_streaming_checkbox_changed(self, state):
+        """ストリーミング有効化チェックボックスの状態が変更されたときに呼び出されます。"""
+        self.enable_streaming = bool(state == Qt.Checked)
+        print(f"Streaming enabled: {self.enable_streaming}")
+        # グローバル設定を更新して保存
+        self.global_config["enable_streaming"] = self.enable_streaming
+        if not save_global_config(self.global_config):
+            QMessageBox.warning(self, "設定保存エラー", "ストリーミング設定の保存に失敗しました。")
+    # --- ★★★ ---------------------------------------------------- ★★★ ---
 
 if __name__ == '__main__':
     """MainWindowの基本的な表示・インタラクションテスト。"""

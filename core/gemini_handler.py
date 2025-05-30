@@ -515,16 +515,42 @@ class GeminiChatHandler:
     # --- ★★★ ------------------ ★★★ ---
 
     def save_current_history_on_exit(self):
-        """アプリケーション終了時などに現在の履歴を保存するためのメソッド。
-        実際には send_message_with_context 内で都度保存しているため、
-        明示的な呼び出しは不要かもしれないが、念のため。
+        """現在の純粋な会話履歴をファイルに保存します。
+        終了時やプロジェクト切り替え時に呼び出されることを想定。
         """
-        if self.project_dir_name: # プロジェクト名が設定されている場合のみ
-            print("Attempting to save chat history on exit...")
+        if self.project_dir_name: # プロジェクト名がある場合のみ保存
             self._save_history_to_file()
-            print("Chat history saving process on exit completed.")
+            print(f"Chat history saved to file for project \'{self.project_dir_name}\'.")
         else:
-            print("Project directory name not set, skipping history save on exit.")
+            print("No project selected, chat history not saved to file.")
+
+    def delete_last_exchange_and_get_user_message(self) -> Optional[str]:
+        """直前のAIの応答とそれに対応するユーザーのメッセージを会話履歴から削除し、
+        そのユーザーメッセージのテキストを返します。
+
+        Returns:
+            Optional[str]: 削除されたユーザーメッセージのテキスト。
+                           該当するやり取りが見つからない場合は None。
+        """
+        if len(self._pure_chat_history) < 2:
+            return None
+
+        last_message = self._pure_chat_history[-1]
+        second_last_message = self._pure_chat_history[-2]
+
+        if last_message.get('role') == 'model' and second_last_message.get('role') == 'user':
+            # ユーザーメッセージのpartsからテキストを取得
+            user_parts = second_last_message.get('parts')
+            user_message_text = None
+            if isinstance(user_parts, list) and len(user_parts) > 0 and 'text' in user_parts[0]:
+                user_message_text = user_parts[0]['text']
+            
+            self._pure_chat_history.pop()  # AIの応答を削除
+            self._pure_chat_history.pop()  # ユーザーのメッセージを削除
+            self._save_history_to_file() # 変更をファイルに保存
+            print(f"Last exchange (user and model) deleted from history. User message: '{user_message_text[:50]}...'")
+            return user_message_text
+        return None
 
     def generate_response_with_history_and_context(
         self,
@@ -532,166 +558,268 @@ class GeminiChatHandler:
         item_context: Optional[str] = None,
         chat_history_to_include: Optional[List[Dict[str, Union[str, List[Dict[str, str]]]]]] = None,
         max_history_pairs: Optional[int] = None,
-        override_model_name: Optional[str] = None
-    ) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]]:
+        override_model_name: Optional[str] = None,
+        stream: bool = False
+    ) -> Union[Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]], genai.types.GenerateContentResponse]:
         """
-        指定された会話履歴とアイテムコンテキストを考慮して、単発の応答を生成します。
+        指定された会話履歴とアイテムコンテキストを考慮して、応答を生成します。
         このメソッドは永続的なチャット履歴 (_pure_chat_history) を更新しません。
+
         override_model_name が指定されない場合は、ハンドラに設定されている現在のモデル、
         システム指示、生成設定、安全設定を使用します。
         override_model_name が指定された場合は、そのモデルを使用し、システム指示と生成設定は
         現在のハンドラの設定が適用されます。
 
+        stream=True の場合、応答チャンクを yield するジェネレータとして動作します。
+        stream=False の場合、(応答テキスト, エラーメッセージ, 使用状況メタデータ) のタプルを返します。
+
         Args:
             user_instruction (str): ユーザーからの主要な指示。
-            item_context (Optional[str]): アイテムの説明など、追加のコンテキスト情報。
-            chat_history_to_include (Optional[List[Dict]]): 含める会話履歴。
-                                                            ハンドラの _pure_chat_history と同じ形式。
-            max_history_pairs (Optional[int]): 含める会話履歴の最大ペア数。
-                                               Noneの場合、chat_history_to_include の全てを使用。
-            override_model_name (Optional[str]): この呼び出しで使用するモデル名。
-                                                 Noneの場合、self.model_name を使用。
+            item_context (str, optional): アイテムに関する追加コンテキスト。
+            chat_history_to_include (List[Dict], optional): このターンに含める会話履歴。
+                                                            None の場合は _pure_chat_history が使用される。
+            max_history_pairs (int, optional): 含める会話履歴の最大ペア数。None なら全て。
+            override_model_name (str, optional): この呼び出しでのみ使用するモデル名。
+            stream (bool, optional): Trueの場合、ストリーミング応答を有効にする。デフォルトはFalse。
 
         Returns:
-            Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]]:
-                (AI応答テキスト, エラーメッセージ, 使用状況メタデータ)
+            Union[Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]], Iterable[str]]:
+                stream=False の場合: (応答テキスト, エラーメッセージ, 使用状況メタデータ)
+                stream=True の場合: 応答テキストチャンクをyieldするジェネレータ (実際には genai.types.GenerateContentResponse)
         """
-        if not is_configured(): # APIキー設定確認
-            error_msg = "Gemini APIが設定されていません。"
-            print(f"Error in generate_response_with_history_and_context: {error_msg}")
+        if not is_configured():
+            error_msg = "Gemini API is not configured."
+            print(f"DEBUG: GeminiChatHandler.generate_response_with_history_and_context: {error_msg}") # DEBUG LOG
+            if stream:
+                # ストリームの場合、エラーメッセージをyieldするシンプルなジェネレータを返す
+                def error_generator():
+                    yield f"Error: {error_msg}"
+                return error_generator() # DEBUG: ここでジェネレータを返すように変更
             return None, error_msg, None
 
-        messages_for_api: List[Dict[str, Union[str, List[Dict[str, str]]]]] = [] # type: ignore
+        active_model_name = override_model_name if override_model_name else self.model_name
+        
+        # モデルインスタンスの準備 (必要ならオーバーライドモデルで再初期化)
+        target_model = self._model
+        temp_model_for_override = None
 
-        # 1. 会話履歴の準備
-        effective_chat_history = []
-        if chat_history_to_include:
-            source_history = list(chat_history_to_include) # コピーを使用
-            if max_history_pairs is not None and max_history_pairs >= 0:
-                num_messages_to_keep = max_history_pairs * 2
-                if len(source_history) > num_messages_to_keep:
-                    effective_chat_history = source_history[-num_messages_to_keep:]
-                    print(f"  generate_response_with_history_and_context: Using last {max_history_pairs} pairs ({len(effective_chat_history)} messages) from provided history.")
-                else:
-                    effective_chat_history = source_history
-            else:
-                effective_chat_history = source_history
-                print(f"  generate_response_with_history_and_context: Using all {len(effective_chat_history)} messages from provided history.")
-
-        cleaned_history_to_send = []
-        for item in effective_chat_history:
-            if isinstance(item, dict) and "usage" in item:
-                cleaned_item = {k: v for k, v in item.items() if k != "usage"}
-                cleaned_history_to_send.append(cleaned_item)
-            else:
-                cleaned_history_to_send.append(item)
-        messages_for_api.extend(cleaned_history_to_send)
-
-        # 2. アイテムコンテキストの追加 (userロール)
-        if item_context and item_context.strip():
-            messages_for_api.append({"role": "user", "parts": [{"text": item_context.strip()}]})
-            print(f"  generate_response_with_history_and_context: Added item context.")
-
-        # 3. ユーザー指示の追加 (userロール)
-        if user_instruction and user_instruction.strip():
-            messages_for_api.append({"role": "user", "parts": [{"text": user_instruction.strip()}]})
-            print(f"  generate_response_with_history_and_context: Added user instruction.")
+        # --- DEBUG LOG: モデル初期化前の状態 ---
+        print(f"DEBUG: GeminiChatHandler: active_model_name='{active_model_name}'")
+        if self._model:
+            print(f"DEBUG:   Current handler model: name='{self._model.model_name}', system_instruction is {'set' if self._system_instruction_text else 'not set'}")
+            # print(f"DEBUG:     System Instruction: {self._system_instruction_text if self._system_instruction_text else 'None'}")
+            # print(f"DEBUG:     Generation Config: {self._model.generation_config}")
         else:
-            if not messages_for_api:
-                 error_msg = "送信するメッセージがありません (履歴、コンテキスト、指示が全て空です)。"
-                 print(f"Error in generate_response_with_history_and_context: {error_msg}")
-                 return None, error_msg, None
-            print("Warning: User instruction is empty in generate_response_with_history_and_context.")
-        
-        is_valid_user_message_present = False
-        for msg in messages_for_api:
-            if msg.get("role") == "user":
-                parts = msg.get("parts")
-                if isinstance(parts, list) and len(parts) > 0:
-                    first_part = parts[0]
-                    if isinstance(first_part, dict) and first_part.get("text", "").strip():
-                        is_valid_user_message_present = True
-                        break
-        
-        if not is_valid_user_message_present:
-            error_msg = "APIに送信する有効なユーザーメッセージがありません。"
-            print(f"Error in generate_response_with_history_and_context: {error_msg}")
-            return None, error_msg, None
+            print("DEBUG:   Current handler model is None.")
+        # --- END DEBUG LOG ---
+
+        if override_model_name and override_model_name != self.model_name:
+            print(f"DEBUG: GeminiChatHandler: Using override model for this turn: {override_model_name}")
+            # 現在のハンドラ設定（システム指示、生成設定）を流用して一時モデルを作成
+            # safety_settings は API に直接渡さないのでここでは考慮不要
+            model_args_override = {"model_name": override_model_name}
+            if self._system_instruction_text:
+                model_args_override["system_instruction"] = self._system_instruction_text
+            if self.generation_config:
+                model_args_override["generation_config"] = self.generation_config
             
-        print(f"  generate_response_with_history_and_context: Total messages for API: {len(messages_for_api)}")
-
-        # --- モデルの選択と初期化 ---
-        active_model_instance: Optional[genai.GenerativeModel] = None
-        model_to_use = override_model_name if override_model_name and override_model_name.strip() else self.model_name
-
-        if not model_to_use:
-            error_msg = "使用するAIモデル名が特定できませんでした。"
-            print(f"Error in generate_response_with_history_and_context: {error_msg}")
+            try:
+                temp_model_for_override = genai.GenerativeModel(**model_args_override) # type: ignore
+                target_model = temp_model_for_override
+                print(f"DEBUG:   Temporary model '{override_model_name}' initialized for override.")
+            except Exception as e:
+                error_msg = f"Error initializing override model '{override_model_name}': {e}"
+                print(f"DEBUG: GeminiChatHandler: {error_msg}") # DEBUG LOG
+                if stream:
+                    def error_generator_override(): # DEBUG: ジェネレータを返す
+                        yield f"Error: {error_msg}"
+                    return error_generator_override()
+                return None, error_msg, None
+        
+        if not target_model:
+            error_msg = f"Model ('{active_model_name}') is not initialized."
+            print(f"DEBUG: GeminiChatHandler: {error_msg}") # DEBUG LOG
+            if stream:
+                def error_generator_no_model(): # DEBUG: ジェネレータを返す
+                    yield f"Error: {error_msg}"
+                return error_generator_no_model()
             return None, error_msg, None
+
+        # プロンプトと履歴の構築
+        full_prompt_parts = []
+        history_for_api = []
+
+        # 1. システム指示 (target_model に設定済みなのでここでは不要)
+
+        # 2. チャット履歴の準備
+        source_history = chat_history_to_include if chat_history_to_include is not None else self._pure_chat_history
+        
+        if max_history_pairs is not None and max_history_pairs >= 0:
+            # ユーザー/モデルのペアでカウントするため、要素数としては max_history_pairs * 2
+            num_history_entries_to_take = max_history_pairs * 2
+            effective_history = source_history[-num_history_entries_to_take:]
+        else:
+            effective_history = source_history # 全て
+
+        # APIが期待する形式に変換
+        for entry in effective_history:
+            role = entry.get('role')
+            parts_data = entry.get('parts')
+            if role and isinstance(parts_data, list) and parts_data:
+                 # APIに渡す履歴はContentオブジェクトのリスト
+                try:
+                    # parts_data は [{'text': "..."}] の形式を想定
+                    history_for_api.append({'role': role, 'parts': [p['text'] for p in parts_data if 'text' in p]})
+                except Exception as e:
+                    print(f"Warning: Skipping history entry due to format error: {entry}, Error: {e}")
+            else:
+                print(f"Warning: Skipping invalid history entry: {entry}")
+
+
+        # 3. アイテムコンテキストの追加 (あれば)
+        if item_context and item_context.strip():
+            # アイテムコンテキストはユーザー指示の直前に配置する特別なユーザーメッセージとして扱うか、
+            # あるいはシステム指示の一部としてモデル初期化時に渡すのが一般的。
+            # ここでは、ユーザー指示の前に挿入する形で対応。
+            # parts に直接文字列のリストとして渡すのがより堅牢か
+            # genai.types.Content(parts=[genai.types.Part(text=item_context)], role="user") のようにする。
+            # ただし、履歴と混ぜる場合、履歴の最後の発言が user だと連続 user になる可能性があるので注意。
+            # ここでは単純にテキストとして追加
+            full_prompt_parts.append(f"### 提供された追加情報 ###\\n{item_context}\\n### 上記情報を踏まえて以下の指示に答えてください ###\\n")
+
+
+        # 4. ユーザー指示の追加
+        full_prompt_parts.append(user_instruction)
+        final_user_prompt_text = "\\n\\n".join(full_prompt_parts)
+
+        # API呼び出し用のコンテンツリストを作成
+        contents_for_api = []
+        if history_for_api: 
+            contents_for_api.extend(history_for_api)
+        
+        contents_for_api.append({'role': 'user', 'parts': [final_user_prompt_text]})
+        
+        print(f"DEBUG:   Effective History for API ({len(history_for_api)} entries):")
+        # for i, h_entry in enumerate(history_for_api):
+        #     print(f"DEBUG:     [{i}] Role: {h_entry.get('role')}, Parts: {str(h_entry.get('parts', 'N/A'))[:100]}...") # 内容を一部表示
+        # print(f"DEBUG:   Final User Prompt (last part of contents): {final_user_prompt_text[:200]}...")
+        # print(f"DEBUG:   Full contents_for_api to be sent (first 2 entries and last entry):")
+        # if len(contents_for_api) > 3:
+        #     for i in range(2): print(f"DEBUG:     [{i}] {str(contents_for_api[i])[:200]}...")
+        #     print("DEBUG:     ...")
+        #     print(f"DEBUG:     [-1] {str(contents_for_api[-1])[:200]}...")
+        # else:
+        #     for i, c_entry in enumerate(contents_for_api): print(f"DEBUG:     [{i}] {str(c_entry)[:200]}...")
+        # --- END DEBUG LOG ---
+
+        print(f"DEBUG: GeminiChatHandler: Sending request to model '{active_model_name}' (Streaming: {stream})")
+        if self._system_instruction_text:
+             print(f"DEBUG:   With System Instruction (first 100 chars): {str(self._system_instruction_text)[:100]}...")
+        else:
+             print("DEBUG:   With System Instruction: None")
+        print(f"DEBUG:   With Generation Config: {self.generation_config}")
+
 
         try:
-            model_args_for_call = {"model_name": model_to_use}
-            if self._system_instruction_text: # ハンドラのシステム指示を使用
-                model_args_for_call["system_instruction"] = self._system_instruction_text
-            if self.generation_config: # ハンドラの生成設定を使用
-                model_args_for_call["generation_config"] = self.generation_config
-            # safety_settings はAPI送信時には含めない方針 (FIXED_SAFETY_SETTINGS を generate_content で使用)
-            
-            active_model_instance = genai.GenerativeModel(**model_args_for_call) # type: ignore
-            print(f"  generate_response_with_history_and_context: Using model '{model_to_use}' for this call.")
-        except Exception as e:
-            error_msg = f"モデル '{model_to_use}' の初期化中にエラー: {e}"
-            print(f"Error in generate_response_with_history_and_context: {error_msg}")
-            return None, error_msg, None
-
-        if not active_model_instance:
-             error_msg = f"モデル '{model_to_use}' のインスタンス作成に失敗しました。"
-             print(f"Error in generate_response_with_history_and_context: {error_msg}")
-             return None, error_msg, None
-        # --- ------------------- ---
-
-        try:
-            response = active_model_instance.generate_content(
-                contents=messages_for_api, # type: ignore
-                safety_settings=FIXED_SAFETY_SETTINGS, # ここで安全設定を渡す
-                stream=False
+            response = target_model.generate_content(
+                contents=contents_for_api, # type: ignore
+                stream=stream
             )
 
-            ai_response_text: Optional[str] = None
-            usage_metadata_dict: Optional[Dict[str, int]] = None
+            # --- DEBUG LOG: APIからのレスポンスオブジェクト ---
+            print(f"DEBUG: GeminiChatHandler: Received response object from API. Type: {type(response)}")
+            if not stream:
+                 print(f"DEBUG:   Response (non-streamed): {str(response)[:500]}...") # 最初の500文字程度
+            # --- END DEBUG LOG ---
 
-            if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                usage_metadata_dict = {
-                    "input_tokens": response.usage_metadata.prompt_token_count,
-                    "output_tokens": response.usage_metadata.candidates_token_count,
-                    "total_token_count": response.usage_metadata.total_token_count
-                }
-                print(f"  generate_response_with_history_and_context: Usage metadata: {usage_metadata_dict}")
+            if stream:
+                # --- DEBUG LOG: ストリーミングの場合のレスポンス詳細 ---
+                # print(f"DEBUG:   Streaming response. Prompt Feedback: {response.prompt_feedback if hasattr(response, 'prompt_feedback') else 'N/A'}")
+                # --- END DEBUG LOG ---
+                # ストリーミングモードの場合、ジェネレータ (GenerateContentResponse) をそのまま返す
+                # ここでエラーチェックを行い、エラーならエラーメッセージをyieldするジェネレータを返す
+                if hasattr(response, 'prompt_feedback') and response.prompt_feedback and \
+                   response.prompt_feedback.block_reason != genai.types.BlockReason.BLOCK_REASON_UNSPECIFIED:
+                    error_msg = f"ストリーミング応答がブロックされました。理由: {response.prompt_feedback.block_reason.name}"
+                    print(f"DEBUG: GeminiChatHandler Stream Error: {error_msg}")
+                    def stream_error_gen_blocked():
+                        yield f"GENERATE_CONTENT_ERROR_STREAM: {error_msg}"
+                    return stream_error_gen_blocked()
+                
+                # 正常なストリームを返す前に、中身が空でないかチェックする試み（ただし、これはストリームを消費してしまうので注意）
+                # resolved_response = response.resolve() # ストリームを解決しようとすると、ストリームが消費される
+                # if not resolved_response.text and not resolved_response.parts:
+                #    print("DEBUG: GeminiChatHandler Stream Warning: Resolved stream is empty (no text, no parts). Prompt Feedback:", resolved_response.prompt_feedback)
 
-            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
-                ai_response_text = response.candidates[0].content.parts[0].text
-            elif response.prompt_feedback:
-                error_msg = f"プロンプトがAIによってブロックされました。理由: {response.prompt_feedback.block_reason.name if response.prompt_feedback.block_reason else '不明'}. "
-                if response.prompt_feedback.safety_ratings:
-                    error_msg += f"安全性評価: {[(rating.category.name, rating.probability.name) for rating in response.prompt_feedback.safety_ratings]}"
-                print(f"Error in generate_response_with_history_and_context: {error_msg}")
-                return None, error_msg, usage_metadata_dict
+                return response
             else:
-                finish_reason = "Unknown"
-                if response.candidates and hasattr(response.candidates[0], 'finish_reason'):
-                    finish_reason = str(response.candidates[0].finish_reason)
-                error_msg = f"AIからの応答が期待する形式ではありません (Finish reason: {finish_reason})。Response: {response}"
-                print(f"Error in generate_response_with_history_and_context: {error_msg}")
-                return None, error_msg, usage_metadata_dict
-            
-            return ai_response_text, None, usage_metadata_dict
+                # 非ストリーミングモード (従来通り)
+                # --- DEBUG LOG: 非ストリーミングのレスポンス詳細 ---
+                print(f"DEBUG:   Non-streaming response. Text: {response.text[:200] if hasattr(response, 'text') else 'N/A'}...")
+                print(f"DEBUG:   Prompt Feedback: {response.prompt_feedback if hasattr(response, 'prompt_feedback') else 'N/A'}")
+                print(f"DEBUG:   Candidates: {response.candidates if hasattr(response, 'candidates') else 'N/A'}")
+                # --- END DEBUG LOG ---
+
+                if hasattr(response, 'prompt_feedback') and response.prompt_feedback and \
+                   response.prompt_feedback.block_reason != genai.types.BlockReason.BLOCK_REASON_UNSPECIFIED:
+                    error_msg = f"応答がブロックされました。理由: {response.prompt_feedback.block_reason.name}"
+                    print(f"DEBUG: GeminiChatHandler Non-Stream Error: {error_msg}")
+                    return None, error_msg, None # usage_metadata はこの場合ないかもしれない
+
+                full_response_text = response.text
+                
+                usage_metadata_dict: Optional[Dict[str, int]] = None
+                try:
+                    if response.usage_metadata: #
+                        usage_metadata_dict = {
+                            "prompt_token_count": response.usage_metadata.prompt_token_count,
+                            "candidates_token_count": response.usage_metadata.candidates_token_count, # v0.5.0では candidates_token_count
+                            "total_token_count": response.usage_metadata.total_token_count,
+                        }
+                except AttributeError:
+                     # 古いバージョンや、メタデータがない場合のエラーを無視
+                    print("Warning: Could not retrieve usage_metadata from response (AttributeError).")
+                except Exception as e_meta:
+                    print(f"Warning: Error retrieving usage_metadata: {e_meta}")
+
+                return full_response_text, None, usage_metadata_dict
 
         except Exception as e:
-            error_msg = f"メッセージ送信中にエラーが発生しました: {e}"
-            print(f"Error in generate_response_with_history_and_context: {error_msg}")
+            error_msg = f"Error during Gemini API call: {e}"
+            print(f"DEBUG: GeminiChatHandler Exception: {error_msg}") # DEBUG LOG
             import traceback
-            traceback.print_exc()
+            print(f"DEBUG: Traceback: {traceback.format_exc()}") # DEBUG LOG
+            
+            if stream:
+                def exception_error_gen(): # DEBUG: ジェネレータを返す
+                    yield f"GENERATE_CONTENT_ERROR_STREAM: {error_msg}"
+                return exception_error_gen()
+
             return None, error_msg, None
+
+    def add_user_message_to_history(self, user_text: str, timestamp: Optional[str] = None):
+        """ユーザーのメッセージを純粋な会話履歴 (_pure_chat_history) に追加します。
+
+        Args:
+            user_text (str): ユーザーが入力したテキスト。
+            timestamp (str, optional): メッセージのタイムスタンプ (ISO形式推奨)。Noneなら記録しない。
+        """
+        if not user_text:
+            return
+
+        history_entry = {
+            'role': 'user',
+            'parts': [{'text': user_text}]
+        }
+        if timestamp:
+            history_entry['timestamp'] = timestamp
+        
+        self._pure_chat_history.append(history_entry)
+        # _save_history_to_file() はAIの応答が完了した後の方が良いかもしれないが、
+        # ユーザー入力の即時性を考慮するならここでも可。ただし頻繁な書き込みになる。
+        # 現状は send_message完了時やリトライ完了時にまとめて保存しているので、ここでは保存しない。
+        print(f"User message added to _pure_chat_history (not saved to file yet): {user_text[:50]}...")
+
 
     @staticmethod
     def generate_single_response(model_name: str, 
