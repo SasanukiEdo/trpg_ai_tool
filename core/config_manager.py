@@ -14,6 +14,7 @@
 import json
 import os
 import shutil
+import re # reモジュールをインポート
 
 # --- 定数 ---
 CONFIG_FILE_PATH = os.path.join("data", "config.json")
@@ -56,7 +57,84 @@ DEFAULT_PROJECT_SETTINGS = {
     "project_display_name": "デフォルトプロジェクト", # プロジェクトの表示名 (UI用)
     "main_system_prompt": "あなたは優秀なAIアシスタントです。", # プロジェクトのメインシステムプロンプト
     "model": "gemini-1.5-pro-latest",              # プロジェクトで使用するAIモデル
-    "ai_edit_model_name": ""                       # AI編集支援機能で使用するモデル名 (空白時はプロジェクトモデルを使用)
+    "ai_edit_model_name": "",                       # AI編集支援機能で使用するモデル名 (空白時はプロジェクトモデルを使用)
+    # ★★★ AI編集支援用プロンプトテンプレートのデフォルト値 ★★★
+    "ai_edit_prompts": {
+        "description_edit": """あなたはTRPGのデータ管理を行うアシスタントです。
+以下の「現在の説明/メモ」に基づいて、現在の状況を考慮して「{item_name}」の新しい「説明/メモ」を作成してください。
+元の情報で重要なものが失われないようにし、説明/メモ以外の余計な情報は出力しないようにしてください。
+
+現在の説明/メモ:
+--------------------
+{current_text}
+--------------------
+""",
+        "description_new": """あなたはTRPGのデータ管理を行うアシスタントです。
+「{item_name}」の「説明/メモ」を新規に作成します。
+提示された項目テンプレートに基づいて内容を記述してください。
+説明/メモ以外の余計な情報は出力しないでください。
+
+項目テンプレート：
+{empty_description_template}
+""",
+        "history_entry_add": """あなたはTRPGのデータ管理を行うアシスタントです。
+ユーザーの指示に従い、「{item_name}」の履歴情報に追加するエントリーを作成してください。
+エントリー内容のみを生成し、余計な情報は出力しないようにしてください。
+
+## まとめて欲しい情報:
+--------------------
+[記述例]
+主人公と{item_name}の現在の関係性をまとめてください。
+{item_name}との会話内容をまとめてください。
+クエストの進行状況をまとめてください。
+現在階層のモンスター情報をまとめてください。
+--------------------
+
+
+### 「{item_name}」の参考情報:
+
+説明/メモ（ここに書かれている情報は固定情報として別途保存されているため、履歴に含める必要は無い）：
+--------------------
+{item_description}
+--------------------
+
+直近の履歴（最大{max_item_history_entries}件）：
+--------------------
+{item_existing_history}
+--------------------
+"""
+    },
+    # ★★★ 「説明/メモ」空白時の項目テンプレートのデフォルト値 ★★★
+    "empty_description_template": """<キャラクター>
+- 種族：
+- 性格：
+- 口調：
+- 見た目：
+- 好感度：
+- 性経験：
+- 性感帯：
+- その他情報：
+- 主人公との関係性：
+</キャラクター>
+
+<アイテム>
+- 種別：
+- 能力・効果：
+- 金額：
+- その他情報：
+</アイテム>
+
+<クエスト>
+- クエスト概要：
+- 報酬：
+- 難易度：
+- 詳細なクエストシナリオ（ユーザーに分からないよう英語で記述）：
+</クエスト>
+
+<デフォルト>
+自由にまとめてください。
+</デフォルト>
+"""
 }
 """dict: プロジェクト設定ファイルが存在しない場合や、キーが不足している場合に使用されるデフォルト値。"""
 
@@ -188,6 +266,19 @@ def load_project_settings(project_dir_name: str) -> dict | None:
         # ai_edit_model_nameが古い設定ファイルに存在しない場合の互換性処理
         if "ai_edit_model_name" not in settings:
             settings["ai_edit_model_name"] = DEFAULT_PROJECT_SETTINGS["ai_edit_model_name"]
+        
+        # ★★★ AI編集支援用プロンプトテンプレートの互換性処理 ★★★
+        if "ai_edit_prompts" not in settings:
+            settings["ai_edit_prompts"] = DEFAULT_PROJECT_SETTINGS["ai_edit_prompts"].copy()
+        else: # ai_edit_prompts自体は存在する場合、中の各キーを確認
+            for t_key, t_default_val in DEFAULT_PROJECT_SETTINGS["ai_edit_prompts"].items():
+                if t_key not in settings["ai_edit_prompts"]:
+                    settings["ai_edit_prompts"][t_key] = t_default_val
+        
+        # ★★★ 「説明/メモ」空白時項目テンプレートの互換性処理 ★★★
+        if "empty_description_template" not in settings:
+            settings["empty_description_template"] = DEFAULT_PROJECT_SETTINGS["empty_description_template"]
+            
         print(f"プロジェクト設定を読み込みました: {project_settings_file}")
         return settings
     except Exception as e:
@@ -249,36 +340,95 @@ def list_project_dir_names() -> list[str]:
 
 # --- プロジェクトディレクトリ削除 ---
 def delete_project_directory(project_dir_name: str) -> bool:
-    """指定されたプロジェクトのディレクトリ全体を削除します。
-
-    これには、プロジェクト設定ファイル、サブプロンプトファイル、
-    gamedataディレクトリなど、プロジェクトに関連する全てのファイルと
-    フォルダが含まれます。操作は元に戻せません。
+    """指定されたプロジェクトディレクトリ全体を削除します。
 
     Args:
         project_dir_name (str): 削除するプロジェクトのディレクトリ名。
 
     Returns:
-        bool: ディレクトリの削除に成功した場合は True、
-              ディレクトリが存在しない場合や削除に失敗した場合は False。
+        bool: 削除が成功した場合は True、失敗した場合は False。
     """
-    if not project_dir_name:
-        print("Error: Project directory name cannot be empty for deletion.")
+    project_path = get_project_dir_path(project_dir_name)
+    if not os.path.exists(project_path):
+        print(f"削除対象のプロジェクトディレクトリが見つかりません: {project_path}")
         return False
-
-    project_path_to_delete = get_project_dir_path(project_dir_name)
-
-    if not os.path.exists(project_path_to_delete) or not os.path.isdir(project_path_to_delete):
-        print(f"Info: Project directory to delete not found or not a directory: {project_path_to_delete}")
-        return False # 削除対象がない
+    if project_dir_name == "default_project": # デフォルトプロジェクトは削除禁止
+        print(f"デフォルトプロジェクト '{project_dir_name}' は削除できません。")
+        return False
 
     try:
-        shutil.rmtree(project_path_to_delete)
-        print(f"Project directory '{project_path_to_delete}' and all its contents have been deleted.")
+        shutil.rmtree(project_path)
+        print(f"プロジェクトディレクトリを削除しました: {project_path}")
         return True
     except Exception as e:
-        print(f"Error deleting project directory '{project_path_to_delete}': {e}")
+        print(f"プロジェクトディレクトリの削除に失敗しました ({project_path}): {e}")
         return False
+
+def get_category_template(category_name: str, template_string: str) -> str:
+    """
+    与えられたテンプレート文字列から、指定されたカテゴリに一致するテンプレート内容を抽出します。
+
+    カテゴリ名は `<カテゴリ名>テンプレート内容</カテゴリ名>` の形式で記述されていることを期待します。
+    カテゴリ名の大文字・小文字は区別せず、前後の空白は無視して比較されます。
+
+    一致するカテゴリが見つからない場合、またはカテゴリ名が空の場合は、
+    どのカテゴリタグにも囲まれていない部分をデフォルトテンプレートとして返します。
+    デフォルトテンプレートも見つからない場合は空文字列を返します。
+
+    Args:
+        category_name (str): 抽出したいカテゴリの名前。
+        template_string (str): カテゴリ別テンプレートが記述された文字列。
+
+    Returns:
+        str: 抽出されたテンプレート内容。見つからなければデフォルトテンプレートまたは空文字列。
+    """
+    if not template_string:
+        return ""
+
+    normalized_category_name = category_name.strip().lower() if category_name else ""
+    default_tag_names = ["default", "デフォルト"] # 検索するデフォルトタグ名（小文字）
+
+    pattern = re.compile(r"<([^>]+)>(.*?)</\1>", re.DOTALL | re.IGNORECASE)
+    
+    specific_category_template = ""
+    default_tagged_template = ""
+    untagged_parts = []
+    last_end = 0
+
+    for match in pattern.finditer(template_string):
+        tag_name_original = match.group(1)
+        tag_name_normalized = tag_name_original.strip().lower()
+        content = match.group(2).strip()
+        
+        untagged_parts.append(template_string[last_end:match.start()].strip())
+        last_end = match.end()
+
+        if normalized_category_name and tag_name_normalized == normalized_category_name:
+            specific_category_template = content
+            # 指定カテゴリが見つかったら即座に返す
+            return specific_category_template 
+        
+        if not default_tagged_template: # まだデフォルトタグの内容が見つかっていなければ
+            for dt_name in default_tag_names:
+                if tag_name_normalized == dt_name:
+                    default_tagged_template = content
+                    break # 内側のループを抜ける
+
+    untagged_parts.append(template_string[last_end:].strip())
+    
+    # 優先順位に基づいて返す値を決定
+    if specific_category_template: # 通常ここには到達しないはず (上でreturnするため)
+        return specific_category_template
+
+    if default_tagged_template: # <default> タグの内容があればそれを返す
+        return default_tagged_template
+    
+    # <default> タグがなければ、タグなし部分を結合して返す
+    combined_untagged = "\n".join(part for part in untagged_parts if part).strip()
+    if combined_untagged:
+        return combined_untagged
+
+    return "" # それでも何も見つからなければ空文字列
 
 
 if __name__ == '__main__':

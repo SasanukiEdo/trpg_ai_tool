@@ -1,4 +1,4 @@
-## TRPG AI Tool 現状の構造概要（2025/5/8）
+## TRPG AI Tool 現状の構造概要（自動更新：YYYY/MM/DD HH:MM）
 
 ### 1. 主要ディレクトリとファイル構成
 
@@ -12,8 +12,12 @@
 *   `core/`: アプリケーションのコアロジック。
     *   `api_key_manager.py`: APIキー管理。
     *   `config_manager.py`: グローバル設定とプロジェクト設定の管理。
+        *   `DEFAULT_GLOBAL_CONFIG` に `history_range_for_prompt` (送信履歴範囲のデフォルト値), `enable_streaming` (ストリーミング応答有効化のデフォルト値) を追加。
         *   `DEFAULT_PROJECT_SETTINGS` に `ai_edit_model_name` (AI編集支援機能で使用するモデル名、空白時はプロジェクトモデルを使用) を追加。
+        *   ★更新★ `DEFAULT_PROJECT_SETTINGS` に `ai_edit_prompts` (AI編集支援用プロンプトテンプレートのデフォルト値を格納する辞書) と `empty_description_template` (「説明/メモ」新規作成時の雛形テンプレートのデフォルト文字列) を追加。
         *   `load_project_settings` が `ai_edit_model_name` の読み込みとデフォルト値設定に対応。
+        *   ★更新★ `load_project_settings` が `ai_edit_prompts` および `empty_description_template` の読み込みとデフォルト値による補完に対応。
+        *   ★更新★ `get_category_template` 関数を追加。`empty_description_template` 文字列とカテゴリ名を引数に取り、指定されたカテゴリのテンプレート内容を抽出する（大文字・小文字区別なし、スペース許容）。一致がない場合は、`<default>` または `<デフォルト>` という名前のタグで囲まれたテンプレート内容を優先的に返し、それもなければタグに囲まれていない部分を、それでもなければ空文字列を返す。
     *   `data_manager.py`: アイテムデータの読み書き、タグによるアイテム検索機能。
     *   `gemini_handler.py`: Gemini APIとのチャット形式の対話を管理。
         *   `StreamingWorker` は `usage_metadata` としてトークン情報（`prompt_token_count`, `candidates_token_count`, `total_token_count`）を履歴に保存する。
@@ -24,25 +28,33 @@
     *   `__pycache__/`: Pythonのコンパイル済みバイトコードが格納されるディレクトリ。
 *   `ui/`: PyQt5ベースのUI関連ファイル。
     *   `main_window.py`: メインウィンドウ。
-        *   `DetailWindow` から `GeminiChatHandler` のインスタンス (`get_gemini_chat_handler`) と現在のチャット履歴 (`get_current_chat_history`) を取得するためのメソッドを提供（または既存のものが利用される）。
-        *   `_format_history_entry_to_html` メソッドが、AI応答履歴のトークン数を `usage_metadata` から正しいキー名 (`prompt_token_count`, `candidates_token_count`, `total_token_count`) で取得し、合計トークン数も含めて表示するように修正。
+        *   `StreamingWorker` クラスの `run` メソッド内のチャンク処理ロジックを修正し、重複を排除。
+        *   `SettingsDialog` から設定を取得する際、`get_updated_configs` メソッドを使用するように修正。
+        *   送信履歴範囲 (`history_range_for_prompt`) とストリーミング応答設定 (`enable_streaming`) をグローバル設定 (`config.json`) に保存し、起動時に復元する機能を実装。
+        *   `DEFAULT_GLOBAL_CONFIG` を `core.config_manager` からインポートし、設定値の読み込みタイミングを調整。
+        *   `DetailWindow` から `GeminiChatHandler` のインスタンス (`get_gemini_chat_handler`) と現在のチャット履歴 (`get_current_chat_history`) を取得するためのメソッドを提供。
+        *   `_format_history_entry_to_html` メソッドが、AI応答履歴のトークン数を `usage_metadata` から正しいキー名で取得し、合計トークン数も含めて表示するように修正。
     *   `settings_dialog.py`: 設定ダイアログ。
-        *   プロジェクト設定に「AI編集支援用モデル」の選択項目 (`QComboBox`) を追加。選択肢には利用可能なモデル一覧と「（プロジェクト使用モデルに同じ）」が含まれる。
+        *   プロジェクト設定に「AI編集支援用モデル」の選択項目 (`QComboBox`) を追加。
         *   `ai_edit_model_name` 設定の読み込みと保存処理に対応。
+        *   ★更新★ プロジェクト設定タブに「AI編集支援プロンプトテンプレート」セクションを追加。各テンプレート (`description_edit`, `description_new`, `history_entry_add`, `empty_description_template`) の編集UI (QTextEditと「デフォルトに戻す」ボタン) を実装。
+        *   ★更新★ 設定ダイアログから返される設定データの形式を変更 (`get_updated_configs` メソッド) し、AI編集支援プロンプト関連の設定も含むように修正。
     *   `subprompt_dialog.py`: サブプロンプト編集ダイアログ。
     *   `data_widget.py`: データ管理エリア。
     *   `detail_window.py`: アイテム詳細表示・編集ウィンドウ。
-        *   `_handle_ai_suggestion_request` メソッドが、AI編集支援用モデル設定 (`ai_edit_model_name`) をプロジェクト設定から取得し、メインチャットの履歴とアイテムコンテキストと共に `GeminiChatHandler.generate_response_with_history_and_context` に渡してAI応答を要求するように変更。
+        *   `_handle_ai_suggestion_request` メソッドが、AI編集支援用モデル設定を取得し、AI応答を要求するように変更。
+        *   ★更新★ 「説明/メモ」のAI編集支援時 (`_on_ai_update_description_clicked`) およびAI履歴追加時 (`add_history_entry_with_ai_ui`) に、プロジェクト設定から対応するプロンプトテンプレート (`ai_edit_prompts`) と雛形テンプレート (`empty_description_template`) を読み込み、プレースホルダーを置換して使用するように変更。
+        *   ★更新★ 説明が空の場合の「説明/メモ」AI編集支援では、新規作成用プロンプトと雛形テンプレートを使用するロジックを追加。この際、`core.config_manager.get_category_template` を呼び出し、アイテムのカテゴリに応じた雛形テンプレートを取得する。
     *   `ai_text_edit_dialog.py`: AI支援編集ダイアログ。
     *   `data_item_widget.py`: データアイテム表示用のウィジェット。
     *   `prompt_preview_dialog.py`: プロンプトプレビューダイアログ。
     *   `style.qss`: アプリケーション全体のUIスタイルを定義する外部CSSファイル。
     *   `__pycache__/`: Pythonのコンパイル済みバイトコードが格納されるディレクトリ。
 *   `data/`: 各プロジェクトのデータを格納するディレクトリ。
-    *   `config.json`: グローバルな設定ファイル。
+    *   `config.json`: グローバルな設定ファイル。送信履歴範囲とストリーミング設定もここに保存。
     *   `default_project/`: デフォルトプロジェクトのデータディレクトリ。
     *   `Air_TRPG/`, `ricorico/`, `dm_test_project/`, `test/` など: 各プロジェクトのデータディレクトリ。
-        *   (各プロジェクトディレクトリ内には、`project_settings.json` (ここに `ai_edit_model_name` も保存される), `subprompts.json`, `gamedata/`, `images/`, `chat_history.json` (AI応答のトークン情報も保存) などが含まれる想定)
+        *   (各プロジェクトディレクトリ内には、`project_settings.json`, `subprompts.json`, `gamedata/`, `images/`, `chat_history.json` などが含まれる想定)
 *   `.git/`: Gitリポジトリ関連のファイルが格納されるディレクトリ。
 *   `__pycache__/`: Pythonのコンパイル済みバイトコードが格納されるディレクトリ（プロジェクトルートにも存在する場合がある）。
 
@@ -51,10 +63,10 @@
 
 *   **起動時**:
     1.  `main.py` が `ui/style.qss` を読み込み、アプリケーションに適用。`ui/main_window.py` の `MainWindow` をインスタンス化。
-    2.  `MainWindow.__init__` (in `ui/main_window.py`) が `_initialize_configs_and_project` を呼び出し、アクティブプロジェクトの情報をロード (`core/config_manager.py` を利用)。
+    2.  `MainWindow.__init__` (in `ui/main_window.py`) が `_initialize_configs_and_project` を呼び出し、アクティブプロジェクトの情報をロード (`core/config_manager.py` を利用)。送信履歴範囲とストリーミング設定もこのタイミングで `global_config` から読み込む。
     3.  `_initialize_chat_handler` (in `ui/main_window.py`) を呼び出し、現在のプロジェクトのモデル名、プロジェクトディレクトリ名、システム指示を渡して `core/gemini_handler.py` の `GeminiChatHandler` を初期化。
         *   `GeminiChatHandler` はコンストラクタ内で、指定されたプロジェクトの `data/{project_dir_name}/chat_history.json` から「純粋な会話履歴」を読み込む。
-    4.  `init_ui` (in `ui/main_window.py`) でUIを構築。
+    4.  `init_ui` (in `ui/main_window.py`) でUIを構築。UI要素（送信履歴スライダー、ストリーミングチェックボックス）に設定値を反映。
     5.  `configure_gemini_and_chat_handler` (in `ui/main_window.py`) でAPIキー設定を確認 (`core/api_key_manager.py` 利用)、必要ならハンドラを再設定。
     6.  `_redisplay_chat_history` (in `ui/main_window.py`) を呼び出し、読み込んだ会話履歴を `response_display` に表示（トークン情報も正しく表示）。
 *   **プロジェクト選択/切り替え時 (`_switch_project` in `ui/main_window.py`)**:
@@ -76,7 +88,7 @@
     4.  プロジェクト選択コンボボックスを更新し、別のプロジェクトをアクティブにするか、プロジェクトなしの状態にUIを更新 (`ui/main_window.py`)。
 *   **AIとの対話 (`on_send_button_clicked` in `ui/main_window.py`)**:
     1.  一時的なコンテキスト情報（選択されたサブプロンプト、選択されたデータアイテム (`ui/data_widget.py` 経由)、タグ検索で見つかったアイテムの情報 (`core/data_manager.py` 利用)）を構築。
-    2.  `StreamingWorker` を介して `GeminiChatHandler.generate_response_with_history_and_context()` (`core/gemini_handler.py`) をストリーミングモードで呼び出し、一時コンテキスト、純粋なユーザー入力、現在の送信履歴範囲設定を渡す。
+    2.  `StreamingWorker` を介して `GeminiChatHandler.generate_response_with_history_and_context()` (`core/gemini_handler.py`) をストリーミングモードで呼び出し、一時コンテキスト、純粋なユーザー入力、現在の送信履歴範囲設定を渡す。ストリーミング設定 (`self.enable_streaming`) を `StreamingWorker` に渡す。
         *   `GeminiChatHandler` 内部では、指定された範囲の「純粋な会話履歴」とシステム指示でチャットセッションを開始し、一時コンテキストとユーザー入力でメッセージを送信。
     3.  AIからの応答（トークン情報を含む `usage_metadata` も）を `StreamingWorker` が受け取り、`MainWindow` に通知。
     4.  `MainWindow` が「純粋な会話履歴」を更新し、`chat_history.json` に保存 (`core/gemini_handler.py` 経由)。
@@ -99,12 +111,12 @@
     *   `GeminiChatHandler.generate_response_with_history_and_context()` (`core/gemini_handler.py`) を呼び出し、メインチャットの履歴、アイテムコンテキスト、ユーザー指示、および `override_model_name` としてAI編集支援用モデル名を渡してAI応答を取得。
     *   **AI支援による「説明/メモ」編集**:
         1.  ユーザーが `DetailWindow` (in `ui/detail_window.py`) の「AIで「説明/メモ」を編集支援」ボタンをクリック。
-        2.  `_on_ai_update_description_clicked` (in `ui/detail_window.py`) が `AIAssistedEditDialog` (in `ui/ai_text_edit_dialog.py`) を「description」モードで起動。プロンプトテンプレートと現在の説明を渡す。
+        2.  ★更新★ `_on_ai_update_description_clicked` (in `ui/detail_window.py`) がプロジェクト設定 (`ai_edit_prompts`) からプロンプトテンプレートを読み込み、`empty_description_template` については `core.config_manager.get_category_template` を使用してアイテムのカテゴリに応じた部分を抽出後、`AIAssistedEditDialog` (in `ui/ai_text_edit_dialog.py`) を「description」モードで起動。
         3.  ユーザーがダイアログ内でAIに指示を出し、`_handle_ai_suggestion_request` 経由でAIから提案を取得・編集して「OK」。
         4.  `DetailWindow` (in `ui/detail_window.py`) が最終テキストを取得し、`update_item` (`core/data_manager.py`) で保存。
     *   **AI支援による「履歴」追記**:
         1.  ユーザーが `DetailWindow` (in `ui/detail_window.py`) の「AIで履歴エントリを生成・追加」ボタンをクリック。
-        2.  `add_history_entry_with_ai_ui` (in `ui/detail_window.py`) が `AIAssistedEditDialog` (in `ui/ai_text_edit_dialog.py`) を「history」モードで起動。プロンプトテンプレートと現在のアイテム情報を渡す。
+        2.  ★更新★ `add_history_entry_with_ai_ui` (in `ui/detail_window.py`) がプロジェクト設定 (`ai_edit_prompts`) からプロンプトテンプレートを読み込み、`AIAssistedEditDialog` (in `ui/ai_text_edit_dialog.py`) を「history」モードで起動。
         3.  ユーザーがダイアログ内でAIに指示を出し、`_handle_ai_suggestion_request` 経由でAIから提案を取得・編集して「OK」。
         4.  `DetailWindow` (in `ui/detail_window.py`) が最終履歴エントリを取得し、`core.data_manager.add_history_entry` で保存（各履歴にIDが付与される）。UIが再ロードされ更新。
 *   **履歴の編集・削除 (in `ui/detail_window.py`)**:
@@ -121,8 +133,8 @@
 
 ### 3. データフローと状態管理の詳細
 
-*   **グローバル設定 (`MainWindow.global_config`)**: `data/config.json` から `core/config_manager.py` を介してロード。アクティブプロジェクト名 (`active_project`)、デフォルトAIモデル名などを保持。設定ダイアログ (`ui/settings_dialog.py`) 経由で更新・保存。
-*   **プロジェクト設定 (`MainWindow.current_project_settings`)**: 現在アクティブなプロジェクトの `data/{project_dir_name}/project_settings.json` から `core/config_manager.py` を介してロード。表示名、使用モデル、メインシステムプロンプト、**AI編集支援用モデル名 (`ai_edit_model_name`)**などを保持。設定ダイアログ (`ui/settings_dialog.py`) や `MainWindow` (in `ui/main_window.py`) のUI操作（メインプロンプト直接編集）で更新・保存。
+*   **グローバル設定 (`MainWindow.global_config`)**: `data/config.json` から `core/config_manager.py` を介してロード。アクティブプロジェクト名 (`active_project`)、デフォルトAIモデル名、送信キーモード、各種生成パラメータ、フォント設定、**送信履歴範囲 (`history_range_for_prompt`)**、**ストリーミング応答設定 (`enable_streaming`)** などを保持。設定ダイアログ (`ui/settings_dialog.py`) 経由で更新・保存。
+*   **プロジェクト設定 (`MainWindow.current_project_settings`)**: 現在アクティブなプロジェクトの `data/{project_dir_name}/project_settings.json` から `core/config_manager.py` を介してロード。表示名、使用モデル、メインシステムプロンプト、**AI編集支援用モデル名 (`ai_edit_model_name`)**、★更新★ **AI編集支援用プロンプト (`ai_edit_prompts`)**、★更新★ **「説明/メモ」新規作成時雛形 (`empty_description_template`)**などを保持。設定ダイアログ (`ui/settings_dialog.py`) や `MainWindow` (in `ui/main_window.py`) のUI操作（メインプロンプト直接編集）で更新・保存。
 *   **サブプロンプト (`MainWindow.subprompts`)**: 現在アクティブなプロジェクトの `data/{project_dir_name}/subprompts.json` から `core/subprompt_manager.py` を介してロード。カテゴリ別のサブプロンプトデータを保持。サブプロンプト編集ダイアログ (`ui/subprompt_dialog.py`) 経由で更新・保存。チェック状態は `MainWindow.checked_subprompts` (in `ui/main_window.py`) で管理。
 *   **アイテムデータ (`DetailWindow.item_data` in `ui/detail_window.py`)**: `DataManagementWidget` (in `ui/data_widget.py`) で選択されたアイテムのデータ。`core/data_manager.py` の `get_item` でロード。`DetailWindow` での編集後、`core/data_manager.py` の `update_item` で対応するJSONファイル (`data/{project_dir_name}/gamedata/{category_name}.json`) に保存。
     *   **`image_path`**: アイテムデータ内の画像パスは、プロジェクトルートからの相対パス（例: `images/character.png`）として保存される。
@@ -147,13 +159,13 @@
     *   `DataManagementWidget` → `DetailWindow`: アイテムリストでアイテムが選択されると `show_detail_window(category, item_id)` で `DetailWindow` を表示・データロード。
     *   `DetailWindow` → `DataManagementWidget`: `dataSaved(category, item_id)` シグナルを発行し、`DataManagementWidget` がリスト表示を更新 (`_handle_detail_saved`)。
 *   **`MainWindow` (in `ui/main_window.py`) ⇔ `SettingsDialog` (in `ui/settings_dialog.py`)**:
-    *   `MainWindow` → `SettingsDialog`: 現在のグローバル設定 (`core/config_manager.py` 経由) とプロジェクト設定 (`core/config_manager.py` 経由、`ai_edit_model_name` を含む) を渡してダイアログを初期化。
+    *   `MainWindow` → `SettingsDialog`: 現在のグローバル設定 (`core/config_manager.py` 経由) とプロジェクト設定 (`core/config_manager.py` 経由、`ai_edit_model_name`、★更新★ `ai_edit_prompts`, `empty_description_template` を含む) を渡してダイアログを初期化。
     *   `SettingsDialog` → `MainWindow`: ダイアログがAcceptedで閉じられたら、更新された設定データを返し、`MainWindow` が保存処理 (`core/config_manager.py` 利用) とUI更新（ウィンドウタイトル、メインプロンプト、プロジェクト選択コンボボックス）を行う。
 *   **`MainWindow` (in `ui/main_window.py`) ⇔ `SubPromptEditDialog` (in `ui/subprompt_dialog.py`)**:
     *   `MainWindow` → `SubPromptEditDialog`: 初期データ（編集時）または空データを渡してダイアログを初期化。
     *   `SubPromptEditDialog` → `MainWindow`: ダイアログがAcceptedで閉じられたら、編集されたサブプロンプトデータを返し、`MainWindow` が保存処理 (`core/subprompt_manager.py` 利用) とサブプロンプトタブの更新を行う。
 *   **`DetailWindow` (in `ui/detail_window.py`) ⇔ `AIAssistedEditDialog` (in `ui/ai_text_edit_dialog.py`)**:
-    *   `DetailWindow` → `AIAssistedEditDialog`: プロンプトテンプレート、現在のアイテム情報（説明や履歴）、編集モード（"description" or "history"）を渡してダイアログを初期化。
+    *   ★更新★ `DetailWindow` → `AIAssistedEditDialog`: プロジェクト設定から取得・フォーマットしたプロンプトテンプレート、現在のアイテム情報、編集モードを渡してダイアログを初期化。
     *   `AIAssistedEditDialog` 内の「AIに提案を依頼」ボタンクリック → `AIAssistedEditDialog` の `request_ai_button_clicked` シグナルが `DetailWindow._handle_ai_suggestion_request` を呼び出す。
     *   `DetailWindow._handle_ai_suggestion_request` は `MainWindow` から `GeminiChatHandler` とチャット履歴、プロジェクト設定 (`ai_edit_model_name` を含む) を取得し、`GeminiChatHandler.generate_response_with_history_and_context` を呼び出してAIに応答を要求。結果を `AIAssistedEditDialog` にセット。
     *   `AIAssistedEditDialog` → `DetailWindow`: ダイアログがAcceptedで閉じられたら、最終的な編集テキストを返し、`DetailWindow` が保存処理 (`core/data_manager.py` 利用) とUI更新を行う。
@@ -179,7 +191,7 @@
         *   `MainWindow` 左ペイン下部に、AIへの送信履歴範囲を設定するスライダーとラベルを追加。
         *   応答履歴表示エリア (`response_display`) は、外部CSSファイル (`ui/style.qss`) によってスタイルが適用され、各履歴エントリには編集・削除用のHTMLリンクが付与される。AI応答にはトークン情報も表示。
         *   右ペイン:
-            *   **プロジェクト管理セクション**: 「プロジェクト管理:」ラベルと「新規作成」「削除」「設定」ボタンのヘッダー、その下に「選択中のプロジェクト:」ラベルとプロジェクト選択コンボボックス (以上、主に `ui/main_window.py` で構成)。「設定」ボタンから開く `SettingsDialog` (`ui/settings_dialog.py`) にて、「プロジェクト使用モデル」と「AI編集支援用モデル」を選択可能。
+            *   **プロジェクト管理セクション**: 「プロジェクト管理:」ラベルと「新規作成」「削除」「設定」ボタンのヘッダー、その下に「選択中のプロジェクト:」ラベルとプロジェクト選択コンボボックス (以上、主に `ui/main_window.py` で構成)。「設定」ボタンから開く `SettingsDialog` (`ui/settings_dialog.py`) にて、「プロジェクト使用モデル」と「AI編集支援用モデル」、★更新★ 「AI編集支援プロンプトテンプレート」を選択・編集可能。
             *   **サブシステムプロンプト管理セクション**: 「サブシステムプロンプト管理:」ラベルと「カテゴリ追加」「プロンプト追加」ボタンのヘッダー、その下にサブプロンプトカテゴリタブ (以上、主に `ui/main_window.py` で構成、編集は `ui/subprompt_dialog.py` が担当)。
             *   **アイテム管理セクション**: 「アイテム管理:」ラベルと「カテゴリ追加」「アイテム追加」「チェック削除」ボタンのヘッダー、その下にデータ管理ウィジェット (`ui/data_widget.py` が担当、アイテム表示は `ui/data_item_widget.py`、詳細は `ui/detail_window.py` が担当)。
             *   各セクション間には区切り線を挿入。
@@ -206,4 +218,3 @@
 *   **Pygments**: (オプション、markdownライブラリのcodehilite拡張に必要) シンタックスハイライト用。
 
 ---
-最終更新日: 2025/05/08

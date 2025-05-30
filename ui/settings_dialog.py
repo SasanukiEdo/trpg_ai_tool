@@ -17,7 +17,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QLineEdit, QFormLayout, QDialogButtonBox, QTextEdit, QComboBox,
     QPushButton, QLabel, QMessageBox, QHBoxLayout, QFrame, QWidget, QDoubleSpinBox, QSpinBox,
-    QFontComboBox, QSpinBox, QPushButton, QColorDialog # ★ 追加: QFontComboBox, QSpinBox, QPushButton, QColorDialog
+    QFontComboBox, QSpinBox, QPushButton, QColorDialog, QVBoxLayout, QTabWidget # ★ QTabWidget を追加
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QFont # ★ 追加: QFont
@@ -145,6 +145,65 @@ class SettingsDialog(QDialog):
         ) # setPlainText で設定
         self.project_system_prompt_input.setMinimumHeight(100) # 少し小さく
         layout.addRow("メインシステムプロンプト:", self.project_system_prompt_input)
+
+        # --- ★★★ AI編集支援プロンプトテンプレート設定 (プロジェクト固有) ★★★ ---
+        layout.addRow(self._create_separator_line())
+        ai_edit_prompts_label = QLabel("<b>AI編集支援プロンプトテンプレート (プロジェクト固有)</b>")
+        layout.addRow(ai_edit_prompts_label)
+
+        # プロンプトテンプレートのキーとUI表示名のマッピング
+        self.prompt_template_keys = {
+            "description_edit": "「説明/メモ」編集用",
+            "description_new": "「説明/メモ」新規作成用",
+            "history_entry_add": "履歴エントリ追加用",
+            "empty_description_template": "「説明/メモ」新規作成時の雛形"
+        }
+        self.ai_edit_prompt_inputs: dict[str, QTextEdit] = {}
+
+        # ★★★ タブウィジェットを作成 ★★★
+        self.prompt_tab_widget = QTabWidget()
+
+        current_ai_prompts = self.project_settings_edit.get("ai_edit_prompts", DEFAULT_PROJECT_SETTINGS.get("ai_edit_prompts", {}))
+        current_empty_template = self.project_settings_edit.get("empty_description_template", DEFAULT_PROJECT_SETTINGS.get("empty_description_template", ""))
+
+        for key, display_name in self.prompt_template_keys.items():
+            # 各テンプレート用のタブページウィジェットとレイアウトを作成
+            tab_page_widget = QWidget()
+            tab_page_layout = QVBoxLayout(tab_page_widget)
+            tab_page_layout.setContentsMargins(5, 5, 5, 5) # タブ内のマージン調整
+
+            text_edit = QTextEdit()
+            text_edit.setMinimumHeight(150) # 各プロンプト入力欄の高さ (タブ内なので少し大きめに)
+            
+            if key == "empty_description_template":
+                text_edit.setPlainText(current_empty_template)
+                default_text = DEFAULT_PROJECT_SETTINGS.get("empty_description_template", "")
+                tooltip_text = "利用可能なプレースホルダーはありません。"
+            else:
+                text_edit.setPlainText(current_ai_prompts.get(key, DEFAULT_PROJECT_SETTINGS.get("ai_edit_prompts", {}).get(key, "")))
+                default_text = DEFAULT_PROJECT_SETTINGS.get("ai_edit_prompts", {}).get(key, "")
+                if key == "description_edit":
+                    tooltip_text = "利用可能なプレースホルダー: {item_name}, {current_text}, {user_instruction}"
+                elif key == "description_new":
+                    tooltip_text = "利用可能なプレースホルダー: {item_name}, {user_instruction}, {empty_description_template}"
+                elif key == "history_entry_add":
+                    tooltip_text = "利用可能なプレースホルダー: {item_name}, {user_instruction}, {item_description}, {item_existing_history}, {max_item_history_entries}"
+                else:
+                    tooltip_text = ""
+            text_edit.setToolTip(tooltip_text)
+            self.ai_edit_prompt_inputs[key] = text_edit # 保存用に QTextEdit を保持
+            tab_page_layout.addWidget(text_edit)
+
+            default_button = QPushButton("デフォルトに戻す")
+            default_button.clicked.connect(lambda checked=False, k=key, dt=default_text: self.ai_edit_prompt_inputs[k].setPlainText(dt))
+            tab_page_layout.addWidget(default_button, 0, Qt.AlignRight)
+            
+            # タブウィジェットにページを追加
+            self.prompt_tab_widget.addTab(tab_page_widget, display_name)
+
+        # フォームレイアウトにタブウィジェットを追加 (ラベルは空でも良いし、簡潔なものでも)
+        layout.addRow("各種テンプレート:", self.prompt_tab_widget) # QFormLayoutに追加
+        # --- ★★★ --------------------------------------------------------- ★★★ ---
 
         # --- アプリケーション全体設定セクション ---
         layout.addRow(self._create_separator_line()) # 区切り線
@@ -385,6 +444,16 @@ class SettingsDialog(QDialog):
         else:
             self.project_settings_edit["ai_edit_model_name"] = selected_ai_edit_model
         self.project_settings_edit["main_system_prompt"] = self.project_system_prompt_input.toPlainText().strip()
+
+        # ★★★ AI編集支援プロンプトテンプレートの保存 ★★★
+        updated_ai_prompts = {}
+        for key, text_edit_widget in self.ai_edit_prompt_inputs.items():
+            if key == "empty_description_template":
+                self.project_settings_edit["empty_description_template"] = text_edit_widget.toPlainText()
+            else:
+                updated_ai_prompts[key] = text_edit_widget.toPlainText()
+        self.project_settings_edit["ai_edit_prompts"] = updated_ai_prompts
+        # ★★★ ------------------------------------ ★★★
 
         super().accept() # QDialog.Accepted を発行
 

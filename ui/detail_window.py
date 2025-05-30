@@ -30,6 +30,7 @@ if project_root not in sys.path:
 from core.data_manager import get_item, update_item, add_history_entry
 from core.gemini_handler import GeminiChatHandler, is_configured as gemini_is_configured 
 from core.shared_instances import get_main_window_instance 
+from core.config_manager import DEFAULT_PROJECT_SETTINGS, get_category_template
 
 # --- uiモジュールインポート ---
 from ui.ai_text_edit_dialog import AIAssistedEditDialog
@@ -163,6 +164,7 @@ class DetailWindow(QWidget):
         self.current_category = category
         self.current_item_id = item_id
         self.item_data = item_data_loaded.copy() # 変更を反映させるためにコピーを保持
+        print(f"DEBUG: DetailWindow.load_data - Loaded item_data: name='{self.item_data.get('name')}', description='{self.item_data.get('description')}'") # DEBUG
 
         self.setWindowTitle(f"詳細: {self.item_data.get('name', 'N/A')} ({category})")
         self._build_detail_view() # データに基づいてUIを構築
@@ -303,71 +305,129 @@ class DetailWindow(QWidget):
         spacer = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding); self.content_layout.addSpacerItem(spacer)
 
     def _on_ai_update_description_clicked(self):
-        """AIを使用して「説明/メモ」フィールドを更新するためのダイアログを開きます。"""
-        if not self.item_data:
-            QMessageBox.warning(self, "情報なし", "編集対象のアイテムがロードされていません。")
+        """「AIで説明/メモを編集」ボタンがクリックされたときの処理。"""
+        print(f"DEBUG: _on_ai_update_description_clicked - current_item_id: {self.current_item_id}") # DEBUG
+        if self.item_data: # DEBUG
+            print(f"DEBUG: _on_ai_update_description_clicked - item_data: name='{self.item_data.get('name')}', desc_len={len(self.item_data.get('description', ''))}") # DEBUG
+        else: # DEBUG
+            print("DEBUG: _on_ai_update_description_clicked - self.item_data is None") # DEBUG
+
+        if not self.item_data or not self.current_project_dir_name or not self.current_category:
+            QMessageBox.warning(self, "AI編集エラー", "アイテムデータがロードされていません。")
             return
 
-        current_description_widget = self.detail_widgets.get('description')
-        if not current_description_widget:
-            QMessageBox.warning(self, "エラー", "説明フィールドのウィジェットが見つかりません。")
+        # current_text を self.item_data から直接取得するように変更
+        current_text = self.item_data.get("description", "") 
+        item_name = self.item_data.get("name", "不明なアイテム")
+        # print(f"DEBUG: current_text for branching: '{current_text}'") # このデバッグは item_data ベースになる
+
+        # プロジェクト設定からAI編集支援プロンプトを取得
+        from core.config_manager import load_project_settings # 動的に読み込む
+        project_settings = load_project_settings(self.current_project_dir_name)
+        if not project_settings:
+            QMessageBox.warning(self, "設定エラー", "プロジェクト設定を読み込めませんでした。")
             return
-        current_description = current_description_widget.toPlainText() # type: ignore
-        item_name = self.item_data.get("name")
 
-        main_window = get_main_window_instance()
-        prompt_template = """
-あなたはTRPGのデータ管理を行うアシスタントです。
-以下の「現在の説明/メモ」に基づいて、現在の状況を考慮して「{name_text}」の新しい「説明/メモ」を作成してください。
-元の情報で重要なものが失われないようにし、説明/メモ以外の余計な情報は出力しないようにしてください。
+        ai_prompts = project_settings.get("ai_edit_prompts", DEFAULT_PROJECT_SETTINGS.get("ai_edit_prompts", {}))
+        empty_template_full_text = project_settings.get("empty_description_template", DEFAULT_PROJECT_SETTINGS.get("empty_description_template", ""))
 
-現在の説明/メモ:
---------------------
-{current_text}
---------------------
-        """
-        if main_window and main_window.current_project_settings:
-            prompt_template = main_window.current_project_settings.get(
-                "prompt_templates", {}
-            ).get("item_description_edit", prompt_template)
+        if not current_text.strip(): # 説明が空の場合 (新規作成モード)
+            prompt_template_str = ai_prompts.get("description_new", "")
+            print(f"DEBUG: description_new template: {prompt_template_str}") # DEBUG
+            # カテゴリに応じた雛形テンプレートを取得
+            category_specific_empty_template = get_category_template(self.current_category, empty_template_full_text)
+            print(f"DEBUG: category_specific_empty_template for '{self.current_category}': {category_specific_empty_template}") # DEBUG
+            if not category_specific_empty_template:
+                 # カテゴリ別テンプレートがない場合、デフォルトの全体を使用
+                category_specific_empty_template = empty_template_full_text 
+            
+            # プレースホルダを実際の値で置換
+            # description_new の {empty_description_template} を category_specific_empty_template で置換
+            if "{empty_description_template}" in prompt_template_str:
+                prompt_template_str = prompt_template_str.replace("{empty_description_template}", category_specific_empty_template)
+            else: # description_new に雛形テンプレートのプレースホルダがない場合、直接雛形を使う (フォールバック)
+                print("警告: description_new プロンプトに {empty_description_template} プレースホルダがありません。empty_description_template を直接使用します。")
+                prompt_template_str = category_specific_empty_template # この場合、指示プロンプトなしで雛形のみになる
+            print(f"DEBUG: prompt_template_str after empty_template replacement: {prompt_template_str}") # DEBUG
+            
+            final_prompt = prompt_template_str.replace("{item_name}", item_name) # item_name も置換
+            instruction_text = f"「{item_name}」の「説明/メモ」を新規作成してください。" # ダイアログ用の指示
+            print(f"DEBUG: final_prompt (new): {final_prompt}") # DEBUG
+        else: # 既存の説明がある場合 (編集モード)
+            prompt_template_str = ai_prompts.get("description_edit", "")
+            print(f"DEBUG: description_edit template: {prompt_template_str}") # DEBUG
+            final_prompt = prompt_template_str.replace("{item_name}", item_name).replace("{current_text}", current_text)
+            # instruction_text は編集モードの場合も final_prompt を使うべきか、あるいは現在のままでも良いか検討。
+            # 現状はダイアログの instruction_edit に final_prompt が表示されるべきなので、instruction_text は final_prompt と同じにする。
+            instruction_text = f"「{item_name}」の「説明/メモ」を編集してください。" # これはダイアログのタイトル等に使われる想定だったかもしれないが、初期テキストとしては final_prompt を使う。
+            print(f"DEBUG: final_prompt (edit): {final_prompt}") # DEBUG
 
-        try:
-            initial_instruction = prompt_template.format(current_text=current_description, name_text=item_name)
-        except KeyError as e:
-            print(f"Prompt template formatting error: {e}. Using default template.")
-            # initial_instruction = f"""現在の説明:\n{current_description}\n\n指示:\n[ここに具体的な指示を記述]\n\n上記を踏まえ、新しい説明文を生成してください。"""
-            initial_instruction = (
-                f"あなたはTRPGのデータ管理を行うアシスタントです。\n"
-                f"以下の「現在の説明/メモ」に基づいて、現在の状況を考慮して「{item_name}」の新しい「説明/メモ」を作成してください。\n"
-                f"元の情報で重要なものが失われないようにし、説明/メモ以外の余計な情報は出力しないようにしてください。\n\n"
-                f"現在の説明/メモ:\n"
-                f"--------------------\n"
-                f"{current_description}\n"
-                f"--------------------\n\n"
-            )
+        if not final_prompt.strip():
+            QMessageBox.warning(self, "プロンプトエラー", "AI編集用のプロンプトテンプレートが空です。設定を確認してください。")
+            return
 
-        self.ai_edit_dialog_mode = "description"
-        self.ai_edit_dialog = AIAssistedEditDialog(
-            initial_instruction_text=initial_instruction,
-            current_item_description=current_description,
-            parent=self,
-            window_title="AIで「説明/メモ」を編集"
+        # AI編集ダイアログを表示
+        # instruction_text には実際にダイアログの編集エリアに表示させたいプロンプト(final_prompt)を渡す
+        self._show_ai_edit_dialog(
+            instruction_text=final_prompt, # ★★★ ここを final_prompt に変更 ★★★
+            system_prompt=project_settings.get("main_system_prompt", ""),
+            user_prompt_template=final_prompt, # この引数は _show_ai_edit_dialog 内では未使用だが、一旦そのまま
+            target_widget=self.detail_widgets.get('description'),
+            mode='description' # モードを設定
         )
-        self.ai_edit_dialog_mode = "description"
-        # AI提案リクエストボタンのクリックイベントにハンドラを接続
+        print(f"DEBUG: _on_ai_update_description_clicked - Just before calling _show_ai_edit_dialog, final_prompt length: {len(final_prompt)}") # DEBUG
+
+    def _show_ai_edit_dialog(self, instruction_text: str, system_prompt: str, user_prompt_template: str, target_widget: QTextEdit, mode: str):
+        """AI編集支援ダイアログを表示します。
+
+        Args:
+            instruction_text (str): AIに提示する指示プロンプト。
+            system_prompt (str): AIに提示するシステムプロンプト。
+            user_prompt_template (str): ユーザーが入力するテンプレート。
+            target_widget (QTextEdit): 編集対象のテキストウィジェット。
+            mode (str): AI編集ダイアログのモード ('description' または 'history')。
+        """
+        print(f"DEBUG: _show_ai_edit_dialog - Received instruction_text length: {len(instruction_text)}") # DEBUG
+
+        # 既存のダイアログインスタンスがあれば、安全に破棄する
+        if self.ai_edit_dialog:
+            try:
+                # シグナル接続が残っている可能性があるので、先に切断を試みる (必須ではないが多くの場合安全)
+                self.ai_edit_dialog.request_ai_button.clicked.disconnect()
+            except TypeError: # 未接続の場合 TypeError が発生する
+                pass
+            self.ai_edit_dialog.deleteLater() # deleteLater() で安全に破棄
+            self.ai_edit_dialog = None
+
+        # 毎回新しいダイアログインスタンスを作成する
+        current_description_for_dialog = self.item_data.get("description", "") if self.item_data else ""
+        self.ai_edit_dialog = AIAssistedEditDialog(
+            initial_instruction_text=instruction_text,
+            current_item_description=current_description_for_dialog,
+            parent=self,
+            window_title=f"AIで「{self.item_data.get('name', '不明なアイテム')}」を編集 ({mode})"
+        )
+        self.ai_edit_dialog_mode = mode # モードを設定
+        
+        # AI提案リクエストボタンのシグナルを接続
+        # (インスタンスが毎回新しいので、毎回接続が必要)
         self.ai_edit_dialog.request_ai_button.clicked.connect(
-            lambda: self._handle_ai_suggestion_request( # ラムダでラップ
+            lambda: self._handle_ai_suggestion_request(
                 self.ai_edit_dialog.get_instruction_text()
             )
         )
 
+        # ダイアログを表示し、結果を処理
         if self.ai_edit_dialog.exec_() == QDialog.Accepted:
             final_text = self.ai_edit_dialog.get_final_text()
-            self.detail_widgets['description'].setPlainText(final_text)
-            # self.save_details() # ここでは保存しない。ユーザーが明示的に保存ボタンを押す
+            if target_widget: # target_widget が None でないことを確認
+                target_widget.setPlainText(final_text)
             print("AIによる説明編集が適用されました。(保存は別途必要)")
-        self.ai_edit_dialog = None # インスタンスをクリア
-
+        
+        # exec_() が終了したら、ダイアログインスタンスを確実に破棄する
+        if self.ai_edit_dialog: # まだインスタンスへの参照が残っていれば
+            self.ai_edit_dialog.deleteLater()
+        self.ai_edit_dialog = None
 
     def _handle_ai_suggestion_request(self, instruction_text: str):
         """AIAssistedEditDialog からのAI提案リクエストを処理します。
@@ -601,46 +661,77 @@ class DetailWindow(QWidget):
             QMessageBox.warning(self, "情報不足", "アイテムデータ、プロジェクト、またはカテゴリが正しく読み込まれていません。")
             return
 
-        # AIへの指示のテンプレートを作成 (より汎用的に)
         item_name = self.item_data.get("name", "このアイテム")
         item_desc = self.item_data.get("description", "(説明なし)")
         existing_history_entries = self.item_data.get("history", [])
-        history_context = "既存の履歴はありません。"
+        
+        # --- 履歴コンテキストの整形 (最大件数はメインウィンドウから取得できるようにしたい) ---
+        main_window_for_hist = get_main_window_instance()
+        max_history_for_context_ui = 5 # デフォルト値
+        if main_window_for_hist:
+            # MainWindowに `get_item_history_range_for_prompt()` のようなメソッドがあるか、
+            # あるいは設定値に直接アクセスできると良い。
+            # ここでは仮に固定値を使うが、将来的には MainWindow 経由で取得を検討。
+            # (例: self.main_window.settings_dialog.item_history_range_spinbox.value() など、ただし循環参照に注意)
+            # 今回はプロジェクト設定の `ai_edit_prompts` のプレースホルダーに合わせる
+            # {max_item_history_entries} が使えるようにする
+            pass # 後で MainWindow 側に getter を作るか、設定値を直接参照
+
+        history_context_str = "既存の履歴はありません。"
         if existing_history_entries:
-            history_context = "既存の履歴 (直近最大5件):\n"
-            for i, entry in enumerate(reversed(existing_history_entries[-5:])):
-                history_context += f"- {entry.get('entry', '(内容なし)')}\n"
+            # 履歴表示は最新のものが下（リストの末尾）なので、最後からN件を取得
+            # テンプレートで {max_item_history_entries} を使う前提なので、ここでは全件渡しても良いし、
+            # プロンプトが長くなりすぎるのを防ぐために、ここで絞っても良い。
+            # 今回は、テンプレート側で絞ることを期待し、ある程度の件数を渡す。
+            # (ただし、あまりにも長大な履歴は問題になる可能性があるので、適度に制限するのが望ましい)
+            # ここでは最大10件に制限してみる。
+            num_to_show = 10 
+            shown_entries = []
+            for entry_dict in reversed(existing_history_entries[-num_to_show:]):
+                shown_entries.append(f"- {entry_dict.get('entry', '(内容なし)')}")
+            history_context_str = "\n".join(shown_entries)
+            if len(existing_history_entries) > num_to_show:
+                history_context_str += f"\n... (他{len(existing_history_entries) - num_to_show}件)"
+        
+        # --- プロンプトテンプレートの取得とフォーマット ---
+        initial_instruction = "AIへの指示をここに記述してください。"
+        if main_window_for_hist and main_window_for_hist.current_project_settings:
+            project_settings = main_window_for_hist.current_project_settings
+            ai_prompts = project_settings.get("ai_edit_prompts", DEFAULT_PROJECT_SETTINGS.get("ai_edit_prompts", {}))
+            raw_template = ai_prompts.get("history_entry_add", "")
+            
+            # {max_item_history_entries} の値を決定 (設定画面にUIがないので仮の値)
+            # 本来は設定から取得するべきだが、今回は固定値で。5件くらいが妥当か。
+            max_entries_for_template_placeholder = 5 
 
-        prompt_template = (
-            f"あなたはTRPGのデータ管理を行うアシスタントです。\n"
-            f"ユーザーの指示に従い、「{item_name}」の履歴情報に追加するエントリーを作成してください。"
-            f"エントリー内容のみを生成し、余計な情報は出力しないようにしてください。\n\n"
-            f"## まとめて欲しい情報:\n"
-            f"--------------------\n"
-            f"[記述例]\n"
-            f"主人公と{item_name}の現在の関係性をまとめてください。\n"
-            f"{item_name}との会話内容をまとめてください。\n"
-            f"クエストの進行状況をまとめてください。\n"
-            f"現在階層のモンスター情報をまとめてください。\n"
-            f"--------------------\n\n\n"
-            f"### {item_name}」の参考情報:\n"
-            f"説明/メモ（ここに書かれている情報は固定情報として別途保存されているため、履歴に含める必要は無い）:\n"
-            f"--------------------\n"
-            f"{item_desc}\n"
-            f"--------------------\n\n"
-            f"直近の履歴:\n"
-            f"--------------------\n"
-            f"{history_context}\n"
-            f"--------------------\n\n"
-        )
+            placeholders = {
+                "item_name": item_name,
+                "user_instruction": "", # ダイアログでユーザーが入力
+                "item_description": item_desc,
+                "item_existing_history": history_context_str, # 整形済み履歴
+                "max_item_history_entries": max_entries_for_template_placeholder
+            }
+            try:
+                initial_instruction = raw_template.format(**placeholders)
+            except KeyError as e:
+                QMessageBox.warning(self, "テンプレートエラー", f"履歴追加プロンプトのフォーマットに失敗: {e}")
+            except Exception as e:
+                 QMessageBox.critical(self, "致命的なテンプレートエラー", f"履歴プロンプト生成中に予期せぬエラー: {e}")
+                 return
+        else:
+            QMessageBox.warning(self, "設定エラー", "プロジェクト設定を読み込めず、デフォルトの指示を使用します。")
+            # フォールバック (プロジェクト設定がない場合)
+            # (この部分は、仕様に応じてより詳細なエラー処理やデフォルトテンプレートの提供を検討)
+            initial_instruction = f"アイテム「{item_name}」の新しい履歴エントリを作成してください。ユーザーの指示を考慮してください。"
 
+        self.ai_edit_dialog_mode = "history" # モード設定
         self.ai_edit_dialog = AIAssistedEditDialog(
-            initial_instruction_text=prompt_template,
-            current_item_description="", # 履歴モードでは未使用だが引数は必要
+            initial_instruction_text=initial_instruction,
+            current_item_description=item_desc, # 履歴モードではコンテキストとして利用
             parent=self,
             window_title=f"AIで「{item_name}」の履歴エントリを生成"
         )
-        self.ai_edit_dialog_mode = "history"
+        # 接続は変わらず
         self.ai_edit_dialog.request_ai_button.clicked.connect(
             lambda: self._handle_ai_suggestion_request( # ラムダでラップ
                 self.ai_edit_dialog.get_instruction_text()

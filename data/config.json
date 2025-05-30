@@ -19,7 +19,7 @@
     "font_size": 11,
     "font_color_user": "#3e3e3e",
     "font_color_model": "#1e1b79",
-    "font_color_model_latest": "#1e1b79",
+    "font_color_model_latest": "#582079",
     "font_line_height": 1.4,
     "history_range_for_prompt": 15,
     "enable_streaming": true

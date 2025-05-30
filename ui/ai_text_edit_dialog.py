@@ -52,6 +52,7 @@ class AIAssistedEditDialog(QDialog):
                                           デフォルトは "AIによるテキスト編集支援"。
         """
         super().__init__(parent)
+        print(f"DEBUG: AIAssistedEditDialog.__init__ - Received initial_instruction_text length: {len(initial_instruction_text)}") # DEBUG
         self.setWindowTitle(window_title)
         self.setMinimumSize(700, 650) # ダイアログの最小サイズ
 
