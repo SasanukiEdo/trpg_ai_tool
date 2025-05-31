@@ -16,13 +16,13 @@ from typing import List, Dict, Tuple, Optional, Union
 import os
 import json
 
-from core.config_manager import load_global_config # 追加
+from core.config_manager import load_global_config, PROJECTS_BASE_DIR # 追加
 
 # --- グローバル変数 (APIキーと設定済みフラグ) ---
 _API_KEY: Optional[str] = None
 _IS_CONFIGURED: bool = False
 HISTORY_FILENAME = "chat_history.json" # 履歴ファイル名
-PROJECTS_BASE_DIR = "data" # プロジェクトのベースディレクトリ (config_managerと合わせる)
+# PROJECTS_BASE_DIRはconfig_managerからインポート
 
 # --- ★★★ 安全設定の固定値 (参照されるが、API送信時には含めない方針へ) ★★★ ---
 FIXED_SAFETY_SETTINGS: List[gtypes.SafetySettingDict] = [ # type: ignore
@@ -51,7 +51,7 @@ def configure_gemini_api(api_key: str) -> Tuple[bool, str]:
         genai.configure(api_key=api_key)
         _API_KEY = api_key
         _IS_CONFIGURED = True
-        print("Gemini API client configured successfully.")
+        # print("Gemini API client configured successfully.")
         return True, "Gemini APIクライアントが正常に設定されました。"
     except Exception as e:
         _IS_CONFIGURED = False
@@ -114,7 +114,7 @@ class GeminiChatHandler:
 
         # safety_settings は常に固定値を設定
         self.safety_settings: Optional[List[gtypes.SafetySettingDict]] = FIXED_SAFETY_SETTINGS # type: ignore
-        print(f"GeminiChatHandler: Safety settings are fixed to BLOCK_NONE for all categories.")
+        # print(f"GeminiChatHandler: Safety settings are fixed to BLOCK_NONE for all categories.")
 
         self._model: Optional[genai.GenerativeModel] = None
         self._chat_session: Optional[genai.ChatSession] = None
@@ -137,7 +137,7 @@ class GeminiChatHandler:
         if not os.path.isdir(project_path):
             try:
                 os.makedirs(project_path, exist_ok=True)
-                print(f"GeminiChatHandler: Created project directory for history: {project_path}")
+                # print(f"GeminiChatHandler: Created project directory for history: {project_path}")
             except Exception as e:
                 print(f"GeminiChatHandler: Error creating project directory {project_path}: {e}")
                 return None
@@ -160,7 +160,7 @@ class GeminiChatHandler:
                     loaded_history = json.load(f)
                 if isinstance(loaded_history, list):
                     self._pure_chat_history = loaded_history
-                    print(f"Chat history loaded from '{history_file_path}' ({len(self._pure_chat_history)} entries).")
+                    # print(f"Chat history loaded from '{history_file_path}' ({len(self._pure_chat_history)} entries).")
                 else:
                     print(f"Warning: Invalid history format in '{history_file_path}'. Starting with empty history.")
                     self._pure_chat_history = []
@@ -211,10 +211,11 @@ class GeminiChatHandler:
             if self.generation_config:
                 model_args["generation_config"] = self.generation_config
             
-            print(f"Initializing Gemini model: {self.model_name} with system instruction: {'provided' if self._system_instruction_text else 'omitted'}, generation_config: {'provided' if self.generation_config else 'omitted'}, safety_settings: NOT SENT TO API")
+            # print(f"Initializing Gemini model: {self.model_name} with system instruction: {'provided' if self._system_instruction_text else 'omitted'}, generation_config: {'provided' if self.generation_config else 'omitted'}, safety_settings: NOT SENT TO API")
             self._model = genai.GenerativeModel(**model_args) # type: ignore
             if self._model:
-                print(f"  Gemini model '{self.model_name}' initialized successfully.")
+                # print(f"  Gemini model '{self.model_name}' initialized successfully.")
+                pass
         except Exception as e:
             print(f"Error initializing Gemini model '{self.model_name}': {e}")
             self._model = None
@@ -234,7 +235,8 @@ class GeminiChatHandler:
             if load_from_file_if_empty and self.project_dir_name:
                 self._load_history_from_file() 
             elif not load_from_file_if_empty:
-                 print("Chat history cleared (not keeping existing, not loading from file).")
+                 # print("Chat history cleared (not keeping existing, not loading from file).")
+                 pass
 
         # モデルの再初期化 (システム指示が変わった場合など)
         needs_reinitialization = False
@@ -245,10 +247,10 @@ class GeminiChatHandler:
                 needs_reinitialization = True
         
         if needs_reinitialization:
-            print("System instruction will be updated. Re-initializing model.")
+            # print("System instruction will be updated. Re-initializing model.")
             self._initialize_model(system_instruction_text=system_instruction_text) 
         elif not self._model: 
-            print("Model not yet initialized. Initializing now.")
+            # print("Model not yet initialized. Initializing now.")
             self._initialize_model(system_instruction_text=self._system_instruction_text) # 現在の指示で初期化
 
         if not is_configured() or not self._model:
@@ -264,7 +266,7 @@ class GeminiChatHandler:
             num_messages_to_keep = max_history_pairs * 2
             if len(source_history_to_use) > num_messages_to_keep:
                 source_history_to_use = source_history_to_use[-num_messages_to_keep:]
-                print(f"Using last {max_history_pairs} pairs ({num_messages_to_keep} messages) from history for new session.")
+                # print(f"Using last {max_history_pairs} pairs ({num_messages_to_keep} messages) from history for new session.")
         
         # クリーニング処理: _pure_chat_history は常に正しい辞書形式であることを期待
         # ここでは、ChatSessionが期待する形式に変換する処理は不要（辞書のリストでOK）
@@ -281,7 +283,7 @@ class GeminiChatHandler:
 
         try:
             if self._model:
-                print(f"Attempting to start chat session with {len(history_for_session_start)} messages (max_history_pairs: {max_history_pairs}). System instruction is set in the model directly.")
+                # print(f"Attempting to start chat session with {len(history_for_session_start)} messages (max_history_pairs: {max_history_pairs}). System instruction is set in the model directly.")
                 # ChatSession の history には、純粋な user/model のやり取りのみを渡す
                 self._chat_session = self._model.start_chat(history=history_for_session_start) # type: ignore
             else:
@@ -292,7 +294,8 @@ class GeminiChatHandler:
             self._chat_session = None
 
         if self._chat_session:
-            print(f"Chat session started/restarted successfully (Session object: {self._chat_session}).")
+            # print(f"Chat session started/restarted successfully (Session object: {self._chat_session}).")
+            pass
         else:
             print("Failed to start/restart chat session.")
 
@@ -319,10 +322,10 @@ class GeminiChatHandler:
                     # 履歴は [user, model, user, model, ...] の順なので、ペア数は *2 する
                     num_entries_to_take = num_pairs_to_take * 2
                     history_to_send = self._pure_chat_history[-num_entries_to_take:]
-                    print(f"  Sending last {len(history_to_send)} entries ({num_pairs_to_take} pairs) from chat history.")
+                    # print(f"  Sending last {len(history_to_send)} entries ({num_pairs_to_take} pairs) from chat history.")
                 else: # None または負の場合は全履歴
                     history_to_send = self._pure_chat_history
-                    print(f"  Sending all {len(history_to_send)} entries from chat history.")
+                    # print(f"  Sending all {len(history_to_send)} entries from chat history.")
             
             # API送信前に、history_to_send の各アイテムから "usage" キーを除外
             cleaned_history_to_send = []
@@ -353,7 +356,7 @@ class GeminiChatHandler:
                 print("Error: No messages to send to the API (history, context, and input are all empty or invalid).")
                 return None, "APIに送信するメッセージがありません。", None
             
-            print(f"  Total messages being sent to API (including history): {len(messages_for_api)}")
+            # print(f"  Total messages being sent to API (including history): {len(messages_for_api)}")
             # --- ★★★ デバッグ用に送信内容全体を表示 (本番ではコメントアウトまたは削除推奨) ★★★ ---
             # print("  Full messages_for_api content:")
             # for i, msg in enumerate(messages_for_api):
@@ -367,7 +370,7 @@ class GeminiChatHandler:
             #     print(f"    [{i}] Role: {role}, Parts Preview: '{parts_content}'")
             # --- ★★★ -------------------------------------------------------------- ★★★ ---
 
-            print(f"送信コンテキスト: {messages_for_api}")
+            # print(f"送信コンテキスト: {messages_for_api}")
 
             # 3. API呼び出し (常に固定の safety_settings を使用)
             response = self._model.generate_content(
@@ -386,7 +389,7 @@ class GeminiChatHandler:
                     "output_tokens": response.usage_metadata.candidates_token_count,
                     "total_token_count": response.usage_metadata.total_token_count
                 }
-                print(f"Usage metadata: {usage_metadata_dict}")
+                # print(f"Usage metadata: {usage_metadata_dict}")
 
             if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
                 ai_response_text = response.candidates[0].content.parts[0].text
@@ -438,11 +441,11 @@ class GeminiChatHandler:
         """
         self._pure_chat_history = []
         self._save_history_to_file() # 空の履歴をファイルに保存してクリア
-        print("Pure chat history (memory and file) cleared.")
+        # print("Pure chat history (memory and file) cleared.")
         # チャットセッションもリセット（履歴なしで開始）
         if self._model: # モデルが初期化されていれば
             self.start_new_chat_session(keep_history=False, system_instruction_text=self._system_instruction_text, load_from_file_if_empty=False)
-            print("Chat session restarted with empty history after clearing.")
+            # print("Chat session restarted with empty history after clearing.")
         else:
             print("Model not initialized, chat session not restarted after clearing history.")
 
@@ -460,15 +463,15 @@ class GeminiChatHandler:
         safety_settings は常に固定値が使用され、この引数からの変更は無視されます。
         generation_config がNoneで渡された場合は、グローバル設定から再読み込みします。
         """
-        print("GeminiChatHandler: Updating settings and restarting chat...")
+        # print("GeminiChatHandler: Updating settings and restarting chat...")
         
         if new_model_name:
             self.model_name = new_model_name
-            print(f"  Model name updated to: {self.model_name}")
+            # print(f"  Model name updated to: {self.model_name}")
 
         if new_generation_config is not None:
             self.generation_config = new_generation_config
-            print(f"  Generation config explicitly updated.")
+            # print(f"  Generation config explicitly updated.")
         else: # new_generation_configがNoneの場合、グローバル設定から再読み込み
             g_config = load_global_config()
             self.generation_config = { # type: ignore
@@ -477,11 +480,11 @@ class GeminiChatHandler:
                 "top_k": g_config.get("generation_top_k", 40),
                 "max_output_tokens": g_config.get("generation_max_output_tokens", 2048),
             }
-            print(f"  Generation config reloaded from global settings.")
+            # print(f"  Generation config reloaded from global settings.")
 
         # safety_settings は常に固定 (引数は無視)
         self.safety_settings = FIXED_SAFETY_SETTINGS # type: ignore
-        print(f"  Safety settings remain fixed to BLOCK_NONE.")
+        # print(f"  Safety settings remain fixed to BLOCK_NONE.")
 
         if new_project_dir_name is not None and self.project_dir_name != new_project_dir_name:
             if self.project_dir_name is not None: # 既存のプロジェクトがあれば履歴を保存
@@ -489,7 +492,7 @@ class GeminiChatHandler:
             self.project_dir_name = new_project_dir_name
             self._pure_chat_history = [] # プロジェクト変更時は履歴をクリア
             self._load_history_from_file() # 新しいプロジェクトから履歴を読み込む
-            print(f"  Project directory changed to: {self.project_dir_name}")
+            # print(f"  Project directory changed to: {self.project_dir_name}")
 
         if new_system_instruction is not None:
             self._system_instruction_text = new_system_instruction.strip() if new_system_instruction and new_system_instruction.strip() else None
@@ -502,7 +505,7 @@ class GeminiChatHandler:
             load_from_file_if_empty=False, # プロジェクト変更がなければ現在の履歴を引き継ぐ
             max_history_pairs=max_history_pairs_for_restart
         )
-        print("GeminiChatHandler: Settings updated and chat session restarted.")
+        # print("GeminiChatHandler: Settings updated and chat session restarted.")
 
     # --- ★★★ ゲッターメソッド ★★★ ---
     def get_generation_config(self) -> Optional[gtypes.GenerationConfigDict]:
@@ -520,7 +523,7 @@ class GeminiChatHandler:
         """
         if self.project_dir_name: # プロジェクト名がある場合のみ保存
             self._save_history_to_file()
-            print(f"Chat history saved to file for project \'{self.project_dir_name}\'.")
+            # print(f"Chat history saved to file for project \'{self.project_dir_name}\'.")
         else:
             print("No project selected, chat history not saved to file.")
 
@@ -548,7 +551,7 @@ class GeminiChatHandler:
             self._pure_chat_history.pop()  # AIの応答を削除
             self._pure_chat_history.pop()  # ユーザーのメッセージを削除
             self._save_history_to_file() # 変更をファイルに保存
-            print(f"Last exchange (user and model) deleted from history. User message: '{user_message_text[:50]}...'")
+            # print(f"Last exchange (user and model) deleted from history. User message: '{user_message_text[:50]}...'")
             return user_message_text
         return None
 
@@ -589,7 +592,7 @@ class GeminiChatHandler:
         """
         if not is_configured():
             error_msg = "Gemini API is not configured."
-            print(f"DEBUG: GeminiChatHandler.generate_response_with_history_and_context: {error_msg}") # DEBUG LOG
+            # print(f"DEBUG: GeminiChatHandler.generate_response_with_history_and_context: {error_msg}") # DEBUG LOG
             if stream:
                 # ストリームの場合、エラーメッセージをyieldするシンプルなジェネレータを返す
                 def error_generator():
@@ -604,17 +607,19 @@ class GeminiChatHandler:
         temp_model_for_override = None
 
         # --- DEBUG LOG: モデル初期化前の状態 ---
-        print(f"DEBUG: GeminiChatHandler: active_model_name='{active_model_name}'")
+        # print(f"DEBUG: GeminiChatHandler: active_model_name='{active_model_name}'")
         if self._model:
-            print(f"DEBUG:   Current handler model: name='{self._model.model_name}', system_instruction is {'set' if self._system_instruction_text else 'not set'}")
+            # print(f"DEBUG:   Current handler model: name='{self._model.model_name}', system_instruction is {'set' if self._system_instruction_text else 'not set'}")
             # print(f"DEBUG:     System Instruction: {self._system_instruction_text if self._system_instruction_text else 'None'}")
             # print(f"DEBUG:     Generation Config: {self._model.generation_config}")
+            pass
         else:
-            print("DEBUG:   Current handler model is None.")
+            # print("DEBUG:   Current handler model is None.")
+            pass
         # --- END DEBUG LOG ---
 
         if override_model_name and override_model_name != self.model_name:
-            print(f"DEBUG: GeminiChatHandler: Using override model for this turn: {override_model_name}")
+            # print(f"DEBUG: GeminiChatHandler: Using override model for this turn: {override_model_name}")
             # 現在のハンドラ設定（システム指示、生成設定）を流用して一時モデルを作成
             # safety_settings は API に直接渡さないのでここでは考慮不要
             model_args_override = {"model_name": override_model_name}
@@ -626,10 +631,10 @@ class GeminiChatHandler:
             try:
                 temp_model_for_override = genai.GenerativeModel(**model_args_override) # type: ignore
                 target_model = temp_model_for_override
-                print(f"DEBUG:   Temporary model '{override_model_name}' initialized for override.")
+                # print(f"DEBUG:   Temporary model '{override_model_name}' initialized for override.")
             except Exception as e:
                 error_msg = f"Error initializing override model '{override_model_name}': {e}"
-                print(f"DEBUG: GeminiChatHandler: {error_msg}") # DEBUG LOG
+                # print(f"DEBUG: GeminiChatHandler: {error_msg}") # DEBUG LOG
                 if stream:
                     def error_generator_override(): # DEBUG: ジェネレータを返す
                         yield f"Error: {error_msg}"
@@ -638,7 +643,7 @@ class GeminiChatHandler:
         
         if not target_model:
             error_msg = f"Model ('{active_model_name}') is not initialized."
-            print(f"DEBUG: GeminiChatHandler: {error_msg}") # DEBUG LOG
+            # print(f"DEBUG: GeminiChatHandler: {error_msg}") # DEBUG LOG
             if stream:
                 def error_generator_no_model(): # DEBUG: ジェネレータを返す
                     yield f"Error: {error_msg}"
@@ -699,7 +704,7 @@ class GeminiChatHandler:
         
         contents_for_api.append({'role': 'user', 'parts': [final_user_prompt_text]})
         
-        print(f"DEBUG:   Effective History for API ({len(history_for_api)} entries):")
+        # print(f"DEBUG:   Effective History for API ({len(history_for_api)} entries):")
         # for i, h_entry in enumerate(history_for_api):
         #     print(f"DEBUG:     [{i}] Role: {h_entry.get('role')}, Parts: {str(h_entry.get('parts', 'N/A'))[:100]}...") # 内容を一部表示
         # print(f"DEBUG:   Final User Prompt (last part of contents): {final_user_prompt_text[:200]}...")
@@ -712,12 +717,14 @@ class GeminiChatHandler:
         #     for i, c_entry in enumerate(contents_for_api): print(f"DEBUG:     [{i}] {str(c_entry)[:200]}...")
         # --- END DEBUG LOG ---
 
-        print(f"DEBUG: GeminiChatHandler: Sending request to model '{active_model_name}' (Streaming: {stream})")
+        # print(f"DEBUG: GeminiChatHandler: Sending request to model '{active_model_name}' (Streaming: {stream})")
         if self._system_instruction_text:
-             print(f"DEBUG:   With System Instruction (first 100 chars): {str(self._system_instruction_text)[:100]}...")
+             # print(f"DEBUG:   With System Instruction (first 100 chars): {str(self._system_instruction_text)[:100]}...")
+             pass
         else:
-             print("DEBUG:   With System Instruction: None")
-        print(f"DEBUG:   With Generation Config: {self.generation_config}")
+             # print("DEBUG:   With System Instruction: None")
+             pass
+        # print(f"DEBUG:   With Generation Config: {self.generation_config}")
 
 
         try:
@@ -727,9 +734,10 @@ class GeminiChatHandler:
             )
 
             # --- DEBUG LOG: APIからのレスポンスオブジェクト ---
-            print(f"DEBUG: GeminiChatHandler: Received response object from API. Type: {type(response)}")
+            # print(f"DEBUG: GeminiChatHandler: Received response object from API. Type: {type(response)}")
             if not stream:
-                 print(f"DEBUG:   Response (non-streamed): {str(response)[:500]}...") # 最初の500文字程度
+                 # print(f"DEBUG:   Response (non-streamed): {str(response)[:500]}...") # 最初の500文字程度
+                 pass
             # --- END DEBUG LOG ---
 
             if stream:
@@ -741,7 +749,7 @@ class GeminiChatHandler:
                 if hasattr(response, 'prompt_feedback') and response.prompt_feedback and \
                    response.prompt_feedback.block_reason != genai.types.BlockReason.BLOCK_REASON_UNSPECIFIED:
                     error_msg = f"ストリーミング応答がブロックされました。理由: {response.prompt_feedback.block_reason.name}"
-                    print(f"DEBUG: GeminiChatHandler Stream Error: {error_msg}")
+                    # print(f"DEBUG: GeminiChatHandler Stream Error: {error_msg}")
                     def stream_error_gen_blocked():
                         yield f"GENERATE_CONTENT_ERROR_STREAM: {error_msg}"
                     return stream_error_gen_blocked()
@@ -755,15 +763,15 @@ class GeminiChatHandler:
             else:
                 # 非ストリーミングモード (従来通り)
                 # --- DEBUG LOG: 非ストリーミングのレスポンス詳細 ---
-                print(f"DEBUG:   Non-streaming response. Text: {response.text[:200] if hasattr(response, 'text') else 'N/A'}...")
-                print(f"DEBUG:   Prompt Feedback: {response.prompt_feedback if hasattr(response, 'prompt_feedback') else 'N/A'}")
-                print(f"DEBUG:   Candidates: {response.candidates if hasattr(response, 'candidates') else 'N/A'}")
+                # print(f"DEBUG:   Non-streaming response. Text: {response.text[:200] if hasattr(response, 'text') else 'N/A'}...")
+                # print(f"DEBUG:   Prompt Feedback: {response.prompt_feedback if hasattr(response, 'prompt_feedback') else 'N/A'}")
+                # print(f"DEBUG:   Candidates: {response.candidates if hasattr(response, 'candidates') else 'N/A'}")
                 # --- END DEBUG LOG ---
 
                 if hasattr(response, 'prompt_feedback') and response.prompt_feedback and \
                    response.prompt_feedback.block_reason != genai.types.BlockReason.BLOCK_REASON_UNSPECIFIED:
                     error_msg = f"応答がブロックされました。理由: {response.prompt_feedback.block_reason.name}"
-                    print(f"DEBUG: GeminiChatHandler Non-Stream Error: {error_msg}")
+                    # print(f"DEBUG: GeminiChatHandler Non-Stream Error: {error_msg}")
                     return None, error_msg, None # usage_metadata はこの場合ないかもしれない
 
                 full_response_text = response.text
@@ -786,9 +794,9 @@ class GeminiChatHandler:
 
         except Exception as e:
             error_msg = f"Error during Gemini API call: {e}"
-            print(f"DEBUG: GeminiChatHandler Exception: {error_msg}") # DEBUG LOG
+            # print(f"DEBUG: GeminiChatHandler Exception: {error_msg}") # DEBUG LOG
             import traceback
-            print(f"DEBUG: Traceback: {traceback.format_exc()}") # DEBUG LOG
+            # print(f"DEBUG: Traceback: {traceback.format_exc()}") # DEBUG LOG
             
             if stream:
                 def exception_error_gen(): # DEBUG: ジェネレータを返す
@@ -818,7 +826,7 @@ class GeminiChatHandler:
         # _save_history_to_file() はAIの応答が完了した後の方が良いかもしれないが、
         # ユーザー入力の即時性を考慮するならここでも可。ただし頻繁な書き込みになる。
         # 現状は send_message完了時やリトライ完了時にまとめて保存しているので、ここでは保存しない。
-        print(f"User message added to _pure_chat_history (not saved to file yet): {user_text[:50]}...")
+        # print(f"User message added to _pure_chat_history (not saved to file yet): {user_text[:50]}...")
 
 
     @staticmethod
@@ -857,12 +865,13 @@ class GeminiChatHandler:
             project_default_model = project_settings.get("model", model_name) # フォールバック先も引数 model_name を考慮
             if ai_edit_model and ai_edit_model.strip():
                 actual_model_name = ai_edit_model.strip()
-                print(f"generate_single_response: Using AI edit model: {actual_model_name}")
+                # print(f"generate_single_response: Using AI edit model: {actual_model_name}")
             else:
                 actual_model_name = project_default_model
-                print(f"generate_single_response: AI edit model not set, using project model: {actual_model_name}")
+                # print(f"generate_single_response: AI edit model not set, using project model: {actual_model_name}")
         else:
-            print(f"generate_single_response: project_settings not provided, using model_name argument: {actual_model_name}")
+            # print(f"generate_single_response: project_settings not provided, using model_name argument: {actual_model_name}")
+            pass
 
         # generation_config がNoneの場合、グローバル設定から取得
         current_generation_config = generation_config
@@ -874,9 +883,10 @@ class GeminiChatHandler:
                 "top_k": g_config.get("generation_top_k", 40),
                 "max_output_tokens": g_config.get("generation_max_output_tokens", 2048),
             }
-            print(f"generate_single_response: Using global generation config for model {actual_model_name}")
+            # print(f"generate_single_response: Using global generation config for model {actual_model_name}")
         else:
-            print(f"generate_single_response: Using provided generation config for model {actual_model_name}")
+            # print(f"generate_single_response: Using provided generation config for model {actual_model_name}")
+            pass
 
         # safety_settings は常に固定値を使用
         current_safety_settings = FIXED_SAFETY_SETTINGS
@@ -892,10 +902,10 @@ class GeminiChatHandler:
             # if current_safety_settings:
             #     model_args["safety_settings"] = current_safety_settings
             
-            print(f"generate_single_response: Initializing model {actual_model_name} with system_instruction: {'Yes' if system_instruction else 'No'}, generation_config: {'Yes' if current_generation_config else 'No'}")
+            # print(f"generate_single_response: Initializing model {actual_model_name} with system_instruction: {'Yes' if system_instruction else 'No'}, generation_config: {'Yes' if current_generation_config else 'No'}")
             model = genai.GenerativeModel(**model_args) # type: ignore
             
-            print(f"generate_single_response: Sending prompt to {actual_model_name}: '{prompt_text[:50]}...'")
+            # print(f"generate_single_response: Sending prompt to {actual_model_name}: '{prompt_text[:50]}...'")
             response = model.generate_content(prompt_text, safety_settings=current_safety_settings) # ここでsafety_settingsを渡す
 
             # --- レスポンスの検証とテキスト抽出 (より堅牢に) ---

@@ -4,13 +4,18 @@
     "model": "gemini-2.5-pro-preview-05-06",
     "checked_subprompts": {
         "一般": [
+            "エッチシーン",
             "基本ルール・制限事項"
         ],
-        "場所": []
+        "場所": [
+            "娼館"
+        ]
     },
     "checked_data_items": {
-        "アイテム": [],
-        "ダンジョン情報": []
+        "キャラクター": [
+            "a3f7b82d-5846-483c-8155-80c5a1833a7f",
+            "e0a35e4e-5f69-4b0d-a8a6-667ea648aa79"
+        ]
     },
     "ai_edit_model_name": "",
     "ai_edit_prompts": {

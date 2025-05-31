@@ -1,0 +1,26 @@
+{
+    "active_project": "Air_TRPG",
+    "default_model": "gemini-2.5-flash-preview-04-17",
+    "available_models": [
+        "gemini-2.5-pro-preview-05-06",
+        "gemini-2.5-flash-preview-04-17",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash-8b",
+        "gemini-1.5-pro-latest",
+        "gemini-1.5-flash-latest"
+    ],
+    "send_on_enter_mode": true,
+    "generation_temperature": 1.0,
+    "generation_top_p": 0.95,
+    "generation_top_k": 40,
+    "generation_max_output_tokens": 3000,
+    "font_family": "ＭＳ ゴシック",
+    "font_size": 11,
+    "font_color_user": "#3e3e3e",
+    "font_color_model": "#1e1b79",
+    "font_color_model_latest": "#582079",
+    "font_line_height": 1.4,
+    "history_range_for_prompt": 15,
+    "enable_streaming": false
+}

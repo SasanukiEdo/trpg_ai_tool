@@ -48,7 +48,7 @@ def save_api_key(api_key_value: str, service_username: str = USERNAME_GEMINI) ->
     try:
         keyring.set_password(SERVICE_NAME, service_username, api_key_value)
         msg = f"APIキー ({service_username}) を安全に保存しました。"
-        print(msg)
+        # print(msg)
         return True, msg
     except keyring.errors.NoKeyringError:
         msg = "キーリングサービスが見つかりません。APIキーを安全に保存できませんでした。"
@@ -74,7 +74,8 @@ def get_api_key(service_username: str = USERNAME_GEMINI) -> str | None:
         api_key = keyring.get_password(SERVICE_NAME, service_username)
         if api_key:
             # print(f"APIキー ({service_username}) を取得しました。") # 実際のキー値をログに出さない
-            print(f"APIキー ({service_username}) をOS資格情報ストアから取得しました。")
+            # print(f"APIキー ({service_username}) をOS資格情報ストアから取得しました。")
+            pass
         else:
             print(f"APIキー ({service_username}) はOS資格情報ストアに保存されていません。")
         return api_key
@@ -105,7 +106,7 @@ def delete_api_key(service_username: str = USERNAME_GEMINI) -> tuple[bool, str]:
 
         keyring.delete_password(SERVICE_NAME, service_username)
         msg = f"保存されていたAPIキー ({service_username}) 情報を削除しました。"
-        print(msg)
+        # print(msg)
         return True, msg
     except keyring.errors.PasswordDeleteError:
         # keyring.delete_password がキーが存在しない場合にこのエラーを出す場合がある
@@ -123,60 +124,67 @@ def delete_api_key(service_username: str = USERNAME_GEMINI) -> tuple[bool, str]:
 
 if __name__ == '__main__':
     """モジュールのテスト実行用コード。"""
-    print("--- APIキー管理モジュール テスト ---")
+    # print("--- APIキー管理モジュール テスト ---")
 
     # テスト用のAPIキー
     test_api_key_value = "test_gemini_key_12345abcde"
     test_service_user = USERNAME_GEMINI # デフォルトを使用
 
     # 1. 保存テスト
-    print(f"\n1. APIキー '{test_service_user}' の保存テスト...")
+    # print(f"\n1. APIキー '{test_service_user}' の保存テスト...")
     success, message = save_api_key(test_api_key_value, test_service_user)
-    print(f"   結果: {success}, メッセージ: {message}")
+    # print(f"   結果: {success}, メッセージ: {message}")
 
     # 2. 取得テスト
     if success:
-        print(f"\n2. APIキー '{test_service_user}' の取得テスト...")
+        # print(f"\n2. APIキー '{test_service_user}' の取得テスト...")
         retrieved_key = get_api_key(test_service_user)
         if retrieved_key == test_api_key_value:
-            print(f"   取得成功: キーは一致しました。")
+            # print(f"   取得成功: キーは一致しました。")
+            pass
         elif retrieved_key is None:
-            print(f"   取得失敗: キーが見つかりませんでした。")
+            # print(f"   取得失敗: キーが見つかりませんでした。")
+            pass
         else:
-            print(f"   取得失敗: キーが期待した値と異なります。取得値: {retrieved_key}")
+            # print(f"   取得失敗: キーが期待した値と異なります。取得値: {retrieved_key}")
+            pass
 
     # 3. 削除テスト
-    print(f"\n3. APIキー '{test_service_user}' の削除テスト...")
+    # print(f"\n3. APIキー '{test_service_user}' の削除テスト...")
     del_success, del_message = delete_api_key(test_service_user)
-    print(f"   結果: {del_success}, メッセージ: {del_message}")
+    # print(f"   結果: {del_success}, メッセージ: {del_message}")
 
     # 4. 削除後の取得テスト
-    print(f"\n4. 削除後のAPIキー '{test_service_user}' の取得テスト...")
+    # print(f"\n4. 削除後のAPIキー '{test_service_user}' の取得テスト...")
     retrieved_after_delete = get_api_key(test_service_user)
     if retrieved_after_delete is None:
-        print(f"   取得成功: キーは正しく削除されました (Noneが返されました)。")
+        # print(f"   取得成功: キーは正しく削除されました (Noneが返されました)。")
+        pass
     else:
-        print(f"   取得失敗: キーがまだ存在しています。取得値: {retrieved_after_delete}")
+        # print(f"   取得失敗: キーがまだ存在しています。取得値: {retrieved_after_delete}")
+        pass
 
     # 5. 存在しないキーの削除テスト
-    print(f"\n5. 存在しないキー ('dummy_service_user') の削除テスト...")
+    # print(f"\n5. 存在しないキー ('dummy_service_user') の削除テスト...")
     non_exist_del_success, non_exist_del_message = delete_api_key("dummy_service_user")
-    print(f"   結果: {non_exist_del_success}, メッセージ: {non_exist_del_message}")
+    # print(f"   結果: {non_exist_del_success}, メッセージ: {non_exist_del_message}")
 
     # 6. 空のAPIキーを保存しようとするテスト (削除として扱われる)
-    print(f"\n6. 空のAPIキーを '{test_service_user}' に保存するテスト (削除動作)...")
+    # print(f"\n6. 空のAPIキーを '{test_service_user}' に保存するテスト (削除動作)...")
     # まず何かキーを保存しておく
     save_api_key("temp_key_for_empty_test", test_service_user)
     retrieved_before_empty_save = get_api_key(test_service_user)
-    print(f"   空キー保存前のキー取得確認: {'あり' if retrieved_before_empty_save else 'なし'}")
+    # print(f"   空キー保存前のキー取得確認: {'あり' if retrieved_before_empty_save else 'なし'}")
 
     empty_save_success, empty_save_message = save_api_key("", test_service_user)
-    print(f"   空キー保存結果: {empty_save_success}, メッセージ: {empty_save_message}")
+    # print(f"   空キー保存結果: {empty_save_success}, メッセージ: {empty_save_message}")
     retrieved_after_empty_save = get_api_key(test_service_user)
     if retrieved_after_empty_save is None:
-        print(f"   取得成功: 空キー保存によりキーは正しく削除されました。")
+        # print(f"   取得成功: 空キー保存によりキーは正しく削除されました。")
+        pass
     else:
-        print(f"   取得失敗: 空キー保存後もキーが存在しています。取得値: {retrieved_after_empty_save}")
+        # print(f"   取得失敗: 空キー保存後もキーが存在しています。取得値: {retrieved_after_empty_save}")
+        pass
 
-    print("\n--- テスト完了 ---")
+    # print("\n--- テスト完了 ---")
 

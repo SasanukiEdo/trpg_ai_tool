@@ -467,37 +467,37 @@ class SettingsDialog(QDialog):
         """
         return self.global_config_edit, self.project_settings_edit
 
-if __name__ == '__main__':
-    """SettingsDialog の基本的な表示テスト。"""
+if __name__ == "__main__":
+    import sys
+    from PyQt5.QtWidgets import QApplication
+    from core.config_manager import (DEFAULT_GLOBAL_CONFIG, DEFAULT_PROJECT_SETTINGS, 
+                                     DEFAULT_AI_EDIT_PROMPTS, DEFAULT_EMPTY_DESCRIPTION_TEMPLATE)
+
     app = QApplication(sys.argv)
 
-    # テスト用のダミー設定データ
-    dummy_global_config = {
-        "active_project": "test_project",
-        "default_model": "gemini-1.5-flash-latest",
-        "available_models": ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest", "gemini-pro", "test-model"]
-    }
-    dummy_project_settings = {
-        "project_display_name": "私のテストプロジェクト",
-        "main_system_prompt": "これはテストプロジェクトのシステムプロンプトです。\nよろしくお願いします。",
-        "model": "gemini-1.5-pro-latest"
-    }
+    # print("--- SettingsDialog テスト ---")
 
-    print("--- SettingsDialog テスト ---")
-    dialog = SettingsDialog(dummy_global_config, dummy_project_settings)
+    # テスト用の設定値
+    current_global_config = DEFAULT_GLOBAL_CONFIG.copy()
+    current_project_settings = DEFAULT_PROJECT_SETTINGS.copy()
+    current_project_settings["ai_edit_prompts"] = DEFAULT_AI_EDIT_PROMPTS.copy()
+    current_project_settings["empty_description_template"] = DEFAULT_EMPTY_DESCRIPTION_TEMPLATE
+    available_models = ["model1", "model2", "gemini-1.5-pro-latest", "gemini-1.0-pro"]
 
-    if dialog.exec_() == QDialog.Accepted:
-        print("\n設定ダイアログ: OK")
+    dialog = SettingsDialog(current_global_config, current_project_settings, available_models, available_models, "test_project")
+    if dialog.exec_():
+        # print("\n設定ダイアログ: OK")
         updated_g_conf, updated_p_conf = dialog.get_updated_configs()
-        print(f"  更新されたグローバル設定: {updated_g_conf}")
-        print(f"  更新されたプロジェクト設定: {updated_p_conf}")
+        # print(f"  更新されたグローバル設定: {updated_g_conf}")
+        # print(f"  更新されたプロジェクト設定: {updated_p_conf}")
+        pass # 保存処理などをここで行う
     else:
-        print("\n設定ダイアログ: Cancel")
+        # print("\n設定ダイアログ: Cancel")
+        pass
+    
+    # print("\n--- APIキーなし、プロジェクト設定なしの場合のテスト ---")
+    # dialog_no_settings = SettingsDialog({}, {}, [], [], None) # プロジェクト名もNone
+    # dialog_no_settings.exec_()
 
-    print("\n--- APIキーなし、プロジェクト設定なしの場合のテスト ---")
-    # APIキーはOS依存なので、ここでは get_api_key() の結果に依存する
-    dialog_no_proj = SettingsDialog(dummy_global_config, None) # プロジェクト設定なし
-    # dialog_no_proj.exec_() # 表示だけならこれでもOK
-
-    print("\n--- テスト完了 ---")
-    # sys.exit(app.exec_()) # MainWindowなどから実行時は不要
+    # print("\n--- テスト完了 ---")
+    # sys.exit(app.exec_())

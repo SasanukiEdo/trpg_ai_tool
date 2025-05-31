@@ -13,12 +13,11 @@ JSONファイルに保存されます。各サブプロンプトはカテゴリ�
 
 import json
 import os
+from core.config_manager import PROJECTS_BASE_DIR
 
 # --- 定数 ---
-PROJECTS_BASE_DIR = "data"
 """str: 全てのプロジェクトディレクトリが格納されるベースディレクトリのパス。
-config_manager.py と共通。
-"""
+config_manager.py と共通。"""
 
 SUBPROMPTS_FILENAME = "subprompts.json"
 """str: 各プロジェクトディレクトリ内に作成されるサブプロンプトファイルの名前。"""
@@ -72,14 +71,14 @@ def load_subprompts(project_dir_name: str) -> dict:
             print(f"  プロジェクトディレクトリも存在しません: {project_path} (作成を試みます)")
             try:
                 os.makedirs(project_path, exist_ok=True)
-                print(f"  プロジェクトディレクトリを作成しました: {project_path}")
+                # print(f"  プロジェクトディレクトリを作成しました: {project_path}")
             except Exception as e:
                 print(f"  プロジェクトディレクトリの作成に失敗しました ({project_path}): {e}")
                 return DEFAULT_SUBPROMPTS_DATA.copy()
 
         print(f"  デフォルトのサブプロンプトファイル ({SUBPROMPTS_FILENAME}) を作成します。")
         if save_subprompts(project_dir_name, DEFAULT_SUBPROMPTS_DATA.copy()): # 空のデータを保存
-            print(f"  デフォルトのサブプロンプトファイルを作成・保存しました: {file_path}")
+            # print(f"  デフォルトのサブプロンプトファイルを作成・保存しました: {file_path}")
             return DEFAULT_SUBPROMPTS_DATA.copy()
         else:
             print(f"  デフォルトのサブプロンプトファイルの作成に失敗しました ({file_path})。")
@@ -88,7 +87,7 @@ def load_subprompts(project_dir_name: str) -> dict:
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             subprompts = json.load(f)
-        print(f"サブプロンプトを読み込みました: {file_path}")
+        # print(f"サブプロンプトを読み込みました: {file_path}")
         # データ構造のバリデーション (任意だが推奨)
         # 例えば、各サブプロンプトが "prompt" キーを持つかなど
         if not isinstance(subprompts, dict):
@@ -125,7 +124,7 @@ def save_subprompts(project_dir_name: str, subprompts_data: dict) -> bool:
         os.makedirs(project_dir_path, exist_ok=True)
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(subprompts_data, f, indent=4, ensure_ascii=False)
-        print(f"サブプロンプトを保存しました: {file_path}")
+        # print(f"サブプロンプトを保存しました: {file_path}")
         return True
     except Exception as e:
         print(f"サブプロンプトの保存に失敗しました ({file_path}): {e}")
@@ -133,21 +132,23 @@ def save_subprompts(project_dir_name: str, subprompts_data: dict) -> bool:
 
 if __name__ == '__main__':
     """モジュールの基本的な動作をテストするためのコード。"""
-    print("--- SubPrompt Manager テスト ---")
+    # print("--- SubPrompt Manager テスト ---")
 
     test_project_name = "test_project_for_subprompts"
 
     # 1. 初回読み込みテスト (プロジェクトディレクトリとファイルがなければ作成される)
-    print(f"\n1. 初回読み込みテスト (プロジェクト: {test_project_name})")
+    # print(f"\n1. 初回読み込みテスト (プロジェクト: {test_project_name})")
     initial_subprompts = load_subprompts(test_project_name)
-    print(f"   読み込まれたデータ (初回): {initial_subprompts}")
+    # print(f"   読み込まれたデータ (初回): {initial_subprompts}")
     if initial_subprompts == DEFAULT_SUBPROMPTS_DATA:
-        print("   初回読み込みは期待通りデフォルトデータです。")
+        # print("   初回読み込みは期待通りデフォルトデータです。")
+        pass
     else:
-        print("   エラー: 初回読み込みデータが期待と異なります。")
+        # print("   エラー: 初回読み込みデータが期待と異なります。")
+        pass
 
     # 2. サブプロンプトデータの作成と保存
-    print(f"\n2. データ保存テスト (プロジェクト: {test_project_name})")
+    # print(f"\n2. データ保存テスト (プロジェクト: {test_project_name})")
     sample_subprompts = {
         "一般": {
             "挨拶": {"prompt": "こんにちは、マスター！", "model": "gemini-1.5-flash-latest"},
@@ -159,39 +160,45 @@ if __name__ == '__main__':
     }
     save_success = save_subprompts(test_project_name, sample_subprompts)
     if save_success:
-        print("   サンプルデータの保存に成功しました。")
+        # print("   サンプルデータの保存に成功しました。")
+        pass
     else:
-        print("   エラー: サンプルデータの保存に失敗しました。")
+        # print("   エラー: サンプルデータの保存に失敗しました。")
+        pass
 
     # 3. 保存後の再読み込みテスト
-    print(f"\n3. 再読み込みテスト (プロジェクト: {test_project_name})")
+    # print(f"\n3. 再読み込みテスト (プロジェクト: {test_project_name})")
     reloaded_subprompts = load_subprompts(test_project_name)
-    print(f"   読み込まれたデータ (保存後): {reloaded_subprompts}")
+    # print(f"   読み込まれたデータ (保存後): {reloaded_subprompts}")
     if reloaded_subprompts == sample_subprompts:
-        print("   保存と再読み込みが正しく行われました。")
+        # print("   保存と再読み込みが正しく行われました。")
+        pass
     else:
-        print("   エラー: 保存されたデータが期待と異なります。")
+        # print("   エラー: 保存されたデータが期待と異なります。")
+        pass
 
     # 4. 空のプロジェクト名でのテスト (エラーまたは警告を期待)
-    print("\n4. 空のプロジェクト名テスト")
+    # print("\n4. 空のプロジェクト名テスト")
     empty_project_name_result_load = load_subprompts("")
-    print(f"   空プロジェクト名でのload結果: {empty_project_name_result_load} (デフォルトデータのはず)")
+    # print(f"   空プロジェクト名でのload結果: {empty_project_name_result_load} (デフォルトデータのはず)")
     empty_project_name_result_save = save_subprompts("", {"test": "data"})
-    print(f"   空プロジェクト名でのsave結果: {empty_project_name_result_save} (Falseのはず)")
+    # print(f"   空プロジェクト名でのsave結果: {empty_project_name_result_save} (Falseのはず)")
 
 
     # 既存の 'default_project' があれば、それに対する操作もテスト可能
-    print("\n5. 'default_project' のサブプロンプト操作テスト")
+    # print("\n5. 'default_project' のサブプロンプト操作テスト")
     default_project_subprompts = load_subprompts("default_project")
-    print(f"   default_project の現在のサブプロンプト: {default_project_subprompts}")
+    # print(f"   default_project の現在のサブプロンプト: {default_project_subprompts}")
     # 何か追加してみる
     default_project_subprompts.setdefault("テストカテゴリ", {})["テストプロンプト"] = {"prompt": "テストです"}
     if save_subprompts("default_project", default_project_subprompts):
-        print("   default_project にテストデータを保存しました。")
+        # print("   default_project にテストデータを保存しました。")
         loaded_after_save = load_subprompts("default_project")
         if "テストカテゴリ" in loaded_after_save and "テストプロンプト" in loaded_after_save["テストカテゴリ"]:
-            print("   default_project への保存と再読み込み成功。")
+            # print("   default_project への保存と再読み込み成功。")
+            pass
         else:
-            print("   エラー: default_project への保存・再読み込みに失敗。")
+            # print("   エラー: default_project への保存・再読み込みに失敗。")
+            pass
 
-    print("\n--- テスト完了 ---")
+    # print("\n--- テスト完了 ---")

@@ -169,59 +169,66 @@ class SubPromptEditDialog(QDialog):
 
         super().accept() # QDialog.Accepted を発行
 
-if __name__ == '__main__':
-    """SubPromptEditDialog の基本的な表示テスト。"""
-    # QApplicationのインスタンスが外部で作成済みであるという前提
-    # from PyQt5.QtWidgets import QApplication # ここでインポートすると二重になる可能性
-    # app = QApplication(sys.argv) # MainWindowなどから実行時は不要
+if __name__ == "__main__":
+    import sys
+    from PyQt5.QtWidgets import QApplication
+    # print("--- SubPromptEditDialog テスト ---")
 
-    # テスト用のダミーデータ
-    test_initial_data_new = {"model": "gemini-1.5-pro-latest"} # 新規作成時、特定のモデルを初期選択させたい場合
-    test_initial_data_edit = {
-        "name": "既存プロンプト",
-        "prompt": "これは編集対象のプロンプトです。",
-        "model": "gemini-1.5-flash-latest"
-    }
+    app = QApplication(sys.argv)
 
-    print("--- SubPromptEditDialog テスト ---")
-
-    # 新規作成モードのテスト
-    print("\n1. 新規作成モード:")
+    # print("\n1. 新規作成モード:")
     dialog_new = SubPromptEditDialog(
-        initial_data=test_initial_data_new,
-        current_category="テストカテゴリ1"
+        available_models=["モデルA", "モデルB", "モデルC"],
+        available_categories=["カテゴリ1", "カテゴリ2"]
     )
-    if dialog_new.exec_() == QDialog.Accepted:
-        print("  新規作成ダイアログ: OK")
-        print(f"  取得データ: {dialog_new.get_data()}")
+    if dialog_new.exec_():
+        # print("  新規作成ダイアログ: OK")
+        # print(f"  取得データ: {dialog_new.get_data()}")
+        pass
     else:
-        print("  新規作成ダイアログ: Cancel")
+        # print("  新規作成ダイアログ: Cancel")
+        pass
 
-    # 編集モードのテスト
-    print("\n2. 編集モード:")
+    # print("\n2. 編集モード:")
+    initial_data_edit = {
+        "name": "既存プロンプト",
+        "content": "これが既存の内容です。",
+        "model": "モデルB",
+        "category": "カテゴリ1"
+    }
     dialog_edit = SubPromptEditDialog(
-        initial_data=test_initial_data_edit,
-        is_editing=True,
-        current_category="テストカテゴリ2"
+        initial_data=initial_data_edit,
+        available_models=["モデルA", "モデルB", "モデルC"],
+        available_categories=["カテゴリ1", "カテゴリ2"]
     )
-    if dialog_edit.exec_() == QDialog.Accepted:
-        print("  編集ダイアログ: OK")
-        print(f"  取得データ: {dialog_edit.get_data()}")
+    if dialog_edit.exec_():
+        # print("  編集ダイアログ: OK")
+        # print(f"  取得データ: {dialog_edit.get_data()}")
+        pass
     else:
-        print("  編集ダイアログ: Cancel")
+        # print("  編集ダイアログ: Cancel")
+        pass
 
-    # モデルが空（プレースホルダ選択）の場合のテスト
-    print("\n3. モデル空選択テスト:")
+    # print("\n3. モデル空選択テスト:")
+    initial_data_model_empty = {
+        "name": "モデル空プロンプト",
+        "content": "モデル選択なしでテスト。",
+        "model": "", # 空のモデル
+        "category": "カテゴリ2"
+    }
     dialog_model_empty = SubPromptEditDialog(
-        initial_data={"name": "モデル空", "prompt":"テスト", "model":""},
-        current_category="テストカテゴリ3"
+        initial_data=initial_data_model_empty,
+        available_models=["モデルA", "モデルB", ""], # 選択肢に空文字を含む
+        available_categories=["カテゴリ1", "カテゴリ2"]
     )
-    if dialog_model_empty.exec_() == QDialog.Accepted:
-        print("  モデル空ダイアログ: OK")
-        print(f"  取得データ: {dialog_model_empty.get_data()}") # modelが "" になるはず
+    if dialog_model_empty.exec_():
+        # print("  モデル空ダイアログ: OK")
+        # print(f"  取得データ: {dialog_model_empty.get_data()}") # modelが "" になるはず
+        pass
     else:
-        print("  モデル空ダイアログ: Cancel")
+        # print("  モデル空ダイアログ: Cancel")
+        pass
 
-    print("\n--- テスト完了 (QApplicationインスタンスがなければここで終了) ---")
-    # sys.exit(app.exec_()) # MainWindowなどから実行時は不要
+    # print("\n--- テスト完了 (QApplicationインスタンスがなければここで終了) ---")
+    # sys.exit(app.exec_()) # app.exec_() はテスト時には不要な場合がある
 

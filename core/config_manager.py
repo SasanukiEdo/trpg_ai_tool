@@ -15,12 +15,23 @@ import json
 import os
 import shutil
 import re # reモジュールをインポート
+import sys
 
-# --- 定数 ---
-CONFIG_FILE_PATH = os.path.join("data", "config.json")
+# --- 実行ファイルの場所を基準にしたデータディレクトリのパス設定 ---
+def get_base_dir():
+    """実行ファイルまたはスクリプトの場所を取得"""
+    if getattr(sys, 'frozen', False):
+        # PyInstallerでビルドされた実行ファイルの場合
+        return os.path.dirname(sys.executable)
+    else:
+        # 通常のPythonスクリプト実行の場合
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+BASE_DIR = get_base_dir()
+CONFIG_FILE_PATH = os.path.join(BASE_DIR, "data", "config.json")
 """str: グローバル設定ファイルのパス。"""
 
-PROJECTS_BASE_DIR = "data"
+PROJECTS_BASE_DIR = os.path.join(BASE_DIR, "data")
 """str: 全てのプロジェクトディレクトリが格納されるベースディレクトリのパス。"""
 
 PROJECT_SETTINGS_FILENAME = "project_settings.json"
@@ -165,7 +176,7 @@ def load_global_config() -> dict:
         for key, default_value in DEFAULT_GLOBAL_CONFIG.items():
             if key not in config:
                 config[key] = default_value
-        print(f"グローバル設定を読み込みました: {CONFIG_FILE_PATH}")
+        # print(f"グローバル設定を読み込みました: {CONFIG_FILE_PATH}")
         return config
     except Exception as e:
         print(f"グローバル設定ファイルの読み込みに失敗しました ({CONFIG_FILE_PATH}): {e}")
@@ -185,7 +196,7 @@ def save_global_config(config_data: dict) -> bool:
         os.makedirs(os.path.dirname(CONFIG_FILE_PATH), exist_ok=True)
         with open(CONFIG_FILE_PATH, 'w', encoding='utf-8') as f:
             json.dump(config_data, f, indent=4, ensure_ascii=False)
-        print(f"グローバル設定を保存しました: {CONFIG_FILE_PATH}")
+        # print(f"グローバル設定を保存しました: {CONFIG_FILE_PATH}")
         return True
     except Exception as e:
         print(f"グローバル設定の保存に失敗しました ({CONFIG_FILE_PATH}): {e}")
@@ -250,10 +261,10 @@ def load_project_settings(project_dir_name: str) -> dict | None:
 
 
         if save_project_settings(project_dir_name, default_settings):
-            print(f"  デフォルト設定でプロジェクト '{project_dir_name}' を初期化し、保存しました。")
+            # print(f"  デフォルト設定でプロジェクト '{project_dir_name}' を初期化し、保存しました。")
             return default_settings
         else:
-            print(f"  プロジェクト '{project_dir_name}' の初期化（デフォルト設定保存）に失敗しました。")
+            # print(f"  プロジェクト '{project_dir_name}' の初期化（デフォルト設定保存）に失敗しました。")
             return None
 
     try:
@@ -279,7 +290,7 @@ def load_project_settings(project_dir_name: str) -> dict | None:
         if "empty_description_template" not in settings:
             settings["empty_description_template"] = DEFAULT_PROJECT_SETTINGS["empty_description_template"]
             
-        print(f"プロジェクト設定を読み込みました: {project_settings_file}")
+        # print(f"プロジェクト設定を読み込みました: {project_settings_file}")
         return settings
     except Exception as e:
         print(f"プロジェクト設定ファイル ({project_settings_file}) の読み込みに失敗しました: {e}")
@@ -303,7 +314,7 @@ def save_project_settings(project_dir_name: str, settings_data: dict) -> bool:
         os.makedirs(project_dir, exist_ok=True) # ディレクトリがなければ作成
         with open(project_settings_file, 'w', encoding='utf-8') as f:
             json.dump(settings_data, f, indent=4, ensure_ascii=False)
-        print(f"プロジェクト設定を保存しました: {project_settings_file}")
+        # print(f"プロジェクト設定を保存しました: {project_settings_file}")
         return True
     except Exception as e:
         print(f"プロジェクト設定 ({project_settings_file}) の保存に失敗しました: {e}")
@@ -358,7 +369,7 @@ def delete_project_directory(project_dir_name: str) -> bool:
 
     try:
         shutil.rmtree(project_path)
-        print(f"プロジェクトディレクトリを削除しました: {project_path}")
+        # print(f"プロジェクトディレクトリを削除しました: {project_path}")
         return True
     except Exception as e:
         print(f"プロジェクトディレクトリの削除に失敗しました ({project_path}): {e}")
@@ -433,65 +444,73 @@ def get_category_template(category_name: str, template_string: str) -> str:
 
 if __name__ == '__main__':
     """モジュールのテスト実行用コード。"""
-    print("--- Config Manager テスト ---")
+    # print("--- Config Manager テスト ---")
 
     # 1. グローバル設定テスト
-    print("\n1. グローバル設定テスト:")
+    # print("\n1. グローバル設定テスト:")
     global_cfg = load_global_config()
-    print(f"   読み込み時: {global_cfg}")
+    # print(f"   読み込み時: {global_cfg}")
     original_active_project = global_cfg.get("active_project")
     global_cfg["active_project"] = "test_global_save_project"
     save_global_config(global_cfg)
     reloaded_global_cfg = load_global_config()
-    print(f"   保存・再読み込み後: {reloaded_global_cfg}")
+    # print(f"   保存・再読み込み後: {reloaded_global_cfg}")
     # テスト後は元に戻す (任意)
     if original_active_project:
         reloaded_global_cfg["active_project"] = original_active_project
         save_global_config(reloaded_global_cfg)
 
     # 2. プロジェクト設定テスト (新規作成と読み込み)
-    print("\n2. 新規プロジェクト設定テスト (project_alpha):")
+    # print("\n2. 新規プロジェクト設定テスト (project_alpha):")
     project_alpha_name = "project_alpha"
     # まずは存在しない状態でロード (デフォルトで作成されるはず)
     alpha_settings = load_project_settings(project_alpha_name)
     if alpha_settings:
-        print(f"   {project_alpha_name} (初回ロード/作成時): {alpha_settings}")
+        # print(f"   {project_alpha_name} (初回ロード/作成時): {alpha_settings}")
         # 内容を変更して保存
         alpha_settings["main_system_prompt"] = "Alphaプロジェクトのカスタムプロンプト。"
         alpha_settings["project_display_name"] = "アルファ計画"
         save_project_settings(project_alpha_name, alpha_settings)
         reloaded_alpha_settings = load_project_settings(project_alpha_name)
-        print(f"   {project_alpha_name} (変更保存・再読み込み後): {reloaded_alpha_settings}")
+        # print(f"   {project_alpha_name} (変更保存・再読み込み後): {reloaded_alpha_settings}")
         if reloaded_alpha_settings and reloaded_alpha_settings["project_display_name"] == "アルファ計画":
-            print("   プロジェクト設定の保存・読み込みテスト成功。")
+            # print("   プロジェクト設定の保存・読み込みテスト成功。")
+            pass
         else:
-            print("   プロジェクト設定の保存・読み込みテスト失敗。")
+            # print("   プロジェクト設定の保存・読み込みテスト失敗。")
+            pass
     else:
-        print(f"   {project_alpha_name} の設定の読み込み/作成に失敗しました。")
+        # print(f"   {project_alpha_name} の設定の読み込み/作成に失敗しました。")
+        pass
 
     # 3. 既存の 'default_project' のテスト (存在すれば読み込み、なければ作成)
-    print("\n3. 'default_project' 設定テスト:")
+    # print("\n3. 'default_project' 設定テスト:")
     default_proj_settings = load_project_settings("default_project")
     if default_proj_settings:
-        print(f"   default_project 設定: {default_proj_settings}")
+        # print(f"   default_project 設定: {default_proj_settings}")
+        pass
     else:
-        print(f"   default_project の設定の読み込み/作成に失敗しました。")
+        # print(f"   default_project の設定の読み込み/作成に失敗しました。")
+        pass
 
 
     # 4. プロジェクト一覧テスト
-    print("\n4. プロジェクト一覧テスト:")
+    # print("\n4. プロジェクト一覧テスト:")
     all_projects = list_project_dir_names()
-    print(f"   検出されたプロジェクトディレクトリ: {all_projects}")
+    # print(f"   検出されたプロジェクトディレクトリ: {all_projects}")
     if project_alpha_name in all_projects and "default_project" in all_projects:
-        print("   プロジェクト一覧の取得は期待通りです。")
+        # print("   プロジェクト一覧の取得は期待通りです。")
+        pass
     elif not all_projects:
-        print("   プロジェクトはまだ作成されていません。")
+        # print("   プロジェクトはまだ作成されていません。")
+        pass
     else:
-        print(f"   プロジェクト一覧の取得結果が一部期待と異なります: {all_projects}")
+        # print(f"   プロジェクト一覧の取得結果が一部期待と異なります: {all_projects}")
+        pass
 
 
     # 5. 存在しないプロジェクト設定ファイルの読み込みエラーテスト (ディレクトリはあるがファイルなし)
-    print("\n5. 破損/不正なプロジェクト設定ファイルテスト (project_beta):")
+    # print("\n5. 破損/不正なプロジェクト設定ファイルテスト (project_beta):")
     project_beta_name = "project_beta"
     project_beta_dir = get_project_dir_path(project_beta_name)
     os.makedirs(project_beta_dir, exist_ok=True) # ディレクトリだけ作成
@@ -502,12 +521,14 @@ if __name__ == '__main__':
     
     beta_settings_corrupted = load_project_settings(project_beta_name)
     if beta_settings_corrupted is None: # JSONDecodeError などで None が返ることを期待
-        print(f"   {project_beta_name} (不正なJSONファイル時): 読み込み失敗 (None) - 期待通り。")
+        # print(f"   {project_beta_name} (不正なJSONファイル時): 読み込み失敗 (None) - 期待通り。")
+        pass
     else:
-        print(f"   {project_beta_name} (不正なJSONファイル時): 読み込み結果 {beta_settings_corrupted} - 期待外れ。")
+        # print(f"   {project_beta_name} (不正なJSONファイル時): 読み込み結果 {beta_settings_corrupted} - 期待外れ。")
+        pass
     # テスト用に作成したディレクトリとファイルを削除 (任意)
     if os.path.exists(project_beta_settings_file): os.remove(project_beta_settings_file)
     if os.path.exists(project_beta_dir) and not os.listdir(project_beta_dir): os.rmdir(project_beta_dir)
 
 
-    print("\n--- テスト完了 ---")
+    # print("\n--- テスト完了 ---")

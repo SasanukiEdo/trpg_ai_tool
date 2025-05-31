@@ -17,15 +17,14 @@ import os
 import uuid
 import datetime
 import unittest
+from core.config_manager import PROJECTS_BASE_DIR
 
 # --- 定数 ---
-PROJECTS_BASE_DIR = "data"
-"""str: 全てのプロジェクトディレクトリが格納されるベースディレクトリのパス。"""
-
 GAMEDATA_SUBDIR_NAME = "gamedata"
-"""str: 各プロジェクトディレクトリ内で、実際のゲームデータファイル (カテゴリ別JSON)
-が格納されるサブディレクトリの名前。
-"""
+"""str: プロジェクトディレクトリ内のゲームデータ保存用サブディレクトリ名。"""
+
+IMAGES_SUBDIR_NAME = "images"
+"""str: プロジェクトディレクトリ内の画像ファイル保存用サブディレクトリ名。"""
 
 # --- パス取得ヘルパー関数 ---
 
@@ -65,9 +64,6 @@ def get_category_filepath(project_dir_name: str, category_name: str) -> str:
     return os.path.join(gamedata_dir, filename)
 
 # プロジェクト画像ディレクトリ関連ヘルパー
-IMAGES_SUBDIR_NAME = "images"
-"""str: 各プロジェクトディレクトリ内で、画像ファイルが格納されるサブディレクトリの名前。"""
-
 def get_project_images_path(project_dir_name: str) -> str:
     """指定されたプロジェクトの画像保存用サブディレクトリ (images/) のフルパスを返します。
 
@@ -97,7 +93,7 @@ def ensure_project_images_dir_exists(project_dir_name: str) -> str | None:
     try:
         if not os.path.exists(images_dir_path):
             os.makedirs(images_dir_path, exist_ok=True)
-            print(f"Created images directory for project '{project_dir_name}': {images_dir_path}")
+            # print(f"Created images directory for project '{project_dir_name}': {images_dir_path}")
         return images_dir_path
     except Exception as e:
         print(f"Error ensuring/creating images directory for project '{project_dir_name}': {e}")
@@ -161,12 +157,12 @@ def create_category(project_dir_name: str, category_name: str) -> bool:
     try:
         if not os.path.exists(gamedata_dir):
             os.makedirs(gamedata_dir, exist_ok=True)
-            print(f"Created gamedata directory for project '{project_dir_name}': {gamedata_dir}")
+            # print(f"Created gamedata directory for project '{project_dir_name}': {gamedata_dir}")
 
         if not os.path.exists(filepath):
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump({}, f) # 空のJSONオブジェクトで初期化
-            print(f"Category '{category_name}' created for project '{project_dir_name}' at {filepath}")
+            # print(f"Category '{category_name}' created for project '{project_dir_name}' at {filepath}")
             return True
         else:
             print(f"Info: Category '{category_name}' already exists for project '{project_dir_name}'. No action taken.")
@@ -361,7 +357,7 @@ def add_item(project_dir_name: str, category_name: str, item_data: dict) -> str 
     category_data[new_id] = item_to_save # 新しいアイテムを辞書に追加
 
     if save_data_category(project_dir_name, category_name, category_data):
-        print(f"Added new item with ID '{new_id}' to category '{category_name}'.")
+        # print(f"Added new item with ID '{new_id}' to category '{category_name}'.")
         return new_id
     else:
         print(f"Error: Could not save category data after adding item '{new_id}'.")
@@ -407,7 +403,7 @@ def update_item(project_dir_name: str, category_name: str, item_id: str, update_
     data[item_id]['category'] = category_name
 
     if save_data_category(project_dir_name, category_name, data):
-        print(f"Item '{data[item_id].get('name', item_id)}' updated in category '{category_name}', project '{project_dir_name}'.")
+        # print(f"Item '{data[item_id].get('name', item_id)}' updated in category '{category_name}', project '{project_dir_name}'.")
         return True
     else:
         print(f"Failed to save data after updating item '{data[item_id].get('name', item_id)}'.")
@@ -437,7 +433,7 @@ def delete_item(project_dir_name: str, category_name: str, item_id: str) -> bool
     del data[item_id] # アイテムを辞書から削除
 
     if save_data_category(project_dir_name, category_name, data):
-        print(f"Item '{item_name_for_log}' (ID: {item_id}) deleted from category '{category_name}', project '{project_dir_name}'.")
+        # print(f"Item '{item_name_for_log}' (ID: {item_id}) deleted from category '{category_name}', project '{project_dir_name}'.")
         return True
     else:
         # 削除自体は成功したが保存に失敗した場合、データはメモリ上では削除されている
@@ -517,7 +513,7 @@ def find_items_by_tags(project_dir_name: str, tags_to_find: list[str], case_inse
         list[dict]: タグに一致するアイテムの要約情報のリスト。
                     各アイテムの情報は、{"name": ..., "category": ..., "description": ..., "recent_history": [...]} の形式。
     """
-    print(f"Searching for items with tags: {tags_to_find} (case_insensitive={case_insensitive}, search_logic={search_logic})")
+    # print(f"Searching for items with tags: {tags_to_find} (case_insensitive={case_insensitive}, search_logic={search_logic})")
 
     if not project_dir_name:
         print("Warning: project_dir_name is empty in find_items_by_tags.")
@@ -573,14 +569,14 @@ def find_items_by_tags(project_dir_name: str, tags_to_find: list[str], case_inse
 
                         all_items_found.append(item_summary)
 
-    print(f"  Found {len(all_items_found)} items matching tags {tags_to_find} in project '{project_dir_name}'.")
+    # print(f"  Found {len(all_items_found)} items matching tags {tags_to_find} in project '{project_dir_name}'.")
     return all_items_found
 # --- ★★★ -------------------------------------------- ★★★ ---
 
 
 if __name__ == '__main__':
     """モジュールの基本的な動作をテストするためのコード。"""
-    print("--- Data Manager テスト ---")
+    # print("--- Data Manager テスト ---")
     test_project = "data_manager_test_suite" # テスト専用のプロジェクト名
 
     # --- セットアップ: テスト用プロジェクトディレクトリをクリーンにする ---
@@ -588,89 +584,89 @@ if __name__ == '__main__':
     import shutil
     test_project_path = get_project_gamedata_path(test_project)
     if os.path.exists(os.path.dirname(test_project_path)): # gamedata の親 (プロジェクトディレクトリ)
-        print(f"クリーンアップ: 既存のテストプロジェクトディレクトリ '{os.path.dirname(test_project_path)}' を削除します。")
+        # print(f"クリーンアップ: 既存のテストプロジェクトディレクトリ '{os.path.dirname(test_project_path)}' を削除します。")
         shutil.rmtree(os.path.dirname(test_project_path), ignore_errors=True)
     # --------------------------------------------------------------------
 
     # 1. カテゴリ作成テスト
-    print("\n1. カテゴリ作成テスト:")
+    # print("\n1. カテゴリ作成テスト:")
     cat_chars = "キャラクター"
     cat_items = "アイテム"
     assert create_category(test_project, cat_chars) is True, "キャラクターカテゴリ作成失敗"
     assert create_category(test_project, cat_items) is True, "アイテムカテゴリ作成失敗"
     assert create_category(test_project, cat_chars) is False, "既存カテゴリの再作成がTrueを返した"
-    print(f"  カテゴリ '{cat_chars}', '{cat_items}' 作成テスト完了。")
+    # print(f"  カテゴリ '{cat_chars}', '{cat_items}' 作成テスト完了。")
 
     # 2. カテゴリ一覧テスト
-    print("\n2. カテゴリ一覧テスト:")
+    # print("\n2. カテゴリ一覧テスト:")
     categories = list_categories(test_project)
-    print(f"  取得されたカテゴリ: {categories}")
+    # print(f"  取得されたカテゴリ: {categories}")
     assert cat_chars in categories and cat_items in categories, "作成したカテゴリが一覧に含まれていない"
     assert len(categories) == 2, "カテゴリ数が期待と異なる"
 
     # 3. アイテム追加テスト
-    print("\n3. アイテム追加テスト:")
+    # print("\n3. アイテム追加テスト:")
     char1_data = {"name": "アリス", "description": "勇敢な冒険者"}
     char1_id = add_item(test_project, cat_chars, char1_data)
     assert char1_id is not None, f"アリス追加失敗: {char1_id}"
-    print(f"  キャラクター 'アリス' (ID: {char1_id}) 追加成功。")
+    # print(f"  キャラクター 'アリス' (ID: {char1_id}) 追加成功。")
 
     item1_data = {"name": "ポーション", "tags": ["回復", "消耗品"]}
     item1_id = add_item(test_project, cat_items, item1_data)
     assert item1_id is not None, f"ポーション追加失敗: {item1_id}"
-    print(f"  アイテム 'ポーション' (ID: {item1_id}) 追加成功。")
+    # print(f"  アイテム 'ポーション' (ID: {item1_id}) 追加成功。")
 
     # 4. アイテム取得テスト
-    print("\n4. アイテム取得テスト:")
+    # print("\n4. アイテム取得テスト:")
     retrieved_char1 = get_item(test_project, cat_chars, char1_id)
     assert retrieved_char1 is not None and retrieved_char1.get("name") == "アリス", "アリス取得失敗または内容不一致"
-    print(f"  キャラクター 'アリス' 取得成功: {retrieved_char1.get('description')}")
+    # print(f"  キャラクター 'アリス' 取得成功: {retrieved_char1.get('description')}")
     assert get_item(test_project, cat_chars, "存在しないID") is None, "存在しないIDの取得がNoneを返さなかった"
 
     # 5. アイテム一覧テスト
-    print("\n5. アイテム一覧テスト:")
+    # print("\n5. アイテム一覧テスト:")
     char_list = list_items(test_project, cat_chars)
     assert len(char_list) == 1 and char_list[0]["name"] == "アリス", "キャラクター一覧取得失敗"
-    print(f"  キャラクターリスト: {[item['name'] for item in char_list]}")
+    # print(f"  キャラクターリスト: {[item['name'] for item in char_list]}")
 
     # 6. アイテム更新テスト
-    print("\n6. アイテム更新テスト:")
+    # print("\n6. アイテム更新テスト:")
     update_desc_char1 = {"description": "熟練の冒険者、多くの謎を解き明かす。"}
     assert update_item(test_project, cat_chars, char1_id, update_desc_char1) is True, "アリス更新失敗"
     updated_char1 = get_item(test_project, cat_chars, char1_id)
     assert updated_char1.get("description") == update_desc_char1["description"], "アリスの説明が更新されていない"
-    print(f"  キャラクター 'アリス' 更新後の説明: {updated_char1.get('description')}")
+    # print(f"  キャラクター 'アリス' 更新後の説明: {updated_char1.get('description')}")
 
     # 7. 履歴追加テスト
-    print("\n7. 履歴追加テスト:")
+    # print("\n7. 履歴追加テスト:")
     history_entry1 = "ドラゴンの洞窟を発見した。"
     assert add_history_entry(test_project, cat_chars, char1_id, history_entry1) is True, "アリスへの履歴追加失敗"
     char1_with_history = get_item(test_project, cat_chars, char1_id)
     assert len(char1_with_history.get("history", [])) == 1, "履歴エントリ数が期待と異なる"
     assert char1_with_history["history"][0]["entry"] == history_entry1, "履歴内容が不一致"
-    print(f"  アリスの履歴: {char1_with_history['history'][0]['entry']}")
+    # print(f"  アリスの履歴: {char1_with_history['history'][0]['entry']}")
 
     # 8. タグ更新テスト
-    print("\n8. タグ更新テスト:")
+    # print("\n8. タグ更新テスト:")
     new_tags_item1 = ["回復", "貴重品"]
     assert update_tags(test_project, cat_items, item1_id, new_tags_item1) is True, "ポーションのタグ更新失敗"
     item1_with_new_tags = get_item(test_project, cat_items, item1_id)
     assert sorted(item1_with_new_tags.get("tags", [])) == sorted(new_tags_item1), "タグが更新されていないか内容不一致"
-    print(f"  ポーションの更新後タグ: {item1_with_new_tags.get('tags')}")
+    # print(f"  ポーションの更新後タグ: {item1_with_new_tags.get('tags')}")
 
     # 9. アイテム削除テスト
-    print("\n9. アイテム削除テスト:")
+    # print("\n9. アイテム削除テスト:")
     assert delete_item(test_project, cat_chars, char1_id) is True, "アリス削除失敗"
     assert get_item(test_project, cat_chars, char1_id) is None, "アリス削除後も取得できてしまう"
-    print(f"  キャラクター 'アリス' 削除成功。")
+    # print(f"  キャラクター 'アリス' 削除成功。")
     assert len(list_items(test_project, cat_chars)) == 0, "キャラクター削除後も一覧に残っている"
 
     # 10. 存在しないプロジェクトでの操作テスト
-    print("\n10. 存在しないプロジェクトでの操作テスト:")
+    # print("\n10. 存在しないプロジェクトでの操作テスト:")
     non_existent_project = "project_that_does_not_exist_xyz"
     assert list_categories(non_existent_project) == [], "存在しないプロジェクトのカテゴリ一覧が空でない"
     assert create_category(non_existent_project, "ダミー") is True, "存在しないプロジェクトへのカテゴリ作成に失敗（作成されるはず）"
-    print(f"  存在しないプロジェクト '{non_existent_project}' でのカテゴリ作成・一覧テスト完了。")
+    # print(f"  存在しないプロジェクト '{non_existent_project}' でのカテゴリ作成・一覧テスト完了。")
     # 作成されたディレクトリをクリーンアップ
     if os.path.exists(os.path.dirname(get_project_gamedata_path(non_existent_project))):
         shutil.rmtree(os.path.dirname(get_project_gamedata_path(non_existent_project)), ignore_errors=True)
@@ -678,10 +674,10 @@ if __name__ == '__main__':
 
     # --- 最終クリーンアップ ---
     if os.path.exists(os.path.dirname(test_project_path)):
-        print(f"最終クリーンアップ: テストプロジェクトディレクトリ '{os.path.dirname(test_project_path)}' を削除します。")
+        # print(f"最終クリーンアップ: テストプロジェクトディレクトリ '{os.path.dirname(test_project_path)}' を削除します。")
         shutil.rmtree(os.path.dirname(test_project_path), ignore_errors=True)
 
-    print("\n--- 全テスト完了 ---")
+    # print("\n--- 全テスト完了 ---")
 
 class TestFindByTags(unittest.TestCase):
     def test_find_items_by_tags(self):

@@ -192,10 +192,11 @@ class StreamingWorker(QThread):
                         error_msg_detail = f"AIが広範囲の引用を検出したため応答を停止しました (理由: RECITATION)。"
                     elif finish_reason_val == 2: # FINISH_REASON_SAFETY
                          error_msg_detail = f"AIが安全でない可能性のあるコンテンツを検出したため応答を停止しました (理由: SAFETY)。"
-                if hasattr(chunk, 'text') and chunk.text:
-                    text_part = chunk.text
-                    self._raw_chunks_for_full_text.append(text_part)
-                    self.chunk_received.emit(text_part)
+                # ストリーミング応答時に文章の重複が発生するため以下の処理はコメントアウト
+                # if hasattr(chunk, 'text') and chunk.text:
+                #    text_part = chunk.text
+                #    self._raw_chunks_for_full_text.append(text_part)
+                #    self.chunk_received.emit(text_part)
                     # full_response_text += text_part # 下でjoinするので不要
 
                 # usage_metadata は通常、最後のチャンクまたは response オブジェクト自体に含まれる
@@ -2032,7 +2033,7 @@ class MainWindow(QWidget):
             print(f"Quick sets saved to '{qsets_file_path}'.")
         except Exception as e:
             print(f"Error saving quick sets to '{qsets_file_path}': {e}")
-            QMessageBox.warning(self, "保存エラー", f"クイックセットの保存に失敗しました:\n{e}")
+            QMessageBox.warning(self, "保存エラー", f"クイックセットの保存に失敗しました:\\n{e}")
 
     def _on_quick_set_save_clicked(self):
         """「保存」ボタンがクリックされたときの処理。
@@ -2328,14 +2329,14 @@ class MainWindow(QWidget):
         if hasattr(self, 'response_display') and self.response_display:
             scroll_bar = self.response_display.verticalScrollBar()
             scroll_bar.setValue(scroll_bar.minimum()) 
-            print("Scrolled history to top.")
+            # print("Scrolled history to top.")
 
     def _scroll_history_to_bottom(self):
         """AI応答履歴表示エリアを一番下にスクロールします。"""
         if hasattr(self, 'response_display') and self.response_display:
             scroll_bar = self.response_display.verticalScrollBar()
             scroll_bar.setValue(scroll_bar.maximum())
-            print("Scrolled history to bottom.")
+            # print("Scrolled history to bottom.")
     # --- ★★★ ------------------------------------------------ ★★★ ---
 
     # --- ★★★ 新規: 送信履歴範囲スライダーの値変更時のスロット ★★★ ---
