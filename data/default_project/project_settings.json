@@ -1,8 +1,0 @@
-{
-    "project_display_name": "デフォルトプロンプト",
-    "main_system_prompt": "あなたは優秀なTRPGAIアシスタント「ユノ」です。",
-    "model": "gemini-2.0-flash",
-    "ai_edit_model_name": "",
-    "checked_subprompts": {},
-    "checked_data_items": {}
-}

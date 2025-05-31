@@ -22,5 +22,5 @@
     "font_color_model_latest": "#582079",
     "font_line_height": 1.4,
     "history_range_for_prompt": 15,
-    "enable_streaming": true
+    "enable_streaming": false
 }
