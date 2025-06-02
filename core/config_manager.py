@@ -69,6 +69,16 @@ DEFAULT_PROJECT_SETTINGS = {
     "main_system_prompt": "あなたは優秀なAIアシスタントです。", # プロジェクトのメインシステムプロンプト
     "model": "gemini-1.5-pro-latest",              # プロジェクトで使用するAIモデル
     "ai_edit_model_name": "",                       # AI編集支援機能で使用するモデル名 (空白時はプロジェクトモデルを使用)
+    # ★★★ 一時的コンテキスト設定 ★★★
+    "transient_context_mode": "formatted_user", # "formatted_user", "dummy_response", "system_role"
+    "transient_context_template": """これはロールプレイの指示及びロールプレイに必要な情報です
+---------------------------------------------------
+{transient_context}
+---------------------------------------------------
+次に入力されているメッセージがユーザーのセリフおよび行動です。
+
+次の様に対応してください""",
+    "transient_context_dummy_response": "承知いたしました。提供された情報を踏まえて対応いたします。",
     # ★★★ AI編集支援用プロンプトテンプレートのデフォルト値 ★★★
     "ai_edit_prompts": {
         "description_edit": """あなたはTRPGのデータ管理を行うアシスタントです。
@@ -83,7 +93,7 @@ DEFAULT_PROJECT_SETTINGS = {
         "description_new": """あなたはTRPGのデータ管理を行うアシスタントです。
 「{item_name}」の「説明/メモ」を新規に作成します。
 提示された項目テンプレートに基づいて内容を記述してください。
-説明/メモ以外の余計な情報は出力しないでください。
+説明/メモ以外の余計な情報は出力しないようにしてください。
 
 項目テンプレート：
 {empty_description_template}

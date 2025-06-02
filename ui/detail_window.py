@@ -103,6 +103,12 @@ class DetailWindow(QWidget):
         self._original_image_pixmap: QPixmap | None = None
         """QPixmap | None: 読み込んだ画像のスケーリングされていないオリジナルピクスマップ。"""
 
+        # --- ★★★ 画像ボタンの重複作成を防ぐためのメンバ変数 ★★★ ---
+        self.img_buttons_layout: QHBoxLayout | None = None
+        self.select_img_button: QPushButton | None = None
+        self.clear_img_button: QPushButton | None = None
+        # --- ★★★ ------------------------------------------ ★★★ ---
+
         self.setWindowFlags(Qt.Window) # 独立したウィンドウとして表示
         self.setWindowTitle("詳細情報 (アイテム未選択)")
         self.setMinimumWidth(450)
@@ -144,7 +150,13 @@ class DetailWindow(QWidget):
             category (str): 読み込むアイテムのカテゴリ名。
             item_id (str): 読み込むアイテムのID。
         """
+        print(f"DEBUG: load_data() called for category='{category}', item_id='{item_id}'")
         self.clear_view() # 表示をクリア
+        
+        # --- ★★★ UIクリア後に確実に更新を反映 ★★★ ---
+        QApplication.processEvents()
+        self.repaint()  # ウィンドウの再描画を強制
+        # --- ★★★ --------------------------------- ★★★ ---
 
         if not self.current_project_dir_name:
             QMessageBox.critical(self, "プロジェクトエラー",
@@ -167,18 +179,75 @@ class DetailWindow(QWidget):
         print(f"DEBUG: DetailWindow.load_data - Loaded item_data: name='{self.item_data.get('name')}', description='{self.item_data.get('description')}'") # DEBUG
 
         self.setWindowTitle(f"詳細: {self.item_data.get('name', 'N/A')} ({category})")
+        print("DEBUG: About to call _build_detail_view()")
         self._build_detail_view() # データに基づいてUIを構築
+        print("DEBUG: _build_detail_view() completed in load_data()")
+        
+        # --- ★★★ UI構築後に確実に更新を反映 ★★★ ---
+        QApplication.processEvents()
+        self.repaint()  # ウィンドウの再描画を強制
+        # --- ★★★ --------------------------------- ★★★ ---
+        
         self.save_button.setEnabled(True) # データロード成功で保存ボタンを有効化
 
 
     def clear_view(self):
         """現在の詳細表示エリアの内容をクリアします。"""
-        # self.content_layout の中のウィジェットを全て削除
-        while self.content_layout.count():
-            child = self.content_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+        # --- ★★★ 即座にウィジェットを削除して重複を防ぐ ★★★ ---
+        print(f"DEBUG: clear_view() called - content_layout has {self.content_layout.count()} items")
+        
+        # --- ★★★ より確実なクリア処理 ★★★ ---
+        # まず全てのウィジェットを隠す
+        for i in range(self.content_layout.count()):
+            item = self.content_layout.itemAt(i)
+            if item and item.widget():
+                item.widget().setVisible(False)
+                item.widget().setParent(None)
+        
+        # レイアウトを強制的にクリア
+        while self.content_layout.count() > 0:
+            item = self.content_layout.takeAt(0)
+            if item:
+                widget = item.widget()
+                if widget:
+                    print(f"DEBUG: Removing and hiding widget: {type(widget).__name__}")
+                    widget.setVisible(False)
+                    widget.setParent(None)
+                    widget.deleteLater()
+                else:
+                    print(f"DEBUG: Removing layout item")
+                    # レイアウトアイテムの場合、中身も確実にクリア
+                    layout = item.layout()
+                    if layout:
+                        while layout.count() > 0:
+                            sub_item = layout.takeAt(0)
+                            if sub_item and sub_item.widget():
+                                sub_item.widget().setVisible(False)
+                                sub_item.widget().setParent(None)
+                                sub_item.widget().deleteLater()
+        
+        print(f"DEBUG: After removal, content_layout has {self.content_layout.count()} items")
+        
+        # 即座にレイアウトを更新
+        self.content_layout.update()
+        self.scroll_content_widget.update()
+        self.update()
+        QApplication.processEvents()  # イベントループを処理して削除を確実に実行
+        
+        print(f"DEBUG: After processEvents, content_layout has {self.content_layout.count()} items")
+        # --- ★★★ ------------------------------------------ ★★★ ---
+        
         self.detail_widgets.clear()
+        
+        # --- ★★★ 画像ボタンのメンバ変数もクリア ★★★ ---
+        if self.img_buttons_layout:
+            self.img_buttons_layout = None
+        if self.select_img_button:
+            self.select_img_button = None
+        if self.clear_img_button:
+            self.clear_img_button = None
+        # --- ★★★ ---------------------------- ★★★ ---
+        
         self.item_data = None
         self.current_category = None
         self.current_item_id = None
@@ -187,12 +256,15 @@ class DetailWindow(QWidget):
 
 
     def _build_detail_view(self):
-        """`self.item_data` に基づいて詳細表示UIを動的に構築します。
-        履歴表示に通し番号と区切り線を追加し、タイムスタンプを非表示にします。
-        履歴削除ボタン、履歴編集ボタンを追加します。
-        参照先タグ入力フィールドも追加します。
-        """
-        if not self.item_data: return
+        """現在のアイテムデータに基づいてUI要素を動的に構築します。"""
+        if not self.item_data:
+            return
+
+        print(f"DEBUG: _build_detail_view() called - content_layout has {self.content_layout.count()} items")
+        
+        # --- ★★★ 重複クリア処理を削除（clear_viewで既に処理済み） ★★★ ---
+        # clear_viewで確実にクリアされているので、ここでの重複処理は不要
+        # --- ★★★ ------------------------------------------ ★★★ ---
 
         # 名前
         name_label = QLabel("<b>名前:</b>"); name_edit = QLineEdit(self.item_data.get("name", "")); self.detail_widgets['name'] = name_edit; self.content_layout.addWidget(name_label); self.content_layout.addWidget(name_edit)
@@ -276,6 +348,7 @@ class DetailWindow(QWidget):
         # --- ★★★ ------------------------------------------ ★★★ ---
 
         # 画像
+        print("DEBUG: Creating image section...")
         self.img_path_label = QLabel("<b>画像:</b> (選択されていません)")
         self.img_path_label.setWordWrap(True)
         self.detail_widgets['image_path_display'] = self.img_path_label
@@ -291,18 +364,34 @@ class DetailWindow(QWidget):
         self._update_image_preview(self.item_data.get("image_path"))
         self.content_layout.addWidget(self.img_preview_label)
 
-        img_buttons_layout = QHBoxLayout()
-        select_img_button = QPushButton("画像を選択")
-        select_img_button.clicked.connect(self.select_image_file)
-        img_buttons_layout.addWidget(select_img_button)
-        clear_img_button = QPushButton("画像をクリア")
-        clear_img_button.clicked.connect(self.clear_image_file)
-        img_buttons_layout.addWidget(clear_img_button)
-        img_buttons_layout.addStretch()
-        self.content_layout.addLayout(img_buttons_layout)
+        print("DEBUG: Creating image buttons...")
+        # --- ★★★ 既存のボタンがある場合は削除 ★★★ ---
+        if self.img_buttons_layout is not None:
+            print("DEBUG: Removing existing image buttons layout")
+            self.content_layout.removeItem(self.img_buttons_layout)
+            if self.select_img_button:
+                self.select_img_button.deleteLater()
+            if self.clear_img_button:
+                self.clear_img_button.deleteLater()
+        # --- ★★★ ---------------------------- ★★★ ---
+        
+        self.img_buttons_layout = QHBoxLayout()
+        self.select_img_button = QPushButton("画像を選択")
+        print(f"DEBUG: Created select_img_button: {id(self.select_img_button)}")
+        self.select_img_button.clicked.connect(self.select_image_file)
+        self.img_buttons_layout.addWidget(self.select_img_button)
+        self.clear_img_button = QPushButton("画像をクリア")
+        print(f"DEBUG: Created clear_img_button: {id(self.clear_img_button)}")
+        self.clear_img_button.clicked.connect(self.clear_image_file)
+        self.img_buttons_layout.addWidget(self.clear_img_button)
+        self.img_buttons_layout.addStretch()
+        self.content_layout.addLayout(self.img_buttons_layout)
+        print(f"DEBUG: Added image buttons layout to content_layout. Total items: {self.content_layout.count()}")
         
 
         spacer = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding); self.content_layout.addSpacerItem(spacer)
+        
+        print(f"DEBUG: _build_detail_view() completed - content_layout has {self.content_layout.count()} items")
 
     def _on_ai_update_description_clicked(self):
         """「AIで説明/メモを編集」ボタンがクリックされたときの処理。"""
@@ -599,29 +688,19 @@ class DetailWindow(QWidget):
                     # setScaledContents(True) は使わないか、False にする
                     self.img_preview_label.setScaledContents(False) # QLabelによる自動スケーリングを無効化 [22]
                     
-                    # アスペクト比を計算
-                    aspect_ratio = pixmap.height() / pixmap.width() if pixmap.width() != 0 else 1 # ゼロ除算を避ける
+                    # --- ★★★ ウィンドウの実際の幅に合わせて画像をスケーリング ★★★ ---
+                    # DetailWindowの幅から適切な画像表示幅を計算
+                    window_width = self.width() if self.width() > 100 else 500  # 最小幅を保証
+                    # パディングやマージンを考慮して、ウィンドウ幅より少し小さくする
+                    available_width = max(300, window_width - 80)  # 80px分のマージンを確保
                     
-                    # ラベルのサイズを取得
-                    # label_width = self.img_preview_label.width()
-                    label_width = 450
-                    label_height = int(label_width * aspect_ratio)
-
-                    if label_width > 0 and label_height > 0: # ラベルサイズが有効な場合のみ
-                        # アスペクト比を保ちつつ、ラベルのサイズに収まるようにスケーリング
-                        # Qt.KeepAspectRatio: 指定された矩形に収まるようにアスペクト比を維持 [5][10][12][22]
-                        # Qt.SmoothTransformation: スムーズな（高品質な）スケーリング
-                        scaled_pixmap = pixmap.scaled(label_width, label_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                        self.img_preview_label.setPixmap(scaled_pixmap)
-                    else:
-                        # ラベルサイズがまだ確定していない場合（初回表示時など）は、
-                        # 元のpixmapをそのままセットするか、デフォルトサイズでスケーリング
-                        # ここでは、一度そのままセットしておき、resizeEventで調整されることを期待する
-                        # あるいは、ウィンドウの初期サイズからプレビューラベルの期待サイズを計算する
-                        # self.img_preview_label.setPixmap(pixmap) # これだと大きすぎる可能性
-                        # 例: とりあえず幅を合わせる (高さは自動)
-                        temp_scaled_pixmap = pixmap.scaledToWidth(max(400, self.img_preview_label.minimumWidth()), Qt.SmoothTransformation)
-                        self.img_preview_label.setPixmap(temp_scaled_pixmap)
+                    # アスペクト比を保ってスケーリング
+                    scaled_pixmap = pixmap.scaledToWidth(available_width, Qt.SmoothTransformation)
+                    self.img_preview_label.setPixmap(scaled_pixmap)
+                    
+                    # ラベルのサイズポリシーをコンテンツに合わせて調整
+                    self.img_preview_label.setFixedSize(scaled_pixmap.size())
+                    # --- ★★★ ------------------------------------------ ★★★ ---
 
                     self.img_path_label.setText(f"<b>画像:</b> {relative_image_path}")
                     return # 正常に表示
@@ -633,6 +712,9 @@ class DetailWindow(QWidget):
             self.img_path_label.setText("<b>画像:</b> (選択されていません)")
         
         self.img_preview_label.clear() # 画像がない場合やエラー時はクリア
+        # 画像がない場合はラベルサイズをリセット
+        self.img_preview_label.setMinimumSize(200, 150)
+        self.img_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     
     def resizeEvent(self, event: 'QResizeEvent'):
@@ -640,17 +722,17 @@ class DetailWindow(QWidget):
         画像プレビューのアスペクト比を維持して再描画します。
         """
         super().resizeEvent(event) # 親クラスのイベント処理を呼び出す
+        
+        # --- ★★★ リサイズ時に画像も再スケーリング ★★★ ---
         if hasattr(self, 'item_data') and self.item_data and hasattr(self, 'img_preview_label') and self.img_preview_label.isVisible():
             # item_data がロードされていて、プレビューラベルが表示されている場合のみ更新
-            # _update_image_preview は内部でラベルサイズを取得してスケーリングするので、
-            # ここで再度呼び出せば、新しいラベルサイズに合わせてアスペクト比を維持した画像が表示される。
             current_image_path = self.item_data.get("image_path")
             if current_image_path: # 画像パスがあれば再描画
                  print(f"DetailWindow.resizeEvent: Updating image preview for {current_image_path}")
-                 self._update_image_preview(current_image_path)
-            # else: 画像パスがなければ _update_image_preview(None) が呼ばれるか、何もしない
-            #       (clear_image_file などで既にクリアされているはず)
-
+                 # 少し遅延させて、レイアウトが安定してから再描画
+                 from PyQt5.QtCore import QTimer
+                 QTimer.singleShot(50, lambda: self._update_image_preview(current_image_path))
+        # --- ★★★ ------------------------------------------ ★★★ ---
 
     def add_history_entry_with_ai_ui(self):
         """AIの支援を受けて新しい履歴エントリを作成し、UI経由で追加します。"""

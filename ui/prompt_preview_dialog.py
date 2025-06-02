@@ -78,7 +78,7 @@ class PromptPreviewDialog(QDialog):
                        system_prompt: Optional[str], 
                        transient_context: Optional[str],
                        user_input: Optional[str],
-                       full_prompt: Optional[str], 
+                       transient_context_settings: dict,
                        history: list, 
                        generation_config: dict, 
                        safety_settings: list 
@@ -137,13 +137,69 @@ class PromptPreviewDialog(QDialog):
                 else:
                     api_contents_for_preview.append({"role": role, "parts": [{"text": self._format_text_for_display(text)}]})
         
-        # 一時的コンテキストを "user" ロールとして追加
+        # ★★★ 一時的コンテキスト設定に基づく処理 ★★★
         if transient_context and transient_context.strip():
-            api_contents_for_preview.append({
-                "role": "user", 
-                "parts": [{"text": self._format_text_for_display(transient_context.strip())}]
-            })
-            # ダミーのモデル応答は表示しない
+            context_mode = transient_context_settings.get("mode", "formatted_user")
+            context_template = transient_context_settings.get("template", 
+                """これはロールプレイの指示及びロールプレイに必要な情報です
+---------------------------------------------------
+{transient_context}
+---------------------------------------------------
+次に入力されているメッセージがユーザーのセリフおよび行動です。
+
+次の様に対応してください""")
+            dummy_response = transient_context_settings.get("dummy_response", 
+                "承知いたしました。提供された情報を踏まえて対応いたします。")
+
+            if context_mode == "formatted_user":
+                # 方式1: フォーマット付きuser挿入
+                formatted_context = context_template.format(transient_context=transient_context.strip())
+                api_contents_for_preview.append({
+                    "role": "user", 
+                    "parts": [{"text": self._format_text_for_display(formatted_context)}]
+                })
+                
+            elif context_mode == "dummy_response":
+                # 方式2: ダミー応答付きuser挿入
+                formatted_context = context_template.format(transient_context=transient_context.strip())
+                api_contents_for_preview.append({
+                    "role": "user", 
+                    "parts": [{"text": self._format_text_for_display(formatted_context)}]
+                })
+                # ダミー応答を追加
+                api_contents_for_preview.append({
+                    "role": "model", 
+                    "parts": [{"text": self._format_text_for_display(dummy_response)}]
+                })
+                
+            elif context_mode == "system_role":
+                # 方式3: system role挿入
+                # system_instructionに統合されることを示す
+                formatted_context = context_template.format(transient_context=transient_context.strip())
+                
+                # 既存のsystem_instructionと結合してプレビューに表示
+                current_system_instruction = system_prompt or ""
+                if current_system_instruction:
+                    combined_system_instruction = f"{current_system_instruction}\n\n--- 追加システム指示 ---\n{formatted_context}"
+                else:
+                    combined_system_instruction = formatted_context
+                
+                # system_instructionを更新
+                api_preview_dict["system_instruction"] = {
+                    "parts": [{"text": self._format_text_for_display(combined_system_instruction)}]
+                }
+                # 注記をコンテンツに追加
+                api_contents_for_preview.append({
+                    "role": "system", 
+                    "parts": [{"text": "[注記] 上記の一時的コンテキストはsystem_instructionに統合されています"}]
+                })
+            else:
+                # 不明なモードの場合はデフォルト（フォーマット付きuser挿入）
+                formatted_context = context_template.format(transient_context=transient_context.strip())
+                api_contents_for_preview.append({
+                    "role": "user", 
+                    "parts": [{"text": self._format_text_for_display(formatted_context)}]
+                })
 
         # 実際のユーザー入力を "user" ロールとして追加
         if user_input and user_input.strip():
@@ -196,7 +252,17 @@ if __name__ == '__main__':
         system_prompt="あなたはTRPGのゲームマスターアシスタントです。\\nプレイヤーの行動をサポートしてください。",
         transient_context="現在のシーン: 古代遺跡の入り口\\nプレイヤー選択中のアイテム: 松明",
         user_input="松明で周囲を照らしながら、慎重に遺跡の中へ足を踏み入れる。",
-        full_prompt="現在のシーン: 古代遺跡の入り口\\nプレイヤー選択中のアイテム: 松明\\n\\n松明で周囲を照らしながら、慎重に遺跡の中へ足を踏み入れる。",
+        transient_context_settings={
+            "mode": "formatted_user",
+            "template": """これはロールプレイの指示及びロールプレイに必要な情報です
+---------------------------------------------------
+{transient_context}
+---------------------------------------------------
+次に入力されているメッセージがユーザーのセリフおよび行動です。
+
+次の様に対応してください""",
+            "dummy_response": "承知いたしました。提供された情報を踏まえて対応いたします。"
+        },
         history=dummy_history,
         generation_config=dummy_gen_config,
         safety_settings=dummy_safety_settings

@@ -467,7 +467,11 @@ class DataManagementWidget(QWidget):
         main_win_height = self.window().height()
         screen_geo = QApplication.primaryScreen().availableGeometry() if QApplication.primaryScreen() else self.window().geometry()
 
-        detail_width = 500
+        # --- ★★★ 画面サイズに応じてDetailWindowの幅を動的調整 ★★★ ---
+        # 画面幅の25%〜35%の範囲で、最小450px、最大600pxとする
+        detail_width = max(450, min(600, int(screen_geo.width() * 0.3)))
+        # --- ★★★ -------------------------------------------- ★★★ ---
+        
         detail_height = main_win_height
         new_x = main_win_global_pos.x() + main_win_width + 5
         new_y = main_win_global_pos.y()

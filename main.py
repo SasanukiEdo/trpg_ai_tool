@@ -3,6 +3,7 @@
 import sys
 import os
 from PyQt5.QtWidgets import QApplication, qApp
+from PyQt5.QtCore import Qt
 from typing import Optional # Optional をインポート
 from ui.main_window import MainWindow # MainWindow をインポート
 # --- ★★★ 共有インスタンスモジュールからセッターをインポート ★★★ ---
@@ -17,6 +18,12 @@ if project_root not in sys.path:
 
 
 if __name__ == '__main__':
+    # --- ★★★ 高DPI対応設定 ★★★ ---
+    # 高DPIディスプレイでの適切なスケーリングを有効化
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    # --- ★★★ ---------------- ★★★ ---
+    
     app = QApplication(sys.argv)
 
     # --- ★★★ 外部スタイルシートの読み込みと適用 ★★★ ---

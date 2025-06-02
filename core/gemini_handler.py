@@ -272,8 +272,9 @@ class GeminiChatHandler:
         # ここでは、ChatSessionが期待する形式に変換する処理は不要（辞書のリストでOK）
         cleaned_history_to_send = []
         for item in source_history_to_use:
-            if isinstance(item, dict) and "usage" in item:
-                cleaned_item = {k: v for k, v in item.items() if k != "usage"}
+            if isinstance(item, dict):
+                # "usage"と"timestamp"フィールドを除外
+                cleaned_item = {k: v for k, v in item.items() if k not in ["usage", "timestamp"]}
                 cleaned_history_to_send.append(cleaned_item)
             else:
                 cleaned_history_to_send.append(item)
@@ -303,7 +304,8 @@ class GeminiChatHandler:
     def send_message_with_context(self,
                                   transient_context: str,
                                   user_input: str,
-                                  max_history_pairs_for_this_turn: Optional[int] = None
+                                  max_history_pairs_for_this_turn: Optional[int] = None,
+                                  project_settings: Optional[dict] = None
                                   ) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]]:
         if not self._model:
             error_msg = "モデルが初期化されていません。"
@@ -330,20 +332,92 @@ class GeminiChatHandler:
             # API送信前に、history_to_send の各アイテムから "usage" キーを除外
             cleaned_history_to_send = []
             for item in history_to_send:
-                if isinstance(item, dict) and "usage" in item:
-                    cleaned_item = {k: v for k, v in item.items() if k != "usage"}
+                if isinstance(item, dict):
+                    # "usage"と"timestamp"フィールドを除外
+                    cleaned_item = {k: v for k, v in item.items() if k not in ["usage", "timestamp"]}
                     cleaned_history_to_send.append(cleaned_item)
                 else:
                     cleaned_history_to_send.append(item)
             
             messages_for_api.extend(cleaned_history_to_send) # クリーンアップされた履歴を追加
 
-            # 2. 一時的コンテキスト、空のmodel応答、ユーザー入力 の順で追加
+            # 2. プロジェクト設定に基づく一時的コンテキストの処理
             if transient_context and transient_context.strip():
-                messages_for_api.append({"role": "user", "parts": [{"text": transient_context.strip()}]})
-                # 一時的コンテキストの後に、空のモデル応答を挟む
-                # messages_for_api.append({"role": "model", "parts": [{"text": ""}]}) 
+                # プロジェクト設定から一時的コンテキスト設定を取得
+                if project_settings:
+                    context_mode = project_settings.get("transient_context_mode", "formatted_user")
+                    context_template = project_settings.get("transient_context_template", 
+                        """これはロールプレイの指示及びロールプレイに必要な情報です
+---------------------------------------------------
+{transient_context}
+---------------------------------------------------
+次に入力されているメッセージがユーザーのセリフおよび行動です。
 
+次の様に対応してください""")
+                    dummy_response = project_settings.get("transient_context_dummy_response", 
+                        "承知いたしました。提供された情報を踏まえて対応いたします。")
+                else:
+                    # プロジェクト設定がない場合のデフォルト値
+                    context_mode = "formatted_user"
+                    context_template = """これはロールプレイの指示及びロールプレイに必要な情報です
+---------------------------------------------------
+{transient_context}
+---------------------------------------------------
+次に入力されているメッセージがユーザーのセリフおよび行動です。
+
+次の様に対応してください"""
+                    dummy_response = "承知いたしました。提供された情報を踏まえて対応いたします。"
+
+                if context_mode == "formatted_user":
+                    # 方式1: フォーマット付きuser挿入
+                    formatted_context = context_template.format(transient_context=transient_context.strip())
+                    messages_for_api.append({"role": "user", "parts": [{"text": formatted_context}]})
+                    
+                elif context_mode == "dummy_response":
+                    # 方式2: ダミー応答付きuser挿入
+                    formatted_context = context_template.format(transient_context=transient_context.strip())
+                    messages_for_api.append({"role": "user", "parts": [{"text": formatted_context}]})
+                    # ダミー応答を追加
+                    messages_for_api.append({"role": "model", "parts": [{"text": dummy_response}]})
+                    
+                elif context_mode == "system_role":
+                    # 方式3: system instruction挿入
+                    # 真のsystem_instruction機能を使用するため、一時的なモデルを作成
+                    try:
+                        # 既存のsystem_instructionと一時的コンテキストを結合
+                        original_system_instruction = self._system_instruction_text or ""
+                        additional_system_instruction = context_template.format(transient_context=transient_context.strip())
+                        
+                        if original_system_instruction:
+                            combined_system_instruction = f"{original_system_instruction}\n\n--- 追加システム指示 ---\n{additional_system_instruction}"
+                        else:
+                            combined_system_instruction = additional_system_instruction
+                        
+                        # 一時的なモデルを作成
+                        temp_model_args = {"model_name": self.model_name}
+                        temp_model_args["system_instruction"] = combined_system_instruction
+                        if self.generation_config:
+                            temp_model_args["generation_config"] = self.generation_config
+                        
+                        temp_model_for_system_context = genai.GenerativeModel(**temp_model_args)
+                        # この場合、全く新しいモデルでAPIリクエストを行う必要があるため、
+                        # 現在のsend_message_with_contextの構造では対応が困難
+                        # フォールバックとしてuserロールで処理
+                        print(f"Info: system_role mode detected, but falling back to user role in send_message_with_context")
+                        formatted_context = f"[システム指示] {context_template.format(transient_context=transient_context.strip())}"
+                        messages_for_api.append({"role": "user", "parts": [{"text": formatted_context}]})
+                        
+                    except Exception as e:
+                        # system_instruction統合に失敗した場合は、フォールバックとしてuserロールで処理
+                        print(f"Warning: Failed to create temporary model with system instruction: {e}")
+                        formatted_context = f"[システム指示] {context_template.format(transient_context=transient_context.strip())}"
+                        messages_for_api.append({"role": "user", "parts": [{"text": formatted_context}]})
+                else:
+                    # 不明なモードの場合はデフォルト（フォーマット付きuser挿入）
+                    formatted_context = context_template.format(transient_context=transient_context.strip())
+                    messages_for_api.append({"role": "user", "parts": [{"text": formatted_context}]})
+
+            # 3. ユーザー入力の追加
             if user_input and user_input.strip(): # ユーザー入力が空でない場合のみ追加
                 messages_for_api.append({"role": "user", "parts": [{"text": user_input.strip()}]})
             else:
@@ -562,7 +636,8 @@ class GeminiChatHandler:
         chat_history_to_include: Optional[List[Dict[str, Union[str, List[Dict[str, str]]]]]] = None,
         max_history_pairs: Optional[int] = None,
         override_model_name: Optional[str] = None,
-        stream: bool = False
+        stream: bool = False,
+        project_settings: Optional[dict] = None
     ) -> Union[Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]], genai.types.GenerateContentResponse]:
         """
         指定された会話履歴とアイテムコンテキストを考慮して、応答を生成します。
@@ -584,6 +659,7 @@ class GeminiChatHandler:
             max_history_pairs (int, optional): 含める会話履歴の最大ペア数。None なら全て。
             override_model_name (str, optional): この呼び出しでのみ使用するモデル名。
             stream (bool, optional): Trueの場合、ストリーミング応答を有効にする。デフォルトはFalse。
+            project_settings (dict, optional): プロジェクト設定辞書。一時的コンテキストの処理方式決定に使用。
 
         Returns:
             Union[Tuple[Optional[str], Optional[str], Optional[Dict[str, int]]], Iterable[str]]:
@@ -639,7 +715,6 @@ class GeminiChatHandler:
                     def error_generator_override(): # DEBUG: ジェネレータを返す
                         yield f"Error: {error_msg}"
                     return error_generator_override()
-                return None, error_msg, None
         
         if not target_model:
             error_msg = f"Model ('{active_model_name}') is not initialized."
@@ -648,7 +723,6 @@ class GeminiChatHandler:
                 def error_generator_no_model(): # DEBUG: ジェネレータを返す
                     yield f"Error: {error_msg}"
                 return error_generator_no_model()
-            return None, error_msg, None
 
         # プロンプトと履歴の構築
         full_prompt_parts = []
@@ -683,14 +757,79 @@ class GeminiChatHandler:
 
         # 3. アイテムコンテキストの追加 (あれば)
         if item_context and item_context.strip():
-            # アイテムコンテキストはユーザー指示の直前に配置する特別なユーザーメッセージとして扱うか、
-            # あるいはシステム指示の一部としてモデル初期化時に渡すのが一般的。
-            # ここでは、ユーザー指示の前に挿入する形で対応。
-            # parts に直接文字列のリストとして渡すのがより堅牢か
-            # genai.types.Content(parts=[genai.types.Part(text=item_context)], role="user") のようにする。
-            # ただし、履歴と混ぜる場合、履歴の最後の発言が user だと連続 user になる可能性があるので注意。
-            # ここでは単純にテキストとして追加
-            full_prompt_parts.append(f"### 提供された追加情報 ###\\n{item_context}\\n### 上記情報を踏まえて以下の指示に答えてください ###\\n")
+            # プロジェクト設定に基づく一時的コンテキストの処理
+            if project_settings:
+                context_mode = project_settings.get("transient_context_mode", "formatted_user")
+                context_template = project_settings.get("transient_context_template", 
+                    """これはロールプレイの指示及びロールプレイに必要な情報です
+---------------------------------------------------
+{transient_context}
+---------------------------------------------------
+次に入力されているメッセージがユーザーのセリフおよび行動です。
+
+次の様に対応してください""")
+                dummy_response = project_settings.get("transient_context_dummy_response", 
+                    "承知いたしました。提供された情報を踏まえて対応いたします。")
+            else:
+                # プロジェクト設定がない場合のデフォルト値
+                context_mode = "formatted_user"
+                context_template = """これはロールプレイの指示及びロールプレイに必要な情報です
+---------------------------------------------------
+{transient_context}
+---------------------------------------------------
+次に入力されているメッセージがユーザーのセリフおよび行動です。
+
+次の様に対応してください"""
+                dummy_response = "承知いたしました。提供された情報を踏まえて対応いたします。"
+
+            if context_mode == "formatted_user":
+                # 方式1: フォーマット付きuser挿入
+                formatted_context = context_template.format(transient_context=item_context.strip())
+                full_prompt_parts.append(formatted_context)
+                
+            elif context_mode == "dummy_response":
+                # 方式2: ダミー応答付きuser挿入
+                formatted_context = context_template.format(transient_context=item_context.strip())
+                # ダミー応答付きの場合、履歴に追加する形で処理
+                history_for_api.append({"role": "user", "parts": [formatted_context]})
+                history_for_api.append({"role": "model", "parts": [dummy_response]})
+                
+            elif context_mode == "system_role":
+                # 方式3: system instruction挿入
+                # 真のsystem_instruction機能を使用するため、一時的なモデルを作成
+                try:
+                    # 既存のsystem_instructionと一時的コンテキストを結合
+                    original_system_instruction = self._system_instruction_text or ""
+                    additional_system_instruction = context_template.format(transient_context=item_context.strip())
+                    
+                    if original_system_instruction:
+                        combined_system_instruction = f"{original_system_instruction}\n\n--- 追加システム指示 ---\n{additional_system_instruction}"
+                    else:
+                        combined_system_instruction = additional_system_instruction
+                    
+                    # 一時的なモデルを作成
+                    temp_model_args = {"model_name": active_model_name}
+                    temp_model_args["system_instruction"] = combined_system_instruction
+                    if self.generation_config:
+                        temp_model_args["generation_config"] = self.generation_config
+                    
+                    temp_model_for_system_context = genai.GenerativeModel(**temp_model_args)
+                    target_model = temp_model_for_system_context
+                    # print(f"DEBUG: Created temporary model with combined system instruction for system role context")
+                    
+                except Exception as e:
+                    # system_instruction統合に失敗した場合は、フォールバックとしてuserロールで処理
+                    print(f"Warning: Failed to create temporary model with system instruction: {e}")
+                    formatted_context = f"[システム指示] {context_template.format(transient_context=item_context.strip())}"
+                    full_prompt_parts.append(formatted_context)
+            else:
+                # 不明なモードの場合はデフォルト（フォーマット付きuser挿入）
+                formatted_context = context_template.format(transient_context=item_context.strip())
+                full_prompt_parts.append(formatted_context)
+        else:
+            # 従来の処理（デフォルト）
+            if item_context and item_context.strip():
+                full_prompt_parts.append(f"### 提供された追加情報 ###\\n{item_context}\\n### 上記情報を踏まえて以下の指示に答えてください ###\\n")
 
 
         # 4. ユーザー指示の追加
@@ -746,13 +885,23 @@ class GeminiChatHandler:
                 # --- END DEBUG LOG ---
                 # ストリーミングモードの場合、ジェネレータ (GenerateContentResponse) をそのまま返す
                 # ここでエラーチェックを行い、エラーならエラーメッセージをyieldするジェネレータを返す
-                if hasattr(response, 'prompt_feedback') and response.prompt_feedback and \
-                   response.prompt_feedback.block_reason != genai.types.BlockReason.BLOCK_REASON_UNSPECIFIED:
-                    error_msg = f"ストリーミング応答がブロックされました。理由: {response.prompt_feedback.block_reason.name}"
-                    # print(f"DEBUG: GeminiChatHandler Stream Error: {error_msg}")
-                    def stream_error_gen_blocked():
-                        yield f"GENERATE_CONTENT_ERROR_STREAM: {error_msg}"
-                    return stream_error_gen_blocked()
+                if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+                    # BlockReasonの参照を安全に行う
+                    try:
+                        block_reason = getattr(response.prompt_feedback, 'block_reason', None)
+                        if block_reason is not None:
+                            # block_reasonが存在し、かつ何らかのブロック理由がある場合
+                            block_reason_name = str(block_reason) if hasattr(block_reason, 'name') else str(block_reason)
+                            # バージョン0.8.5では BlockedReason.BLOCK_REASON_UNSPECIFIED の可能性もある
+                            if block_reason_name not in ["BLOCK_REASON_UNSPECIFIED", "BLOCKED_REASON_UNSPECIFIED", "0", "None"]:
+                                error_msg = f"ストリーミング応答がブロックされました。理由: {block_reason_name}"
+                                # print(f"DEBUG: GeminiChatHandler Stream Error: {error_msg}")
+                                def stream_error_gen_blocked():
+                                    yield f"GENERATE_CONTENT_ERROR_STREAM: {error_msg}"
+                                return stream_error_gen_blocked()
+                    except Exception as e:
+                        # BlockReason関連でエラーが発生した場合はログに記録して続行
+                        print(f"Warning: Error checking block_reason in streaming response: {e}")
                 
                 # 正常なストリームを返す前に、中身が空でないかチェックする試み（ただし、これはストリームを消費してしまうので注意）
                 # resolved_response = response.resolve() # ストリームを解決しようとすると、ストリームが消費される
@@ -768,11 +917,19 @@ class GeminiChatHandler:
                 # print(f"DEBUG:   Candidates: {response.candidates if hasattr(response, 'candidates') else 'N/A'}")
                 # --- END DEBUG LOG ---
 
-                if hasattr(response, 'prompt_feedback') and response.prompt_feedback and \
-                   response.prompt_feedback.block_reason != genai.types.BlockReason.BLOCK_REASON_UNSPECIFIED:
-                    error_msg = f"応答がブロックされました。理由: {response.prompt_feedback.block_reason.name}"
-                    # print(f"DEBUG: GeminiChatHandler Non-Stream Error: {error_msg}")
-                    return None, error_msg, None # usage_metadata はこの場合ないかもしれない
+                if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+                    # 非ストリーミングモードでも同様の安全な参照を行う
+                    try:
+                        block_reason = getattr(response.prompt_feedback, 'block_reason', None)
+                        if block_reason is not None:
+                            block_reason_name = str(block_reason) if hasattr(block_reason, 'name') else str(block_reason)
+                            if block_reason_name not in ["BLOCK_REASON_UNSPECIFIED", "BLOCKED_REASON_UNSPECIFIED", "0", "None"]:
+                                error_msg = f"応答がブロックされました。理由: {block_reason_name}"
+                                # print(f"DEBUG: GeminiChatHandler Non-Stream Error: {error_msg}")
+                                return None, error_msg, None # usage_metadata はこの場合ないかもしれない
+                    except Exception as e:
+                        # BlockReason関連でエラーが発生した場合はログに記録して続行
+                        print(f"Warning: Error checking block_reason in non-streaming response: {e}")
 
                 full_response_text = response.text
                 

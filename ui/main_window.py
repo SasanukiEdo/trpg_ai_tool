@@ -73,6 +73,7 @@ class StreamingWorker(QThread):
                  max_history_pairs: Optional[int],
                  override_model_name: Optional[str],
                  stream: bool, # ★ stream パラメータを追加
+                 project_settings: Optional[dict] = None, # ★ project_settingsパラメータを追加
                  parent=None):
         super().__init__(parent)
         self.chat_handler = chat_handler
@@ -81,8 +82,9 @@ class StreamingWorker(QThread):
         self.chat_history_to_include = chat_history_to_include
         self.max_history_pairs = max_history_pairs
         self.override_model_name = override_model_name
-        self.stream = stream # ★ インスタンス変数に保存
-        self._raw_chunks_for_full_text = []
+        self.stream = stream # ★ ストリーミング設定を保存
+        self.project_settings = project_settings # ★ プロジェクト設定を保存
+        self._raw_chunks_for_full_text = [] # ストリーミング時の全テキスト復元用
 
     def run(self):
         try:
@@ -101,7 +103,8 @@ class StreamingWorker(QThread):
                 chat_history_to_include=self.chat_history_to_include,
                 max_history_pairs=self.max_history_pairs,
                 override_model_name=self.override_model_name,
-                stream=self.stream
+                stream=self.stream,
+                project_settings=self.project_settings  # 修正: getattr不要、直接参照
             )
 
             if not self.stream:
@@ -227,12 +230,19 @@ class StreamingWorker(QThread):
                     print(f"Could not get final usage_metadata from GenerateContentResponse object: {e_meta_final}")
             
             # prompt_feedbackでエラーを確認 (GenerateContentResponseオブジェクトから)
-            if hasattr(response_stream_iterable, 'prompt_feedback') and \
-               response_stream_iterable.prompt_feedback and \
-               response_stream_iterable.prompt_feedback.block_reason != genai.types.BlockReason.BLOCK_REASON_UNSPECIFIED: # type: ignore
-                error_msg = f"ストリーミング応答がブロックされました。理由: {response_stream_iterable.prompt_feedback.block_reason.name}" # type: ignore
-                self.streaming_error.emit(error_msg)
-                return
+            if hasattr(response_stream_iterable, 'prompt_feedback') and response_stream_iterable.prompt_feedback:
+                # BlockReasonの参照を安全に行う (gemini_handlerと同様の方法)
+                try:
+                    block_reason = getattr(response_stream_iterable.prompt_feedback, 'block_reason', None) # type: ignore
+                    if block_reason is not None:
+                        block_reason_name = str(block_reason) if hasattr(block_reason, 'name') else str(block_reason)
+                        if block_reason_name not in ["BLOCK_REASON_UNSPECIFIED", "BLOCKED_REASON_UNSPECIFIED", "0", "None"]:
+                            error_msg = f"ストリーミング応答がブロックされました。理由: {block_reason_name}"
+                            self.streaming_error.emit(error_msg)
+                            return
+                except Exception as e:
+                    # BlockReason関連でエラーが発生した場合はログに記録して続行
+                    print(f"Warning: Error checking block_reason in streaming worker: {e}")
 
             if not first_chunk_processed and not self._raw_chunks_for_full_text:
                  # チャンクが一つも処理されなかった場合（空のストリームだった場合など）
@@ -464,6 +474,10 @@ class MainWindow(QWidget):
             self._redisplay_chat_history()
         # --- ★★★ ------------------------------------------ ★★★ ---
         self.update_status_label() # ★★★ 追加: 起動時にステータス更新 ★★★
+        
+        # --- ★★★ 起動時にリトライボタンの状態を更新 ★★★ ---
+        self._update_retry_button_state() # 履歴読み込み後にリトライボタン状態を更新
+        # --- ★★★ ---------------------------------- ★★★ ---
 
         self.is_streaming = False # ストリーミング状態フラグ
         self._current_streaming_ai_message_id: Optional[str] = None # ストリーミング中のAIメッセージブロックのID
@@ -716,7 +730,25 @@ class MainWindow(QWidget):
     def init_ui(self):
         """メインウィンドウのユーザーインターフェースを構築します。"""
         self.setWindowTitle(f"TRPG AI Tool - 初期化中...")
-        self.setGeometry(200, 200, 1400, 1000)
+        
+        # --- ★★★ 画面サイズに応じた動的レイアウト調整 ★★★ ---
+        # 利用可能な画面領域を取得
+        from PyQt5.QtWidgets import QDesktopWidget
+        desktop = QDesktopWidget()
+        screen_rect = desktop.availableGeometry()
+        
+        # 画面サイズに応じてウィンドウサイズを調整
+        # 80%程度のサイズで表示し、最小サイズも設定
+        window_width = min(1400, int(screen_rect.width() * 0.8))
+        window_height = min(1000, int(screen_rect.height() * 0.8))
+        
+        # ウィンドウを画面中央に配置
+        x = (screen_rect.width() - window_width) // 2
+        y = (screen_rect.height() - window_height) // 2
+        
+        self.setGeometry(x, y, window_width, window_height)
+        self.setMinimumSize(1000, 700)  # 最小サイズを設定
+        # --- ★★★ ------------------------------------ ★★★ ---
 
         main_layout = QHBoxLayout(self)
 
@@ -1029,12 +1061,16 @@ class MainWindow(QWidget):
         right_layout.setStretchFactor(self.data_management_widget, 3) # データ管理エリアがより広がる
         # ----------------------------------------------------
 
-
+        # --- ★★★ 右側ペインの幅を動的に調整 ★★★ ---
+        # 画面サイズに応じて右側ペインの最大幅を調整
+        right_panel_max_width = min(400, int(window_width * 0.3))
+        right_widget.setMaximumWidth(right_panel_max_width)
+        right_widget.setMinimumWidth(300)  # 最小幅も設定
+        # --- ★★★ ----------------------------- ★★★ ---
 
         # 左右画面の比率設定
         main_layout.addWidget(left_widget, 7)
         main_layout.addWidget(right_widget, 3)
-        right_widget.setMaximumWidth(350)
 
         # UI初期化後にプロジェクトコンボボックスを初期化・設定
         self._populate_project_selector()
@@ -1194,7 +1230,10 @@ class MainWindow(QWidget):
 
         print(f"--- MainWindow: Project switched successfully to '{new_project_dir_name}' ---")
         self.update_status_label() # ★★★ 追加: プロジェクト切り替え時にステータス更新 ★★★
-
+        
+        # --- ★★★ プロジェクト切り替え時にリトライボタンの状態を更新 ★★★ ---
+        self._update_retry_button_state() # 新しいプロジェクトの履歴に応じてリトライボタン状態を更新
+        # --- ★★★ -------------------------------------------- ★★★ ---
 
     # --- プロジェクト作成・削除関連メソッド ---
     def _on_new_project_button_clicked(self):
@@ -1513,68 +1552,104 @@ class MainWindow(QWidget):
         )
 
     def _append_message_to_display(self, message_data: dict, model_name_override: Optional[str] = None):
-        """指定されたメッセージデータをresponse_displayの末尾に追加するヘルパー。"""
-        # 既存の履歴表示フォーマット関数を利用
-        # is_latest_model_entry は、これがモデルからの最後の応答である場合に編集・削除リンクを制御するために使うが、
-        # ユーザーメッセージの場合はFalseでよい。
-        # 実際の履歴リストのインデックスではなく、表示用のtimestampを使う方が安定するかも
-        html_content = self._format_history_entry_to_html(
-            index=len(self.chat_handler._pure_chat_history) -1 if self.chat_handler else -1, # 最新のインデックス
-            message_data=message_data,
-            model_name=model_name_override if message_data.get('role') == 'model' else None,
-            is_latest_model_entry= (message_data.get('role') == 'model') # ストリーミング完了時にも呼ばれる想定
-        )
-        self.response_display.append(html_content)
+        """指定されたメッセージデータを response_display エリアに追加表示します。
+
+        Args:
+            message_data (dict): 表示するメッセージの辞書データ。
+                                 'role' (str): 'user' または 'model'。
+                                 'parts' (list): テキスト内容を含む部分のリスト。
+                                 オプションで 'timestamp', 'usage' も含む。
+            model_name_override (str, optional): AIメッセージの場合のモデル名上書き。
+        """
+        if not hasattr(self, 'response_display') or not self.response_display:
+            print("Warning: response_display is not initialized. Cannot append message.")
+            return
+
+        # インデックスを動的に取得（全履歴での位置ではなく、この表示での位置）
+        index = -1 # 暫定的に -1 を設定
+        if self.chat_handler:
+            history = self.chat_handler.get_pure_chat_history()
+            for i, entry in enumerate(history):
+                if entry == message_data: # 同一エントリを探す
+                    index = i
+                    break
+
+        # モデル名の決定
+        model_name_for_display = model_name_override or self.current_project_settings.get("model", self.global_config.get("default_model", "Unknown Model"))
+        
+        # 最新のモデル応答かどうかを判定
+        is_latest_model_entry = False
+        if message_data.get('role') == 'model' and self.chat_handler:
+            history = self.chat_handler.get_pure_chat_history()
+            if history and history[-1] == message_data:
+                is_latest_model_entry = True
+
+        html_entry = self._format_history_entry_to_html(index, message_data, model_name_for_display, is_latest_model_entry)
+        self.response_display.append(html_entry)
         self._scroll_history_to_bottom_if_at_bottom()
 
 
     def _on_retry_button_clicked(self):
-        """リトライボタンがクリックされたときの処理。"""
+        """「リトライ」ボタンがクリックされたときの処理。
+        
+        エラー発生後（最後がユーザーメッセージの場合）とAI応答後（最後がAI応答の場合）の両方に対応します。
+        """
         if self.is_streaming:
             QMessageBox.information(self, "処理中", "AIが応答を生成中です。")
             return
-
+            
         if not self.chat_handler:
-            QMessageBox.warning(self, "エラー", "チャットハンドラが利用できません。")
+            QMessageBox.warning(self, "エラー", "チャットハンドラが初期化されていません。")
             return
 
-        last_user_message_text = self.chat_handler.delete_last_exchange_and_get_user_message()
-
-        if last_user_message_text is None:
-            QMessageBox.information(self, "リトライ不可", "リトライ可能な直前のメッセージ交換が見つかりません。")
-            self._update_retry_button_state()
+        history = self.chat_handler._pure_chat_history
+        if not history:
+            QMessageBox.information(self, "リトライ不可", "履歴が空のため、リトライできません。")
             return
 
-        self._redisplay_chat_history() # 履歴から削除された状態をUIに反映
-        self.update_status_label()
-        QMessageBox.information(self, "リトライ実行", f"直前のAI応答を削除し、メッセージ「{last_user_message_text[:50]}...」を再送信します。")
-
-        transient_context = self._build_transient_context_string()
+        # 最後のエントリの種類によって処理を分岐
+        last_entry = history[-1]
+        last_role = last_entry.get("role")
         
-        # APIに送る履歴 (delete_last_exchange_and_get_user_message 実行後の履歴)
-        num_history_entries_to_take = self.current_history_range_for_prompt * 2
-        history_for_api_call_before_re_add = self.chat_handler._pure_chat_history[-num_history_entries_to_take:] if num_history_entries_to_take > 0 else []
-        
-        effective_model = self.current_project_settings.get("model", self.chat_handler.model_name)
-        
-        # 削除されたユーザーメッセージを再度、現在のタイムスタンプで履歴とUIに追加
-        current_timestamp = QDateTime.currentDateTime().toString(Qt.ISODate)
-        self.chat_handler.add_user_message_to_history(last_user_message_text, timestamp=current_timestamp)
-        self._append_message_to_display({
-            'role': 'user',
-            'parts': [{'text': last_user_message_text}],
-            'timestamp': current_timestamp
-        })
-        # self._scroll_history_to_bottom() # _append_message_to_display に含まれる
-
-        self._initialize_streaming_worker_and_connections(
-            user_instruction=last_user_message_text, 
-            transient_context=transient_context, 
-            history_to_send=history_for_api_call_before_re_add, # ユーザーメッセージ再追加前の履歴を送る
-            max_history=None, 
-            effective_model=effective_model,
-            stream=self.enable_streaming # ★ ストリーミング設定を渡す
-        )
+        if last_role == "user":
+            # エラー発生後のケース：最後がユーザーメッセージの場合、そのメッセージを直接リトライ
+            user_message_to_retry = last_entry.get("parts", [{}])[0].get("text", "")
+            if not user_message_to_retry:
+                QMessageBox.warning(self, "リトライエラー", "再送信するメッセージが見つかりません。")
+                return
+                
+            # 現在のメッセージを削除（リトライ用）
+            self.chat_handler._pure_chat_history.pop()
+            self.chat_handler._save_history_to_file()
+            
+            # UIを更新してから再送信
+            self._redisplay_chat_history()
+            self.update_status_label()
+            
+            # 入力フィールドにメッセージを設定して再送信
+            self.user_input.setPlainText(user_message_to_retry)
+            QMessageBox.information(self, "リトライ実行", f"エラー後のメッセージ「{user_message_to_retry[:50]}...」を再送信します。")
+            self.on_send_button_clicked()
+            
+        elif last_role == "model":
+            # 通常のケース：AI応答とユーザーメッセージのペアを削除してリトライ
+            user_message_to_retry = self.chat_handler.delete_last_exchange_and_get_user_message()
+            
+            if user_message_to_retry is not None:
+                # UIを更新してから再送信
+                self._redisplay_chat_history()
+                self.update_status_label()
+                
+                # 入力フィールドにメッセージを設定して再送信
+                self.user_input.setPlainText(user_message_to_retry)
+                QMessageBox.information(self, "リトライ実行", f"直前のやり取りを削除し、メッセージ「{user_message_to_retry[:50]}...」を再送信します。")
+                self.on_send_button_clicked()
+            else:
+                QMessageBox.information(self, "リトライ不可", "リトライ可能な直前のやり取りが見つかりませんでした。")
+        else:
+            QMessageBox.information(self, "リトライ不可", f"予期しない履歴エントリです（role: {last_role}）。")
+            
+        self._update_retry_button_state() # ボタン状態を更新
 
     # 新規: 会話履歴を response_display に再表示するメソッド
     def _redisplay_chat_history(self):
@@ -1771,6 +1846,7 @@ class MainWindow(QWidget):
                     self.chat_handler._pure_chat_history[history_index]['parts'][0]['text'] = new_text.strip()
                     self.chat_handler._save_history_to_file() # 保存
                     self._redisplay_chat_history() # 再表示
+                    self._update_retry_button_state() # ★★★ 履歴編集後にリトライボタン状態を更新 ★★★
                     print(f"  History entry {history_index} ({role_clicked}) edited.")
                 elif ok:
                     QMessageBox.information(self, "変更なし", "履歴内容は変更されませんでした。")
@@ -1786,6 +1862,7 @@ class MainWindow(QWidget):
                     del self.chat_handler._pure_chat_history[history_index]
                     self.chat_handler._save_history_to_file() # 保存
                     self._redisplay_chat_history() # 再表示
+                    self._update_retry_button_state() # ★★★ 履歴削除後にリトライボタン状態を更新 ★★★
                     print(f"  History entry {history_index} ({role_clicked}) deleted.")
             else:
                 print(f"  Unknown action in link: {action}")
@@ -2534,15 +2611,25 @@ class MainWindow(QWidget):
         transient_context = self._build_transient_context_string()
         user_input = self.user_input.toPlainText().strip()
         
-        # ダイアログのAPIプレビューで表示する「メッセージ本体」のために結合しておく
-        # 実際の送信では、transient_context と user_input は結合されて chat_handler.send_message_with_context に渡される
-        full_prompt_for_preview = ""
-        if transient_context:
-            full_prompt_for_preview += transient_context
-        if user_input:
-            if full_prompt_for_preview: # 既にコンテキストがあれば改行を挟む
-                full_prompt_for_preview += "\n\n" # プレビューなので分かりやすく2重改行
-            full_prompt_for_preview += user_input
+        # プロジェクト設定から一時的コンテキスト設定を取得
+        context_mode = self.current_project_settings.get("transient_context_mode", "formatted_user")
+        context_template = self.current_project_settings.get("transient_context_template", 
+            """これはロールプレイの指示及びロールプレイに必要な情報です
+---------------------------------------------------
+{transient_context}
+---------------------------------------------------
+次に入力されているメッセージがユーザーのセリフおよび行動です。
+
+次の様に対応してください""")
+        dummy_response = self.current_project_settings.get("transient_context_dummy_response", 
+            "承知いたしました。提供された情報を踏まえて対応いたします。")
+        
+        # 一時的コンテキスト設定を辞書にまとめて渡す
+        transient_context_settings = {
+            "mode": context_mode,
+            "template": context_template,
+            "dummy_response": dummy_response
+        }
         
         history_for_preview = self._get_history_for_preview() # 送信対象の全履歴
         
@@ -2562,9 +2649,9 @@ class MainWindow(QWidget):
         dialog.update_preview(
             model_name=model_name,
             system_prompt=system_prompt, 
-            transient_context=transient_context, # 個別のコンテキストも渡す
-            user_input=user_input,               # 個別のユーザー入力も渡す
-            full_prompt=full_prompt_for_preview, # 結合したものをAPIプレビューのメッセージ部用として渡す
+            transient_context=transient_context, # 生の一時的コンテキスト
+            user_input=user_input,               # 個別のユーザー入力
+            transient_context_settings=transient_context_settings, # ★新規: 一時的コンテキスト設定
             history=history_for_preview,
             generation_config=generation_config,
             safety_settings=safety_settings_for_display
@@ -2650,32 +2737,102 @@ class MainWindow(QWidget):
         self._load_current_project_data() # 実際のデータ読み込み
 
     def _on_retry_button_clicked(self):
-        """「リトライ」ボタンがクリックされたときの処理。"""
+        """「リトライ」ボタンがクリックされたときの処理。
+        
+        エラー発生後（最後がユーザーメッセージの場合）とAI応答後（最後がAI応答の場合）の両方に対応します。
+        """
+        if self.is_streaming:
+            QMessageBox.information(self, "処理中", "AIが応答を生成中です。")
+            return
+            
         if not self.chat_handler:
             QMessageBox.warning(self, "エラー", "チャットハンドラが初期化されていません。")
             return
 
-        user_message_to_retry = self.chat_handler.delete_last_exchange_and_get_user_message()
+        history = self.chat_handler._pure_chat_history
+        if not history:
+            QMessageBox.information(self, "リトライ不可", "履歴が空のため、リトライできません。")
+            return
 
-        if user_message_to_retry is not None:
+        # 最後のエントリの種類によって処理を分岐
+        last_entry = history[-1]
+        last_role = last_entry.get("role")
+        
+        if last_role == "user":
+            # エラー発生後のケース：最後がユーザーメッセージの場合、そのメッセージを直接リトライ
+            user_message_to_retry = last_entry.get("parts", [{}])[0].get("text", "")
+            if not user_message_to_retry:
+                QMessageBox.warning(self, "リトライエラー", "再送信するメッセージが見つかりません。")
+                return
+                
+            # 現在のメッセージを削除（リトライ用）
+            self.chat_handler._pure_chat_history.pop()
+            self.chat_handler._save_history_to_file()
+            
+            # UIを更新してから再送信
+            self._redisplay_chat_history()
+            self.update_status_label()
+            
+            # 入力フィールドにメッセージを設定して再送信
             self.user_input.setPlainText(user_message_to_retry)
-            self.on_send_button_clicked() # メッセージを再送信
-            # 履歴の再表示とボタン状態更新は on_send_button_clicked 内で行われる
+            QMessageBox.information(self, "リトライ実行", f"エラー後のメッセージ「{user_message_to_retry[:50]}...」を再送信します。")
+            self.on_send_button_clicked()
+            
+        elif last_role == "model":
+            # 通常のケース：AI応答とユーザーメッセージのペアを削除してリトライ
+            user_message_to_retry = self.chat_handler.delete_last_exchange_and_get_user_message()
+            
+            if user_message_to_retry is not None:
+                # UIを更新してから再送信
+                self._redisplay_chat_history()
+                self.update_status_label()
+                
+                # 入力フィールドにメッセージを設定して再送信
+                self.user_input.setPlainText(user_message_to_retry)
+                QMessageBox.information(self, "リトライ実行", f"直前のやり取りを削除し、メッセージ「{user_message_to_retry[:50]}...」を再送信します。")
+                self.on_send_button_clicked()
+            else:
+                QMessageBox.information(self, "リトライ不可", "リトライ可能な直前のやり取りが見つかりませんでした。")
         else:
-            QMessageBox.information(self, "リトライ不可", "リトライ可能な直前のやり取りが見つかりませんでした。")
-            self._update_retry_button_state() # リトライできなかった場合もボタン状態を更新
+            QMessageBox.information(self, "リトライ不可", f"予期しない履歴エントリです（role: {last_role}）。")
+            
+        self._update_retry_button_state() # ボタン状態を更新
 
     def _update_retry_button_state(self):
-        """リトライボタンの有効/無効状態を更新します。"""
-        if self.chat_handler and self.chat_handler._pure_chat_history:
-            history = self.chat_handler._pure_chat_history
-            if len(history) >= 1 and history[-1].get("role") == "model":
-                 # 最後のメッセージがAIの応答であればリトライ可能
-                # (delete_last_exchange_and_get_user_messageが履歴2件以上を要求するので、
-                #  厳密には len(history) >= 2 でないとリトライは成功しないが、
-                #  ボタンの有効化は最後のメッセージが model かどうかで判定する)
+        """リトライボタンの有効/無効状態を更新します。
+        
+        エラー発生時でも履歴にユーザーメッセージがある場合はリトライ可能とします。
+        """
+        if not self.chat_handler or not self.chat_handler._pure_chat_history:
+            self.retry_button.setEnabled(False)
+            return
+            
+        history = self.chat_handler._pure_chat_history
+        
+        # 履歴が空の場合はリトライ不可
+        if len(history) == 0:
+            self.retry_button.setEnabled(False)
+            return
+        
+        # 最後のエントリがAI応答の場合（正常なケース）
+        if history[-1].get("role") == "model":
+            self.retry_button.setEnabled(True)
+            return
+        
+        # 最後のエントリがユーザーメッセージの場合（エラー発生後などのケース）
+        # この場合、ユーザーメッセージがあるのでリトライ可能
+        if history[-1].get("role") == "user":
+            self.retry_button.setEnabled(True)
+            return
+        
+        # その他の場合（予期しないケース）
+        # 履歴にユーザーメッセージが含まれているかチェック
+        for entry in reversed(history):
+            if entry.get("role") == "user":
                 self.retry_button.setEnabled(True)
                 return
+                
+        # ユーザーメッセージが一つもない場合はリトライ不可
         self.retry_button.setEnabled(False)
 
     def _initialize_streaming_worker_and_connections(self, user_instruction: str, transient_context: str, history_to_send: List[Dict], max_history: Optional[int], effective_model: str, stream: bool): # ★ stream パラメータ追加
@@ -2692,7 +2849,8 @@ class MainWindow(QWidget):
             chat_history_to_include=history_to_send,
             max_history_pairs=max_history,
             override_model_name=effective_model if effective_model != self.chat_handler.model_name else None,
-            stream=stream # ★ stream パラメータを渡す
+            stream=stream, # ★ stream パラメータを渡す
+            project_settings=self.current_project_settings # ★ プロジェクト設定を渡す
         )
         self.streaming_worker.streaming_started.connect(self._handle_streaming_started)
         self.streaming_worker.chunk_received.connect(self._handle_chunk_received)

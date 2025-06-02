@@ -146,6 +146,53 @@ class SettingsDialog(QDialog):
         self.project_system_prompt_input.setMinimumHeight(100) # 少し小さく
         layout.addRow("メインシステムプロンプト:", self.project_system_prompt_input)
 
+        # --- ★★★ 一時的コンテキスト設定 ★★★ ---
+        layout.addRow(self._create_separator_line())
+        transient_context_label = QLabel("<b>一時的コンテキスト設定</b>")
+        layout.addRow(transient_context_label)
+
+        # 一時的コンテキスト挿入方式の選択
+        self.transient_context_mode_combo = QComboBox()
+        self.transient_context_mode_combo.addItems([
+            "フォーマット付きuser挿入",
+            "ダミー応答付きuser挿入", 
+            "system_instruction統合"  # 名称を更新
+        ])
+        
+        mode_mapping = {
+            "formatted_user": 0,
+            "dummy_response": 1,
+            "system_role": 2
+        }
+        current_mode = self.project_settings_edit.get("transient_context_mode", "formatted_user")
+        self.transient_context_mode_combo.setCurrentIndex(mode_mapping.get(current_mode, 0))
+        self.transient_context_mode_combo.setToolTip(
+            "フォーマット付きuser挿入: テンプレートでフォーマットしてuserロールとして送信\n"
+            "ダミー応答付きuser挿入: フォーマット後にダミー応答を追加\n"
+            "system_instruction統合: メインシステム指示に追加統合（最も自然な処理）"
+        )
+        layout.addRow("一時的コンテキスト挿入方式:", self.transient_context_mode_combo)
+
+        # コンテキストテンプレート設定
+        self.transient_context_template_input = QTextEdit()
+        self.transient_context_template_input.setPlainText(
+            self.project_settings_edit.get("transient_context_template",
+                                          DEFAULT_PROJECT_SETTINGS.get("transient_context_template"))
+        )
+        self.transient_context_template_input.setMinimumHeight(80)
+        self.transient_context_template_input.setToolTip("利用可能なプレースホルダー: {transient_context}")
+        layout.addRow("コンテキストテンプレート:", self.transient_context_template_input)
+
+        # ダミー応答設定
+        self.transient_context_dummy_response_input = QLineEdit()
+        self.transient_context_dummy_response_input.setText(
+            self.project_settings_edit.get("transient_context_dummy_response",
+                                          DEFAULT_PROJECT_SETTINGS.get("transient_context_dummy_response"))
+        )
+        self.transient_context_dummy_response_input.setToolTip("ダミー応答付きuser挿入モード時に使用されるAIの応答文")
+        layout.addRow("ダミー応答文:", self.transient_context_dummy_response_input)
+        # --- ★★★ --------------------- ★★★ ---
+
         # --- ★★★ AI編集支援プロンプトテンプレート設定 (プロジェクト固有) ★★★ ---
         layout.addRow(self._create_separator_line())
         ai_edit_prompts_label = QLabel("<b>AI編集支援プロンプトテンプレート (プロジェクト固有)</b>")
@@ -444,6 +491,17 @@ class SettingsDialog(QDialog):
         else:
             self.project_settings_edit["ai_edit_model_name"] = selected_ai_edit_model
         self.project_settings_edit["main_system_prompt"] = self.project_system_prompt_input.toPlainText().strip()
+
+        # ★★★ 一時的コンテキスト設定の保存 ★★★
+        mode_reverse_mapping = {
+            0: "formatted_user",
+            1: "dummy_response", 
+            2: "system_role"
+        }
+        self.project_settings_edit["transient_context_mode"] = mode_reverse_mapping[self.transient_context_mode_combo.currentIndex()]
+        self.project_settings_edit["transient_context_template"] = self.transient_context_template_input.toPlainText().strip()
+        self.project_settings_edit["transient_context_dummy_response"] = self.transient_context_dummy_response_input.text().strip()
+        # ★★★ --------------------------- ★★★
 
         # ★★★ AI編集支援プロンプトテンプレートの保存 ★★★
         updated_ai_prompts = {}
